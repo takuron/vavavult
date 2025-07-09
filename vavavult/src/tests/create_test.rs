@@ -1,7 +1,8 @@
-use file_vault::init::{initialize_vault, InitError};
-use file_vault::vault::config::VaultConfig;
 use std::fs;
-use tempfile::tempdir; // 使用 tempfile 库来创建临时目录，避免污染文件系统
+use tempfile::tempdir;
+use crate::vault::config::VaultConfig;
+use crate::vault::create_vault;
+// 使用 tempfile 库来创建临时目录，避免污染文件系统
 
 #[test]
 fn test_create_vault_success() {
@@ -10,11 +11,12 @@ fn test_create_vault_success() {
     let vault_path = dir.path();
 
     // 2. 调用我们的初始化函数
-    let result = initialize_vault(vault_path, "my-test-vault");
+    let result = create_vault(vault_path, "my-test-vault");
 
     // 3. 断言操作成功
     assert!(result.is_ok());
-    let config = result.unwrap();
+    let vault = result.unwrap();
+    let config = vault.config;
     assert_eq!(config.name, "my-test-vault");
 
     // 4. 验证文件是否已正确创建
@@ -22,7 +24,7 @@ fn test_create_vault_success() {
     assert!(master_json_path.exists());
     assert!(master_json_path.is_file());
 
-    let filelist_path = vault_path.join("filelist.json");
+    let filelist_path = vault_path.join("master.db");
     assert!(filelist_path.exists());
     assert!(filelist_path.is_file());
 
@@ -31,9 +33,6 @@ fn test_create_vault_success() {
     let parsed_config: VaultConfig = serde_json::from_str(&master_json_content).unwrap();
     assert_eq!(parsed_config.name, "my-test-vault");
     assert_eq!(parsed_config.encrypt_check.encrypted, "");
-
-    let filelist_content = fs::read_to_string(filelist_path).unwrap();
-    assert_eq!(filelist_content, "[]");
 
     // 临时目录会在 `dir` 离开作用域时自动被清理
 }

@@ -1,4 +1,7 @@
-mod common;
-mod file;
-mod vault;
+pub mod common;
+pub mod file;
+pub mod vault;
 
+#[cfg(test)]
+
+mod tests;

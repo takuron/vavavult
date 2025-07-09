@@ -1,3 +1,6 @@
+use std::path::PathBuf;
+use vavavult::vault::create_vault;
+
 fn main() {
-    println!("Hello, world!");
+    let vault = create_vault(&*PathBuf::from("test"), "test");
 }

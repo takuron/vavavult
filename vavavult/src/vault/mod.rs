@@ -34,7 +34,7 @@ pub struct Vault {
     pub database_connection:Connection
 }
 
-pub fn create(vault_path: &Path, vault_name: &str) -> Result<Vault, CreateError>{
+pub fn create_vault(vault_path: &Path, vault_name: &str) -> Result<Vault, CreateError>{
     //判断目录为空来创建
     if(vault_path.exists()&&fs::read_dir(vault_path)?.next().is_some()){
         return  Err(VaultAlreadyExists(vault_path.to_path_buf()));
@@ -59,7 +59,7 @@ pub fn create(vault_path: &Path, vault_name: &str) -> Result<Vault, CreateError>
     fs::write(config_path, config_json)?;
 
     //初始化master.db
-    let conn = Connection::open(&new_config.database)?;
+    let conn = Connection::open(vault_path.join(&new_config.database))?;
     let tx = conn.unchecked_transaction()?;
     tx.execute("PRAGMA foreign_keys = ON;", [])?;
     tx.execute(

@@ -377,6 +377,9 @@ dependencies = [
 [[package]]
 name = "vavavult_cli"
 version = "0.1.0"
+dependencies = [
+ "vavavult",
+]
 
 [[package]]
 name = "vcpkg"
