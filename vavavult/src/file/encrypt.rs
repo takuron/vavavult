@@ -6,7 +6,8 @@ pub struct EncryptionCheck {
     pub encrypted: String,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone,Serialize, Deserialize)]
+#[serde(try_from = "u32", into = "u32")]
 pub enum EncryptionType {
     /// 0: 不加密
     None,
@@ -14,39 +15,24 @@ pub enum EncryptionType {
     // Aes256Gcm, // 假设它对应 1
 }
 
-impl Serialize for EncryptionType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // 我们将枚举成员手动映射到对应的 u32 数字。
-        let value = match self {
+// --- Serde 驱动的枚举与整数转换 ---
+// 现在我们使用 serde 的属性宏来定义转换，这样 JSON 和 数据库都可以复用
+impl From<EncryptionType> for u32 {
+    fn from(item: EncryptionType) -> Self {
+        match item {
             EncryptionType::None => 0,
-            // VaultEncryptionType::Aes256Gcm => 1,
-        };
-        // 使用 serializer 将这个 u32 值序列化。
-        serializer.serialize_u32(value)
-    }
-}
-
-impl<'de> Deserialize<'de> for EncryptionType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // 首先，将 JSON 中的值反序列化为一个 u32。
-        let value = u32::deserialize(deserializer)?;
-
-        // 然后，根据这个 u32 的值，匹配回我们的枚举成员。
-        match value {
-            0 => Ok(EncryptionType::None),
-            // 1 => Ok(VaultEncryptionType::Aes256Gcm),
-            // 对于任何未知的数字，我们返回一个错误。
-            // 这使得我们的解析非常健壮，不会接受无效的加密类型。
-            other => Err(serde::de::Error::custom(format!(
-                "unknown encryptType: {}",
-                other
-            ))),
         }
     }
 }
+
+impl TryFrom<u32> for EncryptionType {
+    type Error = String; // serde::de::Error::custom 需要一个Displayable的Error
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(EncryptionType::None),
+            other => Err(format!("无效的加密类型值: {}", other)),
+        }
+    }
+}
+

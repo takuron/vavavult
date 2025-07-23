@@ -24,7 +24,6 @@ pub enum CreateError {
 
 /// 代表一个加载到内存中的保险库。
 /// 它持有保险库的配置和当前的文件列表状态。
-/// 请注意销毁。
 pub struct Vault {
     /// 保险库的根目录路径。
     pub root_path: PathBuf,
@@ -48,7 +47,7 @@ pub fn create_vault(vault_path: &Path, vault_name: &str) -> Result<Vault, Create
         version: 1,
         encrypt_type: EncryptionType::None,
         encrypt_check: EncryptionCheck {
-            raw: "".to_string(), // 一个固定的、无意义的字符串
+            raw: "".to_string(), // 一个无意义的字符串
             encrypted: "".to_string(),      // 未加密，所以为空
         },
         database: PathBuf::from("master.db"),

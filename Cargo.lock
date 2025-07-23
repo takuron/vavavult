@@ -283,6 +283,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_rusqlite"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32d9325839c0a5dc4820323190bff9bba33f57362cb5591fa30db66cb56874b2"
+dependencies = [
+ "rusqlite",
+ "serde",
+]
+
+[[package]]
 name = "sha2"
 version = "0.11.0-rc.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -369,6 +379,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_rusqlite",
  "sha2",
  "tempfile",
  "thiserror",
