@@ -1,7 +1,6 @@
 use std::fs;
 use tempfile::tempdir;
-use crate::vault::config::VaultConfig;
-use crate::vault::create_vault;
+use crate::vault::{Vault, VaultConfig};
 // 使用 tempfile 库来创建临时目录，避免污染文件系统
 
 #[test]
@@ -11,7 +10,7 @@ fn test_create_vault_success() {
     let vault_path = dir.path();
 
     // 2. 调用我们的初始化函数
-    let result = create_vault(vault_path, "my-test-vault");
+    let result = Vault::create_vault(vault_path, "my-test-vault");
 
     // 3. 断言操作成功
     assert!(result.is_ok());

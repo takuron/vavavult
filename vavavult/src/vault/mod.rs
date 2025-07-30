@@ -1,21 +1,25 @@
 use std::path::{Path, PathBuf};
 use rusqlite::Connection;
-use crate::vault::config::VaultConfig;
 
-pub mod config;
+mod config;
 mod create;
 mod add;
 mod common;
 mod query;
 mod update;
+mod remove;
 
-pub use create::{create_vault, CreateError};
+pub use config::{VaultConfig};
+pub use create::{CreateError};
 pub use add::{AddFileError};
 pub use query::{QueryError, QueryResult};
 pub use update::{UpdateError};
+pub use remove::{RemoveError};
 
 use crate::vault::add::add_file;
+use crate::vault::create::create_vault;
 use crate::vault::query::{check_by_hash, check_by_name};
+use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, remove_tag, rename_file};
 
 /// 代表一个加载到内存中的保险库。
@@ -30,6 +34,9 @@ pub struct Vault {
 }
 
 impl Vault {
+    pub fn create_vault(root_path: &Path, vault_name: &str) -> Result<Vault, CreateError> {
+        create_vault(root_path,vault_name)
+    }
     pub fn find_by_name(&self, name: &str) -> Result<QueryResult, QueryError> {
         check_by_name(self,name)
     }
@@ -53,5 +60,8 @@ impl Vault {
     }
     pub fn clear_tags(&self, sha256sum: &str)-> Result<(), UpdateError> {
         clear_tags(self,sha256sum)
+    }
+    pub fn remove_file(&self, sha256sum: &str) -> Result<(), RemoveError> {
+        remove_file(self,sha256sum)
     }
 }

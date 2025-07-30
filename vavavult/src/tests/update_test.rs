@@ -2,14 +2,14 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
 use crate::vault;
-use crate::vault::QueryResult;
+use crate::vault::{QueryResult, Vault};
 
 #[test]
 fn test_rename_file() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = vault::create_vault(vault_path, "test_vault").unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     let source_file_path = vault_path.join("rename_me.txt");
     File::create(&source_file_path).unwrap().write_all(b"rename content").unwrap();
@@ -47,7 +47,7 @@ fn test_tag_management() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = vault::create_vault(vault_path, "test_vault").unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     let source_file_path = vault_path.join("tag_me.txt");
     File::create(&source_file_path).unwrap().write_all(b"tag content").unwrap();

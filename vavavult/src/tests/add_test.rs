@@ -1,4 +1,4 @@
-use crate::vault::{AddFileError, create_vault}; // 导入 create_vault 函数
+use crate::vault::{AddFileError, Vault}; // 导入 create_vault 函数
 use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir; // 使用 tempfile 库来创建临时目录，避免弄乱文件系统
@@ -7,7 +7,7 @@ fn test_add_file_successfully() {
     // 1. 准备环境
     let dir = tempdir().unwrap(); // 创建一个临时目录
     let vault_path = dir.path();
-    let mut vault = create_vault(vault_path, "test_vault").unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     // 创建临时源文件
     let source_file_path1 = vault_path.join("my_test_file.txt");
@@ -49,7 +49,7 @@ fn test_add_duplicate_file_name() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = create_vault(vault_path, "test_vault").unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     // 创建第一个文件
     let source_file_path1 = vault_path.join("file1.txt");

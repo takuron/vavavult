@@ -2,15 +2,14 @@ use std::fs;
 use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
-use crate::vault;
-use crate::vault::QueryError;
+use crate::vault::{QueryError, Vault};
 
 #[test]
 fn test_query_file_missing_from_disk_error() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = vault::create_vault(vault_path, "test_vault").unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     let source_file_path = vault_path.join("my_file.txt");
     File::create(&source_file_path).unwrap().write_all(b"i will be deleted").unwrap();
