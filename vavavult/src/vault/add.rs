@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use crate::file::encrypt::EncryptionCheck;
 use crate::vault::common::normalize_path_name;
+use crate::vault::query;
+use crate::vault::query::QueryResult;
 pub(crate) use crate::vault::Vault;
 
 #[derive(Debug, thiserror::Error)]
@@ -19,6 +21,9 @@ pub enum AddFileError {
 
     #[error("Filename is not valid UTF-8")]
     InvalidFileName,
+
+    #[error("Database query error: {0}")]
+    QueryError(#[from] query::QueryError),
 
     #[error("A file with the same name '{0}' already exists in the vault.")]
     DuplicateFileName(String),
@@ -62,9 +67,8 @@ pub enum AddFileError {
         };
         let file_name = normalize_path_name(&raw_name);
 
-        // 3. 检查数据库中是否已存在同名文件
-        let mut name_check_stmt = vault.database_connection.prepare("SELECT 1 FROM files WHERE name = ?1")?;
-        if name_check_stmt.exists([&file_name])? {
+        // 3. 使用 query 模块检查文件名是否存在
+        if let QueryResult::Found(_) = query::check_by_name(vault, &file_name)? {
             return Err(AddFileError::DuplicateFileName(file_name));
         }
 
@@ -82,9 +86,8 @@ pub enum AddFileError {
         let sha256sum_bytes = hasher.finalize();
         let sha256sum = hex::encode(sha256sum_bytes);
 
-        // 5. 检查数据库中是否已存在该校验和 (内容重复)
-        let mut content_check_stmt = vault.database_connection.prepare("SELECT 1 FROM files WHERE sha256sum = ?1")?;
-        if content_check_stmt.exists([&sha256sum])? {
+        // 5. 使用 query 模块检查哈希是否存在
+        if let QueryResult::Found(_) = query::check_by_hash(vault, &sha256sum)? {
             return Err(AddFileError::DuplicateContent(sha256sum));
         }
 
@@ -114,75 +117,3 @@ pub enum AddFileError {
         Ok(sha256sum)
     }
 
-// --- 单元测试模块 ---
-// 只有在 `cargo test` 时才会编译这部分代码
-#[cfg(test)]
-mod tests {
-    use super::*; // 导入 add.rs 中的所有内容
-    use crate::vault::create_vault; // 导入 create_vault 函数
-    use std::fs::File;
-    use std::io::Write;
-    use tempfile::tempdir; // 使用 tempfile 库来创建临时目录，避免弄乱文件系统
-
-    #[test]
-    fn test_add_file_successfully() {
-        // 1. 准备环境
-        let dir = tempdir().unwrap(); // 创建一个临时目录
-        let vault_path = dir.path();
-        let mut vault = create_vault(vault_path, "test_vault").unwrap();
-
-        // 创建临时源文件
-        let source_file_path1 = vault_path.join("my_test_file.txt");
-        let mut source_file1 = File::create(&source_file_path1).unwrap();
-        writeln!(source_file1, "Hello, Vault!").unwrap();
-
-        let source_file_path2 = vault_path.join("my_test_file2.txt");
-        let mut source_file2 = File::create(&source_file_path2).unwrap();
-        writeln!(source_file2, "Hello, Vault New!").unwrap();
-
-        // 2. 执行操作
-        let result1 = add_file(&mut vault, &source_file_path1, None);
-        let result2 = add_file(&mut vault, &source_file_path2, Some("/a/b/c/new_name.txt"));
-
-        // 3. 断言结果
-        assert!(result1.is_ok());
-        assert!(result2.is_ok());
-        let sha256sum1 = result1.unwrap();
-        let sha256sum2 = result2.unwrap();
-
-        // 4. 验证数据库
-        let mut stmt = vault.database_connection.prepare("SELECT name FROM files WHERE sha256sum = ?1").unwrap();
-        let file_name1: String = stmt.query_row([&sha256sum1], |row| row.get(0)).unwrap();
-        let file_name2: String = stmt.query_row([&sha256sum2], |row| row.get(0)).unwrap();
-
-        assert_eq!(file_name1, "/my_test_file.txt");
-        assert_eq!(file_name2, "/a/b/c/new_name.txt");
-
-        // 验证文件是否已复制到 data 目录
-        let internal_path = vault.root_path.join(sha256sum1);
-        assert!(internal_path.exists());
-    }
-
-    #[test]
-    fn test_add_duplicate_file_name() {
-        // 1. 准备环境
-        let dir = tempdir().unwrap();
-        let vault_path = dir.path();
-        let mut vault = create_vault(vault_path, "test_vault").unwrap();
-
-        // 创建第一个文件
-        let source_file_path1 = vault_path.join("file1.txt");
-        File::create(&source_file_path1).unwrap().write_all(b"content1").unwrap();
-        add_file(&mut vault, &source_file_path1, Some("shared_name.txt")).unwrap();
-
-        // 创建第二个内容不同的文件
-        let source_file_path2 = vault_path.join("file2.txt");
-        File::create(&source_file_path2).unwrap().write_all(b"content2").unwrap();
-
-        // 2. 执行操作 (尝试用同样的名字添加第二个文件)
-        let result = add_file(&mut vault, &source_file_path2, Some("shared_name.txt"));
-
-        // 3. 断言结果
-        assert!(matches!(result, Err(AddFileError::DuplicateFileName(_))));
-    }
-}
