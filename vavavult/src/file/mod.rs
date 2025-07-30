@@ -1,3 +1,4 @@
+use std::path::Path;
 use crate::common::metadata::MetadataEntry;
 use crate::file::encrypt::{EncryptionCheck, EncryptionType};
 
