@@ -23,7 +23,7 @@ pub enum CreateError {
 
 pub fn create_vault(vault_path: &Path, vault_name: &str) -> Result<Vault, CreateError>{
     //判断目录为空来创建
-    if(vault_path.exists()&&fs::read_dir(vault_path)?.next().is_some()){
+    if vault_path.exists()&&fs::read_dir(vault_path)?.next().is_some(){
         return  Err(VaultAlreadyExists(vault_path.to_path_buf()));
     } else {
         fs::create_dir_all(vault_path)?;
@@ -95,4 +95,53 @@ pub fn create_vault(vault_path: &Path, vault_name: &str) -> Result<Vault, Create
     };
     Ok(vault)
 
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum OpenError {
+    #[error("Vault path does not exist or is not a directory: {0}")]
+    PathNotFound(PathBuf),
+
+    #[error("Configuration file 'master.json' not found in vault.")]
+    ConfigNotFound,
+
+    #[error("Database file specified in config not found.")]
+    DatabaseNotFound,
+
+    #[error("Failed to read configuration file: {0}")]
+    ConfigReadError(#[from] std::io::Error),
+
+    #[error("Failed to parse configuration file: {0}")]
+    ConfigParseError(#[from] serde_json::Error),
+
+    #[error("Failed to open database: {0}")]
+    DatabaseOpenError(#[from] rusqlite::Error),
+}
+
+/// Opens an existing vault from a given path.
+pub fn open_vault(vault_path: &Path) -> Result<Vault, OpenError> {
+    if !vault_path.is_dir() {
+        return Err(OpenError::PathNotFound(vault_path.to_path_buf()));
+    }
+
+    let config_path = vault_path.join("master.json");
+    if !config_path.exists() {
+        return Err(OpenError::ConfigNotFound);
+    }
+
+    let config_content = fs::read_to_string(config_path)?;
+    let config: VaultConfig = serde_json::from_str(&config_content)?;
+
+    let db_path = vault_path.join(&config.database);
+    if !db_path.exists() {
+        return Err(OpenError::DatabaseNotFound);
+    }
+
+    let conn = Connection::open(db_path)?;
+
+    Ok(Vault {
+        root_path: vault_path.to_path_buf(),
+        config,
+        database_connection: conn,
+    })
 }

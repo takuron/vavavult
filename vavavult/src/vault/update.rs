@@ -1,4 +1,5 @@
 use rusqlite::params;
+use crate::common::metadata::MetadataEntry;
 use crate::vault::{query, QueryResult, Vault};
 use crate::vault::common::normalize_path_name;
 
@@ -30,10 +31,10 @@ pub fn rename_file(vault: &Vault, sha256sum: &str, new_name: &str) -> Result<(),
     // 2. 检查新名称是否已被占用
     if let QueryResult::Found(entry) = query::check_by_name(vault, &normalized_new_name)? {
         // 如果找到的文件就是我们自己，那么什么都不用做
-        if entry.sha256sum != sha256sum {
-            return Err(UpdateError::DuplicateFileName(normalized_new_name));
+        return if entry.sha256sum != sha256sum {
+            Err(UpdateError::DuplicateFileName(normalized_new_name))
         } else {
-            return Ok(()); // 名称未改变，操作成功
+            Ok(()) // 名称未改变，操作成功
         }
     }
 
@@ -111,6 +112,34 @@ pub fn clear_tags(vault: &Vault, sha256sum: &str) -> Result<(), UpdateError> {
     vault.database_connection.execute(
         "DELETE FROM tags WHERE file_sha256sum = ?1",
         params![sha256sum],
+    )?;
+
+    Ok(())
+}
+
+/// Sets a metadata key-value pair for a file (upsert operation).
+pub fn set_metadata(vault: &Vault, sha256sum: &str, metadata:MetadataEntry) -> Result<(), UpdateError> {
+    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
+        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
+    }
+
+    vault.database_connection.execute(
+        "INSERT OR REPLACE INTO metadata (file_sha256sum, meta_key, meta_value) VALUES (?1, ?2, ?3)",
+        params![sha256sum, metadata.key, metadata.value],
+    )?;
+
+    Ok(())
+}
+
+/// Removes a metadata key-value pair from a file.
+pub fn remove_metadata(vault: &Vault, sha256sum: &str, key: &str) -> Result<(), UpdateError> {
+    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
+        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
+    }
+
+    vault.database_connection.execute(
+        "DELETE FROM metadata WHERE file_sha256sum = ?1 AND meta_key = ?2",
+        params![sha256sum, key],
     )?;
 
     Ok(())

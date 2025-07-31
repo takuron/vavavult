@@ -8,19 +8,23 @@ mod common;
 mod query;
 mod update;
 mod remove;
+mod extract;
 
 pub use config::{VaultConfig};
-pub use create::{CreateError};
+pub use create::{CreateError,OpenError};
 pub use add::{AddFileError};
 pub use query::{QueryError, QueryResult};
 pub use update::{UpdateError};
 pub use remove::{RemoveError};
-
+pub use query::{ListResult};
+use crate::common::metadata::MetadataEntry;
+use crate::file::FileEntry;
 use crate::vault::add::add_file;
-use crate::vault::create::create_vault;
-use crate::vault::query::{check_by_hash, check_by_name};
+use crate::vault::create::{create_vault, open_vault};
+use crate::vault::extract::{extract_file, ExtractError};
+use crate::vault::query::{check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy, find_by_tag, list_all_files, list_by_path};
 use crate::vault::remove::remove_file;
-use crate::vault::update::{add_tag, add_tags, clear_tags, remove_tag, rename_file};
+use crate::vault::update::{add_tag, add_tags, clear_tags, remove_metadata, remove_tag, rename_file, set_metadata};
 
 /// Represents a vault loaded into memory.
 /// It holds the vault's configuration and a live database connection.
@@ -48,6 +52,20 @@ impl Vault {
     /// or if there are I/O or database initialization errors.
     pub fn create_vault(root_path: &Path, vault_name: &str) -> Result<Vault, CreateError> {
         create_vault(root_path, vault_name)
+    }
+
+    /// Opens an existing Vault from the specified path.
+    ///
+    /// This will load the vault's configuration and open a connection to its database.
+    ///
+    /// # Arguments
+    /// * `root_path` - The path to the existing vault directory.
+    ///
+    /// # Errors
+    /// Returns `OpenError` if the path does not exist, or if the configuration
+    /// or database files are missing or corrupt.
+    pub fn open_vault(root_path: &Path) -> Result<Vault, OpenError> {
+        open_vault(root_path)
     }
 
     /// Finds a file entry by its normalized path name.
@@ -78,6 +96,84 @@ impl Vault {
     /// Returns `QueryError` if there is a database issue or data inconsistency.
     pub fn find_by_hash(&self, sha256sum: &str) -> Result<QueryResult, QueryError> {
         check_by_hash(self, sha256sum)
+    }
+
+    /// Lists all files currently stored in the vault.
+    ///
+    /// # Returns
+    /// A `Vec<FileEntry>` containing all files.
+    ///
+    /// # Errors
+    /// Returns `QueryError` if there is a database issue.
+    pub fn list_all(&self) -> Result<Vec<FileEntry>, QueryError> {
+        list_all_files(self)
+    }
+
+    /// Lists files and subdirectories directly under a given path.
+    ///
+    /// For example, querying for `/` might return files like `/a.txt` and `/b.txt`,
+    /// and subdirectories like `c`.
+    ///
+    /// # Arguments
+    /// * `path` - The path to list (e.g., "/", "/documents/").
+    ///
+    /// # Returns
+    /// A `ListResult` containing separate vectors for files and subdirectory names.
+    ///
+    /// # Errors
+    /// Returns `QueryError` if there is a database issue.
+    pub fn list_by_path(&self, path: &str) -> Result<ListResult, QueryError> {
+        list_by_path(self, path)
+    }
+
+    /// Finds all files associated with a specific tag.
+    ///
+    /// # Arguments
+    /// * `tag` - The tag to search for.
+    ///
+    /// # Returns
+    /// A `Vec<FileEntry>` containing all matching files.
+    ///
+    /// # Errors
+    /// Returns `QueryError` if there is a database issue.
+    pub fn find_by_tag(&self, tag: &str) -> Result<Vec<FileEntry>, QueryError> {
+        find_by_tag(self, tag)
+    }
+
+    /// Finds all files whose name contains a given pattern (case-insensitive).
+    ///
+    /// # Arguments
+    /// * `name_pattern` - The substring to search for within file names.
+    ///
+    /// # Returns
+    /// A `Vec<FileEntry>` containing all matching files.
+    ///
+    /// # Errors
+    /// Returns `QueryError` if there is a database issue.
+    pub fn find_by_name_fuzzy(
+        &self,
+        name_pattern: &str,
+    ) -> Result<Vec<FileEntry>, QueryError> {
+        find_by_name_fuzzy(self, name_pattern)
+    }
+
+    /// Finds all files that have a specific tag and whose name contains a given pattern.
+    ///
+    /// # Arguments
+    /// * `name_pattern` - The substring to search for within file names.
+    /// * `tag` - The tag that files must be associated with.
+    ///
+    /// # Returns
+    /// A `Vec<FileEntry>` containing all matching files.
+    ///
+    /// # Errors
+    /// Returns `QueryError` if there is a database issue.
+    pub fn find_by_name_and_tag_fuzzy(
+        &self,
+        name_pattern: &str,
+        tag: &str,
+    ) -> Result<Vec<FileEntry>, QueryError> {
+        find_by_name_and_tag_fuzzy(self, name_pattern, tag)
     }
 
     /// Adds a new file to the vault from a source path.
@@ -169,6 +265,52 @@ impl Vault {
     /// Returns `UpdateError` if the file is not found.
     pub fn clear_tags(&self, sha256sum: &str) -> Result<(), UpdateError> {
         clear_tags(self, sha256sum)
+    }
+
+    /// Sets a metadata key-value pair for a file.
+    ///
+    /// If the key already exists, its value will be updated. If it does not exist,
+    /// a new key-value pair will be created.
+    ///
+    /// # Arguments
+    /// * `sha256sum` - The hash of the file to modify.
+    /// * `key` - The metadata key.
+    /// * `value` - The metadata value.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` if the file is not found.
+    pub fn set_metadata(&self, sha256sum: &str, metadata:MetadataEntry) -> Result<(), UpdateError> {
+        set_metadata(self, sha256sum, metadata)
+    }
+
+    /// Removes a metadata key-value pair from a file.
+    ///
+    /// If the key does not exist, the operation succeeds with no change.
+    ///
+    /// # Arguments
+    /// * `sha256sum` - The hash of the file to modify.
+    /// * `key` - The metadata key to remove.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` if the file is not found.
+    pub fn remove_metadata(&self, sha256sum: &str, key: &str) -> Result<(), UpdateError> {
+        remove_metadata(self, sha256sum, key)
+    }
+
+    /// Extracts a file from the vault to a specified destination path.
+    ///
+    /// This copies the physical file from the vault's internal storage to a
+    /// location on the external filesystem.
+    ///
+    /// # Arguments
+    /// * `sha256sum` - The hash of the file to extract.
+    /// * `destination_path` - The full path (including filename) where the file will be saved.
+    ///
+    /// # Errors
+    /// Returns `ExtractError` if the file is not found in the vault or if there
+    /// is a filesystem error during the copy.
+    pub fn extract_file(&self, sha256sum: &str, destination_path: &Path) -> Result<(), ExtractError> {
+        extract_file(self, sha256sum, destination_path)
     }
 
     /// Removes a file from the vault.

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use rusqlite::{params, OptionalExtension, Connection};
 use crate::common::metadata::MetadataEntry;
 use crate::file::encrypt::{EncryptionCheck, EncryptionType};
@@ -107,4 +108,189 @@ pub fn check_by_hash(vault: &Vault, sha256sum: &str) -> Result<QueryResult, Quer
     } else {
         Ok(QueryResult::NotFound)
     }
+}
+
+/// Represents the result of listing a path's contents.
+#[derive(Debug, Default)]
+pub struct ListResult {
+    pub files: Vec<FileEntry>,
+    pub subdirectories: Vec<String>,
+}
+
+/// A helper function to normalize a path for querying.
+/// Ensures it starts with "/" and, if not the root, ends with "/".
+fn normalize_query_path(path: &str) -> String {
+    let mut normalized = String::from("/");
+    let trimmed = path.trim_matches('/');
+    if !trimmed.is_empty() {
+        normalized.push_str(trimmed);
+        normalized.push('/');
+    }
+    normalized
+}
+
+/// A helper function to process a list of raw DB rows into a Vec of FileEntry.
+fn process_rows_to_entries(
+    vault: &Vault,
+    rows: Vec<(String, String, EncryptionType, String, String)>,
+) -> Result<Vec<FileEntry>, QueryError> {
+    let mut entries = Vec::with_capacity(rows.len());
+    for (sha256sum, name, encrypt_type, encrypt_password, encrypt_check_json) in rows {
+        let entry = fetch_full_entry(
+            &vault.database_connection,
+            &sha256sum,
+            &name,
+            encrypt_type,
+            &encrypt_password,
+            &encrypt_check_json,
+        )?;
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+/// Lists all files in the vault.
+pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT sha256sum, name, encrypt_type, encrypt_password, encrypt_check FROM files",
+    )?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, EncryptionType>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    process_rows_to_entries(vault, rows)
+}
+
+/// Lists files and subdirectories directly under a given path.
+pub fn list_by_path(vault: &Vault, path: &str) -> Result<ListResult, QueryError> {
+    let normalized_path = normalize_query_path(path);
+    let mut result = ListResult::default();
+    let mut seen_subdirs = HashSet::new();
+
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT sha256sum, name, encrypt_type, encrypt_password, encrypt_check FROM files WHERE name LIKE ?1",
+    )?;
+    let like_pattern = format!("{}%", normalized_path);
+
+    let rows = stmt
+        .query_map(params![like_pattern], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, EncryptionType>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for (sha256sum, name, encrypt_type, encrypt_password, encrypt_check_json) in rows {
+        let remainder = name.strip_prefix(&normalized_path).unwrap_or("");
+
+        if remainder.contains('/') {
+            if let Some(subdir) = remainder.split('/').next() {
+                if !subdir.is_empty() && seen_subdirs.insert(subdir.to_string()) {
+                    result.subdirectories.push(subdir.to_string());
+                }
+            }
+        } else {
+            let full_entry = fetch_full_entry(
+                &vault.database_connection,
+                &sha256sum,
+                &name,
+                encrypt_type,
+                &encrypt_password,
+                &encrypt_check_json,
+            )?;
+            result.files.push(full_entry);
+        }
+    }
+
+    result.files.sort_by(|a, b| a.name.cmp(&b.name));
+    result.subdirectories.sort();
+
+    Ok(result)
+}
+
+/// Finds all files associated with a specific tag.
+pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FileEntry>, QueryError> {
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT f.sha256sum, f.name, f.encrypt_type, f.encrypt_password, f.encrypt_check
+         FROM files f JOIN tags t ON f.sha256sum = t.file_sha256sum
+         WHERE t.tag = ?1",
+    )?;
+
+    let rows = stmt
+        .query_map(params![tag], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, EncryptionType>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    process_rows_to_entries(vault, rows)
+}
+
+/// Finds all files whose name contains a given pattern.
+pub fn find_by_name_fuzzy(vault: &Vault, name_pattern: &str) -> Result<Vec<FileEntry>, QueryError> {
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT sha256sum, name, encrypt_type, encrypt_password, encrypt_check
+         FROM files WHERE name LIKE ?1",
+    )?;
+    let like_pattern = format!("%{}%", name_pattern);
+
+    let rows = stmt
+        .query_map(params![like_pattern], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, EncryptionType>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    process_rows_to_entries(vault, rows)
+}
+
+/// Finds all files matching a name pattern and a specific tag.
+pub fn find_by_name_and_tag_fuzzy(
+    vault: &Vault,
+    name_pattern: &str,
+    tag: &str,
+) -> Result<Vec<FileEntry>, QueryError> {
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT f.sha256sum, f.name, f.encrypt_type, f.encrypt_password, f.encrypt_check
+         FROM files f JOIN tags t ON f.sha256sum = t.file_sha256sum
+         WHERE f.name LIKE ?1 AND t.tag = ?2",
+    )?;
+    let like_pattern = format!("%{}%", name_pattern);
+
+    let rows = stmt
+        .query_map(params![like_pattern, tag], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, EncryptionType>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    process_rows_to_entries(vault, rows)
 }
