@@ -72,19 +72,21 @@ pub fn add_tag(vault: &Vault, sha256sum: &str, tag: &str) -> Result<(), UpdateEr
 }
 
 /// 为文件批量添加多个标签。
-pub fn add_tags(vault: &mut Vault, sha256sum: &str, tags: &[&str]) -> Result<(), UpdateError> {
+pub fn add_tags(vault: &Vault, sha256sum: &str, tags: &[&str]) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
 
-    let tx = vault.database_connection.transaction()?;
+    // 构建批量插入语句
+    let placeholders = tags.iter().map(|_| "(?1, ?2)").collect::<Vec<_>>().join(",");
+    let sql = format!("INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES {}", placeholders);
+
+    let mut stmt = vault.database_connection.prepare(&sql)?;
+
+    // 逐个执行插入
     for tag in tags {
-        tx.execute(
-            "INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES (?1, ?2)",
-            params![sha256sum, tag],
-        )?;
+        stmt.execute(params![sha256sum, tag])?;
     }
-    tx.commit()?;
 
     Ok(())
 }

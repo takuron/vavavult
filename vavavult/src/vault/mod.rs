@@ -28,6 +28,7 @@ use crate::vault::update::{add_tag, add_tags, clear_tags, remove_metadata, remov
 
 /// Represents a vault loaded into memory.
 /// It holds the vault's configuration and a live database connection.
+#[derive(Debug)]
 pub struct Vault {
     /// The root path of the vault directory.
     pub root_path: PathBuf,
@@ -192,7 +193,7 @@ impl Vault {
     /// Returns `AddFileError` if the source file doesn't exist, or if a file with
     /// the same name or content already exists in the vault.
     pub fn add_file(
-        &mut self,
+        &self,
         source_path: &Path,
         dest_name: Option<&str>,
     ) -> Result<String, AddFileError> {
@@ -238,7 +239,7 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
-    pub fn add_tags(&mut self, sha256sum: &str, tags: &[&str]) -> Result<(), UpdateError> {
+    pub fn add_tags(&self, sha256sum: &str, tags: &[&str]) -> Result<(), UpdateError> {
         add_tags(self, sha256sum, tags)
     }
 

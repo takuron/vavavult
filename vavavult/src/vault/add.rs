@@ -50,7 +50,7 @@ pub enum AddFileError {
     ///
     /// # Returns
     /// 成功时返回文件的 SHA256 校验和 (`String`)，否则返回 `AddFileError`。
-    pub fn add_file(vault: &mut Vault, source_path: &Path, dest_name: Option<&str>) -> Result<String, AddFileError> {
+    pub fn add_file(vault: &Vault, source_path: &Path, dest_name: Option<&str>) -> Result<String, AddFileError> {
         // 1. 验证源文件是否存在且是一个文件
         if !source_path.is_file() {
             return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));

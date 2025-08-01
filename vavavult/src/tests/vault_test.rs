@@ -495,3 +495,128 @@ fn test_remove_file() {
     let query_result = vault.find_by_hash(&sha256sum).unwrap();
     assert!(matches!(query_result, QueryResult::NotFound));
 }
+
+#[test]
+fn test_full_vault_integration() {
+    // 1. 创建临时目录
+    let dir = tempdir().unwrap();
+    let vault_path = dir.path();
+
+    // --- 创建 Vault ---
+    let vault = Vault::create_vault(vault_path, "integration-test-vault").unwrap();
+    assert_eq!(vault.config.name, "integration-test-vault");
+
+    // 验证关键文件是否创建成功
+    let master_json_path = vault_path.join("master.json");
+    let filelist_path = vault_path.join("master.db");
+    assert!(master_json_path.exists());
+    assert!(filelist_path.exists());
+
+    // --- 添加文件 ---
+    let file1_path = vault_path.join("document.txt");
+    std::fs::write(&file1_path, "This is document content").unwrap();
+
+    let file2_path = vault_path.join("image.jpg");
+    std::fs::write(&file2_path, b"fake image data").unwrap();
+
+    let hash1 = vault.add_file(&file1_path, Some("docs/document.txt")).unwrap();
+    let hash2 = vault.add_file(&file2_path, Some("media/image.jpg")).unwrap();
+
+    // 验证文件信息是否正确写入数据库
+    let mut stmt = vault
+        .database_connection
+        .prepare("SELECT name FROM files WHERE sha256sum = ?1")
+        .unwrap();
+    let name1: String = stmt.query_row([&hash1], |row| row.get(0)).unwrap();
+    let name2: String = stmt.query_row([&hash2], |row| row.get(0)).unwrap();
+
+    assert_eq!(name1, "/docs/document.txt");
+    assert_eq!(name2, "/media/image.jpg");
+
+    // 验证文件确实被复制到内部目录
+    assert!(vault.root_path.join(&hash1).exists());
+    assert!(vault.root_path.join(&hash2).exists());
+
+    // --- 查询功能测试 ---
+    let result = vault.find_by_hash(&hash1).unwrap();
+    assert!(matches!(result, QueryResult::Found(_)));
+
+    // 查找文件名
+    let found_by_name = vault.find_by_name("/docs/document.txt").unwrap();
+    assert!(matches!(found_by_name, QueryResult::Found(_)));
+
+    // 列出所有文件
+    let all_files = vault.list_all().unwrap();
+    assert_eq!(all_files.len(), 2);
+
+    // 分层目录查询
+    let root_list = vault.list_by_path("/").unwrap();
+    assert_eq!(root_list.files.len(), 0);
+    assert_eq!(root_list.subdirectories, vec!["docs", "media"]);
+
+    let docs_list = vault.list_by_path("/docs/").unwrap();
+    assert_eq!(docs_list.files.len(), 1);
+    assert_eq!(docs_list.files[0].name, "/docs/document.txt");
+
+    // --- 标签功能测试 ---
+    vault.add_tag(&hash1, "important").unwrap();
+    vault.add_tags(&hash2, &["image", "jpeg"]).unwrap();
+
+    let tagged_files = vault.find_by_tag("important").unwrap();
+    assert_eq!(tagged_files.len(), 1);
+    assert_eq!(tagged_files[0].sha256sum, hash1);
+
+    // --- 元数据管理 ---
+    vault.set_metadata(&hash1, MetadataEntry {
+        key: "author".to_string(),
+        value: "Alice".to_string()
+    }).unwrap();
+
+    let entry = match vault.find_by_hash(&hash1).unwrap() {
+        QueryResult::Found(e) => e,
+        _ => panic!("File should be found"),
+    };
+    assert_eq!(entry.metadata[0].key, "author");
+    assert_eq!(entry.metadata[0].value, "Alice");
+
+    // --- 文件重命名 ---
+    let rename_result = vault.rename_file(&hash1, "/renamed/document.txt");
+    assert!(rename_result.is_ok());
+
+    let renamed_result = vault.find_by_name("/renamed/document.txt").unwrap();
+    assert!(matches!(renamed_result, QueryResult::Found(_)));
+
+    // --- 提取文件 ---
+    let extract_path = dir.path().join("extracted.txt");
+    vault.extract_file(&hash1, &extract_path).unwrap();
+    assert!(extract_path.exists());
+
+    // --- 删除文件 ---
+    let remove_result = vault.remove_file(&hash1);
+    assert!(remove_result.is_ok());
+
+    // 验证删除后数据不存在
+    let after_remove = vault.find_by_hash(&hash1).unwrap();
+    assert!(matches!(after_remove, QueryResult::NotFound));
+
+    // 验证物理文件也被移除
+    assert!(!vault.root_path.join(&hash1).exists());
+
+    // --- 打开已存在的 Vault ---
+
+    let reopened_vault = Vault::open_vault(vault_path).unwrap();
+    assert_eq!(reopened_vault.config.name, "integration-test-vault");
+
+    // 检查之前保存的数据依然可用
+    let still_exist = reopened_vault.find_by_hash(&hash2).unwrap();
+    assert!(matches!(still_exist, QueryResult::Found(_)));
+
+    // --- 错误处理测试 ---
+    let non_existent = Vault::open_vault(&vault_path.join("nonexistent")).unwrap_err();
+    assert!(matches!(non_existent, vault::OpenError::PathNotFound(_)));
+
+    let duplicate_name_result = reopened_vault.add_file(&file1_path, Some("media/image.jpg"));
+    assert!(matches!(duplicate_name_result, Err(AddFileError::DuplicateFileName(_))));
+
+    // 最终清理工作由 tempdir 自动完成
+}
