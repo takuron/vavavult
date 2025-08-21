@@ -45,7 +45,7 @@ fn test_open_vault() {
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
     let original_vault_name = "my-persistent-vault";
-    let mut vault = Vault::create_vault(vault_path, original_vault_name).unwrap();
+    let vault = Vault::create_vault(vault_path, original_vault_name).unwrap();
 
     // Add a file to ensure state is persisted
     let source_file_path = vault_path.join("a.txt");
@@ -84,7 +84,7 @@ fn test_add_file_successfully() {
     // 1. 准备环境
     let dir = tempdir().unwrap(); // 创建一个临时目录
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     // 创建临时源文件
     let source_file_path1 = vault_path.join("my_test_file.txt");
@@ -126,7 +126,7 @@ fn test_add_duplicate_file_name() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     // 创建第一个文件
     let source_file_path1 = vault_path.join("file1.txt");
@@ -157,7 +157,7 @@ fn test_query_file_missing_from_disk_error() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     let source_file_path = vault_path.join("my_file.txt");
     File::create(&source_file_path).unwrap().write_all(b"i will be deleted").unwrap();
@@ -177,7 +177,7 @@ fn test_list_and_path_query() {
     // 1. Setup
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     // Create a file structure
     let file_a_path = vault_path.join("a.txt");
@@ -242,7 +242,7 @@ fn test_advanced_searches() {
     // 1. Setup
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     // Create files
     let report_path = vault_path.join("report.txt");
@@ -298,7 +298,7 @@ fn test_rename_file() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     let source_file_path = vault_path.join("rename_me.txt");
     File::create(&source_file_path).unwrap().write_all(b"rename content").unwrap();
@@ -336,7 +336,7 @@ fn test_tag_management() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     let source_file_path = vault_path.join("tag_me.txt");
     File::create(&source_file_path).unwrap().write_all(b"tag content").unwrap();
@@ -381,7 +381,7 @@ fn test_metadata_management() {
     // 1. Setup
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     let source_file_path = vault_path.join("metadata_file.txt");
     File::create(&source_file_path).unwrap().write_all(b"metadata content").unwrap();
@@ -446,7 +446,7 @@ fn test_extract_file() {
     // 1. Setup
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     let source_file_path = vault_path.join("extract_me.txt");
     let original_content = "content to be extracted";
@@ -473,7 +473,7 @@ fn test_remove_file() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault").unwrap();
+    let vault = Vault::create_vault(vault_path, "test_vault").unwrap();
 
     let source_file_path = vault_path.join("delete_me.txt");
     File::create(&source_file_path).unwrap().write_all(b"delete content").unwrap();
