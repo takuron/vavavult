@@ -33,3 +33,26 @@ pub fn generate_random_password(length: usize) -> String {
 
     password
 }
+
+/// 生成一个包含字母、数字的随机字符串
+///
+/// # Arguments
+/// * `length` - 密码的期望长度。
+pub fn generate_random_string(length: usize) -> String {
+    // 1. 定义密码字符集
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+                            abcdefghijklmnopqrstuvwxyz\
+                            0123456789";
+
+    // 2. 生成所需长度的加密安全随机字节
+    let mut random_bytes = vec![0u8; length];
+    openssl::rand::rand_bytes(&mut random_bytes).unwrap();
+
+    // 3. 将每个随机字节映射到字符集中的一个字符
+    let password: String = random_bytes.iter().map(|&byte| {
+        let char_index = byte as usize % CHARSET.len();
+        CHARSET[char_index] as char
+    }).collect();
+
+    password
+}

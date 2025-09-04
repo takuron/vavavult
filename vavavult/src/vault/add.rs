@@ -3,7 +3,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use crate::file::encrypt::{EncryptError, EncryptionCheck, EncryptionType};
-use crate::util::{generate_random_password, normalize_path_name};
+use crate::util::{generate_random_password, generate_random_string, normalize_path_name};
 use crate::vault::query;
 use crate::vault::query::QueryResult;
 pub(crate) use crate::vault::Vault;
@@ -85,7 +85,7 @@ pub enum AddFileError {
             per_file_password = generate_random_password(16);
 
             // a. 在保险库内生成一个临时的、唯一的文件路径
-            let temp_file_name = format!("temp_{}", generate_random_password(24));
+            let temp_file_name = format!(".temp_{}", generate_random_string(24));
             let temp_file_path = vault.root_path.join(&temp_file_name);
 
             // b. 创建一个 ScopeGuard 来确保临时文件在函数退出时被删除
