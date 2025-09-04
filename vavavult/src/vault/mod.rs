@@ -26,7 +26,9 @@ use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, remove_metadata, remove_tag, rename_file, set_metadata};
 
 /// Represents a vault loaded into memory.
-/// It holds the vault's configuration and a live database connection.
+///
+/// It holds the vault's configuration and a live database connection,
+/// providing the primary interface for all vault operations.
 #[derive(Debug)]
 pub struct Vault {
     /// The root path of the vault directory.
