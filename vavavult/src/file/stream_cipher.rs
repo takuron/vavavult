@@ -36,7 +36,7 @@ pub enum StreamCipherError {
 ///
 /// # Returns
 /// 成功时返回一个元组 `(String, EncryptionCheck)`:
-/// * `String`: 原始文件的 SHA256 哈希值的十六进制字符串。
+/// * `String`: 加密文件的 SHA256 哈希值的十六进制字符串。
 /// * `EncryptionCheck`: 用于未来校验密码正确性的结构体。
 ///
 /// 失败时返回 `StreamCipherError`。
@@ -46,15 +46,12 @@ pub fn stream_encrypt_and_hash(
     password: &str,
 ) -> Result<(String, EncryptionCheck), StreamCipherError> {
     // --- 1. 初始化 ---
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha256::new(); // Hasher 现在要计算密文的哈希
     let mut buffer = [0u8; BUFFER_LEN];
 
     // --- 2. 密钥派生 (KDF) ---
-    // a. 生成一个随机的盐 (salt)，用于防止彩虹表攻击
     let mut salt = [0u8; SALT_LEN];
     rand::rand_bytes(&mut salt)?;
-
-    // b. 使用 PBKDF2 从密码和盐派生出加密密钥
     let mut key = [0u8; KEY_LEN];
     pbkdf2_hmac(
         password.as_bytes(),
@@ -65,59 +62,61 @@ pub fn stream_encrypt_and_hash(
     )?;
 
     // --- 3. 初始化加密器 ---
-    // a. 生成一个随机的初始化向量 (IV)
     let mut iv = [0u8; IV_LEN];
     rand::rand_bytes(&mut iv)?;
-
-    // b. 创建一个 AES-256-GCM 加密器
     let cipher = Cipher::aes_256_gcm();
     let mut encrypter = Crypter::new(cipher, Mode::Encrypt, &key, Some(&iv))?;
 
-    // --- 4. 写入头部信息 ---
-    // 将 salt 和 iv 写入加密文件的开头，解密时需要它们
+    // --- 4. 写入头部信息，并同步更新哈希 ---
+    // 写入 salt
     destination.write_all(&salt)?;
+    hasher.update(&salt);
+
+    // 写入 iv
     destination.write_all(&iv)?;
+    hasher.update(&iv);
 
     // --- 5. 流式处理循环 ---
     loop {
         let bytes_read = source.read(&mut buffer)?;
         if bytes_read == 0 {
-            break; // 文件读取完毕
+            break;
         }
         let original_chunk = &buffer[..bytes_read];
 
-        // a. 更新 SHA256 哈希值 (使用原始数据)
-        hasher.update(original_chunk);
+        // 加密数据块
+        let mut encrypted_chunk_buf = vec![0; bytes_read + cipher.block_size()];
+        let count = encrypter.update(original_chunk, &mut encrypted_chunk_buf)?;
+        let encrypted_chunk = &encrypted_chunk_buf[..count];
 
-        // b. 加密数据块
-        let mut encrypted_chunk = vec![0; bytes_read + cipher.block_size()];
-        let count = encrypter.update(original_chunk, &mut encrypted_chunk)?;
-
-        // c. 写入加密后的数据
-        destination.write_all(&encrypted_chunk[..count])?;
+        // 写入加密后的数据
+        destination.write_all(encrypted_chunk)?;
+        hasher.update(encrypted_chunk);
     }
 
     // --- 6. 完成加密 ---
     // a. 处理加密器中剩余的数据
-    let mut final_chunk = vec![0; cipher.block_size()];
-    let count = encrypter.finalize(&mut final_chunk)?;
-    destination.write_all(&final_chunk[..count])?;
+    let mut final_chunk_buf = vec![0; cipher.block_size()];
+    let count = encrypter.finalize(&mut final_chunk_buf)?;
+    let final_chunk = &final_chunk_buf[..count];
+    destination.write_all(final_chunk)?;
+    hasher.update(final_chunk);
 
-    // b. 获取 GCM 的认证标签 (Tag)
+    // b. 获取并写入 GCM 的认证标签
     let mut tag = [0u8; TAG_LEN];
     encrypter.get_tag(&mut tag)?;
-
-    // c. 将 Tag 写入加密文件的末尾
     destination.write_all(&tag)?;
+    hasher.update(&tag);
 
     // --- 7. 完成 SHA256 计算 ---
+    // 此刻，hasher 已经处理了与写入文件完全一致的字节流
     let sha256sum_bytes = hasher.finalize();
     let sha256sum = hex::encode(sha256sum_bytes);
 
-    // --- 8. 生成加密校验 (此为示例，实际可做得更复杂) ---
+    // --- 8. 生成加密校验 ---
     let check = EncryptionCheck {
-        raw: "vavavult_check".to_string(), // 使用一段固定的明文
-        encrypted: "".to_string(),        // 实际应用中需要加密 raw 字符串并存储
+        raw: "vavavult_check".to_string(),
+        encrypted: "".to_string(),
     };
 
     // --- 9. 返回结果 ---
@@ -196,62 +195,55 @@ mod tests {
     use std::io::Cursor;
     use sha2::{Digest, Sha256};
     use tempfile::NamedTempFile;
-
-    /// 一个完整的加密到解密的往返测试
+    
+    /// 一个完整的加密到解密的往返测试 (验证密文哈希)
     #[test]
     fn test_encryption_decryption_roundtrip_success() {
         // --- 1. 准备阶段 (Arrange) ---
         let original_data = b"Hello, Rust streaming world! This is a test message that is longer than one block.";
         let password = "a_very_secret_password";
 
-        // a. 源数据流 (在内存中模拟文件)
         let source_stream = Cursor::new(original_data);
-
-        // b. 创建一个 Vec<u8> 来持有加密后的数据。测试函数拥有这个 Vec。
         let mut encrypted_data_vec: Vec<u8> = Vec::new();
 
         // --- 2. 执行阶段 (Act) ---
 
-        // a. 执行加密和哈希
-        // 我们将 `encrypted_data_vec` 的可变借用 `&mut` 传给函数。
-        // `stream_encrypt_and_hash` 会借用它来写入数据，但所有权仍在测试函数中。
-        let (calculated_hash, _check) = stream_encrypt_and_hash(
+        // a. 执行加密，获取函数计算出的密文哈希
+        let (hash_from_function, _check) = stream_encrypt_and_hash(
             source_stream,
-            &mut encrypted_data_vec, // 传递可变借用，而不是所有权
+            &mut encrypted_data_vec, // 传递可变借用
             password
         ).expect("Encryption failed");
 
-        // 当上一行代码执行完毕后，`encrypted_data_vec` 仍然有效，并且已经填满了加密数据。
-
-        // b. 现在，基于加密后的数据创建一个新的、可读的流
-        let mut encrypted_stream = Cursor::new(encrypted_data_vec);
-        // 注意：这里我们将 `encrypted_data_vec` 的所有权转移给了新的 Cursor
-
-        // c. 准备一个 Vec 来接收解密后的数据
+        // b. 准备解密
+        let mut encrypted_stream = Cursor::new(&encrypted_data_vec); // 注意：这里我们借用 vec
         let mut decrypted_data_vec: Vec<u8> = Vec::new();
 
-        // d. 执行解密
+        // c. 执行解密
         stream_decrypt(
-            &mut encrypted_stream, // Cursor 也需要可变借用，因为它内部的读取位置会变
+            &mut encrypted_stream,
             &mut decrypted_data_vec,
             password
         ).expect("Decryption failed");
 
         // --- 3. 断言阶段 (Assert) ---
 
-        // a. 验证哈希值
-        let mut expected_hasher = Sha256::new();
-        expected_hasher.update(original_data);
-        let expected_hash = hex::encode(expected_hasher.finalize());
-        assert_eq!(calculated_hash, expected_hash, "SHA256 hash mismatch");
+        // a. 手动计算整个加密后字节流的哈希值，作为期望值
+        let expected_hash = hex::encode(Sha256::digest(&encrypted_data_vec));
 
-        // b. 验证解密后的内容
-        assert_eq!(decrypted_data_vec, original_data, "Decrypted data does not match original data");
+        // b. 验证函数返回的哈希与我们手动计算的哈希是否一致
+        assert_eq!(
+            hash_from_function,
+            expected_hash,
+            "Returned ciphertext hash does not match actual ciphertext hash"
+        );
 
-        println!("Roundtrip test successful!");
-        println!("Original data length: {}", original_data.len());
-        println!("Encrypted data length: {}", encrypted_stream.get_ref().len()); // .get_ref() 获取对内部数据的引用
-        println!("Decrypted data length: {}", decrypted_data_vec.len());
+        // c. 验证解密后的内容是否与原始数据完全一致
+        assert_eq!(
+            decrypted_data_vec,
+            original_data,
+            "Decrypted data does not match original data"
+        );
     }
 
     #[test]
@@ -280,58 +272,52 @@ mod tests {
         assert!(decrypted_data_vec.is_empty(), "Decrypted buffer should be empty on failure");
     }
 
+    /// 使用真实的临时文件进行加密解密往返测试 (验证密文哈希)
     #[test]
     fn test_file_encryption_decryption_roundtrip() {
         // --- 1. 准备阶段 (Arrange) ---
-
-        // a. 创建三个临时文件
-        // `NamedTempFile` 创建一个在文件系统上可见的文件。
-        // 当 `source_file`, `encrypted_file`, `decrypted_file` 离开作用域时，
-        // 它们对应的真实文件会被自动删除。
         let mut source_file = NamedTempFile::new().expect("Failed to create source temp file");
         let encrypted_file = NamedTempFile::new().expect("Failed to create encrypted temp file");
         let decrypted_file = NamedTempFile::new().expect("Failed to create decrypted temp file");
-
-        // b. 准备原始数据并写入源文件
-        let original_data = b"This is some data that will be written to a real file on disk.";
+        let original_data = b"This data will be used to test ciphertext hashing.";
         source_file.write_all(original_data).expect("Failed to write to source file");
-        // 确保所有内容都已写入磁盘
         source_file.flush().expect("Failed to flush source file");
-
 
         // --- 2. 执行阶段 (Act) ---
 
-        // a. 执行加密
-        // 我们需要重新打开文件来获取一个独立的、可读的文件句柄。
+        // a. 执行加密，获取函数计算出的密文哈希
         let mut source_handle = source_file.reopen().expect("Failed to reopen source file");
         let mut encrypted_handle = encrypted_file.reopen().expect("Failed to reopen encrypted file for writing");
-
-        stream_encrypt_and_hash(
+        let (hash_from_function, _) = stream_encrypt_and_hash(
             &mut source_handle,
             &mut encrypted_handle,
             "real-file-password"
         ).expect("Encryption with files failed");
 
-        // b. 执行解密
-        // 准备解密所需的文件句柄
+        // b. 执行解密 (保持不变，用于验证解密依然可用)
         let mut encrypted_read_handle = encrypted_file.reopen().expect("Failed to reopen encrypted file for reading");
         let mut decrypted_handle = decrypted_file.reopen().expect("Failed to reopen decrypted file for writing");
-
         stream_decrypt(
             &mut encrypted_read_handle,
             &mut decrypted_handle,
             "real-file-password"
         ).expect("Decryption with files failed");
 
-
         // --- 3. 断言阶段 (Assert) ---
 
-        // a. 从最终解密的文件中读回所有内容
-        let mut decrypted_data = Vec::new();
-        let mut decrypted_read_handle = decrypted_file.reopen().expect("Failed to reopen decrypted file for reading result");
-        decrypted_read_handle.read_to_end(&mut decrypted_data).expect("Failed to read decrypted data");
+        // a. 手动计算整个加密文件的哈希值，作为期望值
+        let mut encrypted_file_content = Vec::new();
+        let mut encrypted_read_handle_for_hash = encrypted_file.reopen().unwrap();
+        encrypted_read_handle_for_hash.read_to_end(&mut encrypted_file_content).unwrap();
+        let expected_hash = hex::encode(Sha256::digest(&encrypted_file_content));
 
-        // b. 验证解密后的数据是否与原始数据一致
+        // b. 验证函数返回的哈希与我们手动计算的哈希是否一致
+        assert_eq!(hash_from_function, expected_hash, "Returned ciphertext hash does not match actual ciphertext hash");
+
+        // c. 验证解密后的数据是否与原始数据一致
+        let mut decrypted_data = Vec::new();
+        let mut decrypted_read_handle = decrypted_file.reopen().unwrap();
+        decrypted_read_handle.read_to_end(&mut decrypted_data).unwrap();
         assert_eq!(decrypted_data, original_data, "Decrypted file content does not match original");
     }
 }
