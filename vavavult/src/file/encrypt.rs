@@ -41,10 +41,8 @@ impl FromSql for EncryptionCheck {
 #[derive(Debug, PartialEq, Eq, Clone,Serialize, Deserialize)]
 #[serde(try_from = "u32", into = "u32")]
 pub enum EncryptionType {
-    /// 0: 不加密
     None,
-    // 未来可以添加其他类型，例如：
-    // Aes256Gcm, // 假设它对应 1
+    Aes256Gcm,
 }
 
 // --- Serde 驱动的枚举与整数转换 ---
@@ -53,6 +51,7 @@ impl From<EncryptionType> for u32 {
     fn from(item: EncryptionType) -> Self {
         match item {
             EncryptionType::None => 0,
+            EncryptionType::Aes256Gcm => 0,
         }
     }
 }
@@ -63,6 +62,7 @@ impl TryFrom<u32> for EncryptionType {
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(EncryptionType::None),
+            1 => Ok(EncryptionType::Aes256Gcm),
             other => Err(format!("无效的加密类型值: {}", other)),
         }
     }
