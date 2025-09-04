@@ -4,7 +4,6 @@ use rusqlite::Connection;
 mod config;
 mod create;
 mod add;
-mod common;
 mod query;
 mod update;
 mod remove;

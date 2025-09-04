@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection};
 use crate::file::encrypt::{EncryptError, EncryptionCheck, EncryptionType};
 use crate::vault::config::VaultConfig;
 use crate::vault::create::CreateError::VaultAlreadyExists;

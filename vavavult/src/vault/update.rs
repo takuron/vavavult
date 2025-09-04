@@ -1,7 +1,7 @@
 use rusqlite::params;
 use crate::common::metadata::MetadataEntry;
+use crate::util::normalize_path_name;
 use crate::vault::{query, QueryResult, Vault};
-use crate::vault::common::normalize_path_name;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {

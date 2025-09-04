@@ -1,9 +1,9 @@
-use std::fs;
+use std::{fs, io};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
-use crate::file::encrypt::EncryptionCheck;
-use crate::vault::common::normalize_path_name;
+use crate::file::encrypt::{EncryptError, EncryptionCheck, EncryptionType};
+use crate::util::{generate_random_password, normalize_path_name};
 use crate::vault::query;
 use crate::vault::query::QueryResult;
 pub(crate) use crate::vault::Vault;
@@ -30,6 +30,9 @@ pub enum AddFileError {
 
     #[error("A file with the same content (SHA256: {0}) already exists in the vault.")]
     DuplicateContent(String),
+
+    #[error("File encryption failed: {0}")]
+    EncryptionError(#[from] EncryptError),
 }
 
 
@@ -51,69 +54,117 @@ pub enum AddFileError {
     /// # Returns
     /// 成功时返回文件的 SHA256 校验和 (`String`)，否则返回 `AddFileError`。
     pub fn add_file(vault: &Vault, source_path: &Path, dest_name: Option<&str>) -> Result<String, AddFileError> {
-        // 1. 验证源文件是否存在且是一个文件
+        // 1. 验证和确定文件名 (逻辑不变)
         if !source_path.is_file() {
             return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
         }
-
-        // 2. 确定在保险库中使用的名称
-        let raw_name = match dest_name {
-            Some(name) => name.to_string(), // 使用提供的自定义名称
-            None => source_path // 如果未提供，则使用原始文件名
+        let raw_name = dest_name.map(|s| s.to_string()).unwrap_or_else(||
+            source_path
                 .file_name()
                 .and_then(|s| s.to_str())
-                .ok_or(AddFileError::InvalidFileName)?
-                .to_string(),
-        };
+                .unwrap_or_default()
+                .to_string()
+        );
+        if raw_name.is_empty() {
+            return Err(AddFileError::InvalidFileName);
+        }
         let file_name = normalize_path_name(&raw_name);
 
-        // 3. 使用 query 模块检查文件名是否存在
+        // 2. 检查文件名是否已重复
         if let QueryResult::Found(_) = query::check_by_name(vault, &file_name)? {
             return Err(AddFileError::DuplicateFileName(file_name));
         }
 
-        // 4. 读取文件内容并计算 SHA256 校验和
-        let mut file = fs::File::open(source_path)?;
-        let mut hasher = Sha256::new();
-        let mut buffer = [0; 4096]; // 4KB 缓冲区
-        loop {
-            let n = file.read(&mut buffer)?;
-            if n == 0 {
-                break;
+        // 3. [重写] 根据保险库类型处理文件
+        let sha256sum: String;
+        let per_file_password: String;
+        let per_file_encrypt_check: EncryptionCheck;
+
+        if vault.config.encrypt_type == EncryptionType::Aes256Gcm {
+            // --- 加密分支 ---
+            per_file_password = generate_random_password(16);
+
+            // a. 在保险库内生成一个临时的、唯一的文件路径
+            let temp_file_name = format!("temp_{}", generate_random_password(24));
+            let temp_file_path = vault.root_path.join(&temp_file_name);
+
+            // b. 创建一个 ScopeGuard 来确保临时文件在函数退出时被删除
+            //    这样即使中间发生错误，也不会留下垃圾文件
+            let _guard = ScopeGuard::new(|| {
+                let _ = fs::remove_file(&temp_file_path);
+            });
+
+            // c. 直接将加密后的文件流写入保险库内的临时文件
+            sha256sum = crate::file::encrypt::encrypt_file(source_path, &temp_file_path, &per_file_password)?;
+            per_file_encrypt_check = EncryptionCheck::new(&per_file_password)?;
+
+            // d. 检查哈希碰撞
+            if let QueryResult::Found(_) = query::check_by_hash(vault, &sha256sum)? {
+                // 碰撞概率极低，但仍需处理。临时文件会被 guard 自动删除。
+                return Err(AddFileError::DuplicateContent(sha256sum));
             }
-            hasher.update(&buffer[..n]);
+
+            // e. 将临时文件重命名为它的最终哈希名
+            let final_path = vault.root_path.join(&sha256sum);
+            fs::rename(&temp_file_path, final_path)?;
+
+        } else {
+            // --- 非加密分支 (逻辑不变) ---
+            // 读取文件内容并计算 SHA256 校验和
+            let mut file = fs::File::open(source_path)?;
+            let mut hasher = Sha256::new();
+            let mut buffer = [0; 4096]; // 4KB 缓冲区
+            loop {
+                let n = file.read(&mut buffer)?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            }
+            let sha256sum_bytes = hasher.finalize();
+            sha256sum = hex::encode(sha256sum_bytes);
+
+            if let QueryResult::Found(_) = query::check_by_hash(vault, &sha256sum)? {
+                return Err(AddFileError::DuplicateContent(sha256sum));
+            }
+
+            let dest_path = vault.root_path.join(&sha256sum);
+            fs::copy(source_path, &dest_path)?;
+
+            per_file_password = "".to_string();
+            per_file_encrypt_check = EncryptionCheck { raw: "".to_string(), encrypted: "".to_string() };
         }
-        let sha256sum_bytes = hasher.finalize();
-        let sha256sum = hex::encode(sha256sum_bytes);
 
-        // 5. 使用 query 模块检查哈希是否存在
-        if let QueryResult::Found(_) = query::check_by_hash(vault, &sha256sum)? {
-            return Err(AddFileError::DuplicateContent(sha256sum));
-        }
-
-        // 6. 准备内部存储目录，并复制文件
-        // 我们将文件存储在 vault_root/data/ 目录下，并以其校验和命名
-        fs::create_dir_all(&vault.root_path)?;
-        let dest_path = vault.root_path.join(&sha256sum);
-        fs::copy(source_path, &dest_path)?;
-
-        // 7. 在数据库中插入文件记录
-        // 注意：目前我们假设没有加密
+        // 4. 在数据库中插入文件记录 (逻辑不变)
         vault.database_connection.execute(
             "INSERT INTO files (sha256sum, name, encrypt_type, encrypt_password, encrypt_check) VALUES (?1, ?2, ?3, ?4, ?5)",
             (
                 &sha256sum,
-                &file_name, // 使用我们确定的名称
-                &vault.config.encrypt_type, // 使用保险库的全局加密设置
-                "", // 当前版本无密码
-                EncryptionCheck{
-                    raw: "".to_string(),
-                    encrypted: "".to_string()
-                }, // 当前版本无加密检查
+                &file_name,
+                &vault.config.encrypt_type,
+                &per_file_password,
+                &per_file_encrypt_check,
             ),
         )?;
 
-        // 8. 返回成功和文件的校验和
         Ok(sha256sum)
     }
+
+// [新增] 一个简单的 ScopeGuard 实现，用于资源清理
+// 当 guard 变量离开作用域时，它的 Drop trait 会被调用，从而执行闭包 F
+struct ScopeGuard<F: FnMut()> {
+    callback: F,
+}
+
+impl<F: FnMut()> ScopeGuard<F> {
+    fn new(callback: F) -> Self {
+        ScopeGuard { callback }
+    }
+}
+
+impl<F: FnMut()> Drop for ScopeGuard<F> {
+    fn drop(&mut self) {
+        (self.callback)();
+    }
+}
 
