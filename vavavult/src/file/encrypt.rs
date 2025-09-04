@@ -1,12 +1,33 @@
+use std::fs::File;
+use std::io::Cursor;
+use std::path::Path;
 use serde::{Deserialize, Serialize};
 use rusqlite::{
     types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
     Error as RusqliteError, Result as RusqliteResult,
 };
+use crate::file::stream_cipher;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use openssl::rand;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EncryptionCheck {
     pub raw: String,
     pub encrypted: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EncryptError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Stream cipher error: {0}")]
+    StreamCipher(#[from] stream_cipher::StreamCipherError),
+    #[error("String is not valid UTF-8: {0}")]
+    Utf8(#[from] std::string::FromUtf8Error),
+    #[error("Base64 decoding error: {0}")]
+    Base64(#[from] base64::DecodeError), // 从 Hex 改为 Base64
+    #[error("OpenSSL rand error: {0}")]
+    Rand(#[from] openssl::error::ErrorStack),
 }
 
 /// 实现 ToSql，将 EncryptionCheck 序列化为 JSON 字符串以便存入 TEXT 列
@@ -94,4 +115,100 @@ impl FromSql for EncryptionType {
         })
     }
 }
+
+// --- 文件加解密 (保持不变) ---
+
+/// 加密一个文件。
+pub fn encrypt_file(
+    source_path: &Path,
+    dest_path: &Path,
+    password: &str,
+) -> Result<String, EncryptError> {
+    let mut source_file = File::open(source_path)?;
+    let mut dest_file = File::create(dest_path)?;
+    let (sha256sum, _check) = stream_cipher::stream_encrypt_and_hash(
+        &mut source_file,
+        &mut dest_file,
+        password,
+    )?;
+    Ok(sha256sum)
+}
+
+/// 解密一个文件。
+pub fn decrypt_file(
+    source_path: &Path,
+    dest_path: &Path,
+    password: &str,
+) -> Result<(), EncryptError> {
+    let mut source_file = File::open(source_path)?;
+    let mut dest_file = File::create(dest_path)?;
+    stream_cipher::stream_decrypt(&mut source_file, &mut dest_file, password)?;
+    Ok(())
+}
+
+// --- 更新：字符串加解密 API ---
+
+/// 加密一个字符串，并返回 Base64 编码的密文。
+pub fn encrypt_string(plaintext: &str, password: &str) -> Result<String, EncryptError> {
+    let source = Cursor::new(plaintext.as_bytes());
+    let mut destination_bytes = Vec::new();
+
+    // 底层流处理函数返回加密后的原始字节
+    stream_cipher::stream_encrypt_and_hash(source, &mut destination_bytes, password)?;
+
+    // 将原始字节编码为 Base64 字符串
+    let encrypted_base64 = BASE64_STANDARD.encode(&destination_bytes);
+    Ok(encrypted_base64)
+}
+
+/// 解密一个 Base64 编码的字符串。
+pub fn decrypt_string(ciphertext_base64: &str, password: &str) -> Result<String, EncryptError> {
+    // 1. 将 Base64 字符串解码为原始加密字节
+    let ciphertext_bytes = BASE64_STANDARD.decode(ciphertext_base64)?;
+
+    // 2. 使用底层流处理函数解密字节
+    let mut source = Cursor::new(ciphertext_bytes);
+    let mut destination_bytes = Vec::new();
+    stream_cipher::stream_decrypt(&mut source, &mut destination_bytes, password)?;
+
+    // 3. 将解密后的字节转换为 UTF-8 字符串
+    let plaintext = String::from_utf8(destination_bytes)?;
+    Ok(plaintext)
+}
+
+// --- 更新：密码验证 API ---
+
+/// 使用 EncryptionCheck 结构体验证密码是否正确。
+pub fn verify_password(check: &EncryptionCheck, password: &str) -> bool {
+    // 直接调用新的 decrypt_string 函数，它现在负责处理 Base64 解码
+    match decrypt_string(&check.encrypted, password) {
+        Ok(decrypted_raw) => {
+            // 如果解密成功，比较解密出的明文是否与原始明文一致
+            decrypted_raw == check.raw
+        },
+        Err(_) => {
+            // 如果解密失败（密码错误、数据损坏或Base64格式错误），则密码无效
+            false
+        }
+    }
+}
+
+/// 创建一个新的、基于随机字符串的 EncryptionCheck 结构体。
+pub fn create_encryption_check(password: &str) -> Result<EncryptionCheck, EncryptError> {
+    // 1. 生成 16 个随机字节作为原始数据
+    let mut raw_bytes = [0u8; 16];
+    rand::rand_bytes(&mut raw_bytes)?;
+
+    // 2. 将随机字节编码为十六进制字符串，以确保它是有效的 UTF-8
+    let raw_hex_string = hex::encode(raw_bytes);
+
+    // 3. 使用新的 encrypt_string 函数加密这个十六进制字符串
+    let encrypted_base64 = encrypt_string(&raw_hex_string, password)?;
+
+    Ok(EncryptionCheck {
+        raw: raw_hex_string,
+        encrypted: encrypted_base64,
+    })
+}
+
 
