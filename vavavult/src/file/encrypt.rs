@@ -16,6 +16,40 @@ pub struct EncryptionCheck {
     pub encrypted: String,
 }
 
+impl EncryptionCheck {
+    /// 创建一个新的、基于随机字符串的 EncryptionCheck 结构体。
+    pub fn new(password: &str) -> Result<Self, EncryptError> {
+        // 1. 生成 16 个随机字节作为原始数据
+        let mut raw_bytes = [0u8; 16];
+        rand::rand_bytes(&mut raw_bytes)?;
+
+        // 2. 将随机字节编码为 Base64 字符串，作为原始明文
+        let raw_base64_string = BASE64_STANDARD.encode(raw_bytes);
+
+        // 3. 使用 encrypt_string 函数加密这个 Base64 字符串
+        let encrypted_base64 = encrypt_string(&raw_base64_string, password)?;
+
+        Ok(EncryptionCheck {
+            raw: raw_base64_string,
+            encrypted: encrypted_base64,
+        })
+    }
+
+    /// 使用此 EncryptionCheck 实例来验证密码是否正确。
+    pub fn verify(&self, password: &str) -> bool {
+        match decrypt_string(&self.encrypted, password) {
+            Ok(decrypted_raw) => {
+                // 如果解密成功，比较解密出的明文是否与原始明文一致
+                decrypted_raw == self.raw
+            },
+            Err(_) => {
+                // 如果解密失败，则密码无效
+                false
+            }
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EncryptError {
     #[error("I/O error: {0}")]
@@ -176,39 +210,31 @@ pub fn decrypt_string(ciphertext_base64: &str, password: &str) -> Result<String,
     Ok(plaintext)
 }
 
-// --- 更新：密码验证 API ---
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// 使用 EncryptionCheck 结构体验证密码是否正确。
-pub fn verify_password(check: &EncryptionCheck, password: &str) -> bool {
-    // 直接调用新的 decrypt_string 函数，它现在负责处理 Base64 解码
-    match decrypt_string(&check.encrypted, password) {
-        Ok(decrypted_raw) => {
-            // 如果解密成功，比较解密出的明文是否与原始明文一致
-            decrypted_raw == check.raw
-        },
-        Err(_) => {
-            // 如果解密失败（密码错误、数据损坏或Base64格式错误），则密码无效
-            false
-        }
+    #[test]
+    fn test_encryption_check_logic() {
+        let password = "my_strong_password_123";
+
+        // 1. 创建一个新的 EncryptionCheck 实例
+        let check = EncryptionCheck::new(password).expect("Failed to create EncryptionCheck");
+
+        // 打印出来看看它的结构
+        println!("Generated EncryptionCheck:");
+        println!("  Raw (Base64): {}", check.raw);
+        println!("  Encrypted (Base64): {}", check.encrypted);
+
+        // 2. 使用正确的密码进行验证，应该成功
+        assert!(check.verify(password), "Verification should succeed with the correct password");
+
+        // 3. 使用错误的密码进行验证，应该失败
+        assert!(!check.verify("wrong_password"), "Verification should fail with an incorrect password");
+
+        // 4. 验证原始数据不是空的
+        assert!(!check.raw.is_empty(), "Raw string should not be empty");
+        assert!(!check.encrypted.is_empty(), "Encrypted string should not be empty");
     }
 }
-
-/// 创建一个新的、基于随机字符串的 EncryptionCheck 结构体。
-pub fn create_encryption_check(password: &str) -> Result<EncryptionCheck, EncryptError> {
-    // 1. 生成 16 个随机字节作为原始数据
-    let mut raw_bytes = [0u8; 16];
-    rand::rand_bytes(&mut raw_bytes)?;
-
-    // 2. 将随机字节编码为十六进制字符串，以确保它是有效的 UTF-8
-    let raw_hex_string = hex::encode(raw_bytes);
-
-    // 3. 使用新的 encrypt_string 函数加密这个十六进制字符串
-    let encrypted_base64 = encrypt_string(&raw_hex_string, password)?;
-
-    Ok(EncryptionCheck {
-        raw: raw_hex_string,
-        encrypted: encrypted_base64,
-    })
-}
-
 
