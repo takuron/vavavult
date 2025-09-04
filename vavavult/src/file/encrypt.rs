@@ -106,7 +106,7 @@ impl From<EncryptionType> for u32 {
     fn from(item: EncryptionType) -> Self {
         match item {
             EncryptionType::None => 0,
-            EncryptionType::Aes256Gcm => 0,
+            EncryptionType::Aes256Gcm => 1,
         }
     }
 }

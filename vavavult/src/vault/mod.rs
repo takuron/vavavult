@@ -47,26 +47,29 @@ impl Vault {
     /// # Arguments
     /// * `root_path` - The path where the vault directory will be created.
     /// * `vault_name` - A name for the vault, stored in the configuration.
+    /// * `password` - An optional password. If provided, the vault will be encrypted.
     ///
     /// # Errors
     /// Returns `CreateError` if the directory already exists and is not empty,
     /// or if there are I/O or database initialization errors.
-    pub fn create_vault(root_path: &Path, vault_name: &str) -> Result<Vault, CreateError> {
-        create_vault(root_path, vault_name)
+    pub fn create_vault(root_path: &Path, vault_name: &str, password: Option<&str>) -> Result<Vault, CreateError> {
+        create_vault(root_path, vault_name, password)
     }
 
     /// Opens an existing Vault from the specified path.
     ///
-    /// This will load the vault's configuration and open a connection to its database.
-    ///
     /// # Arguments
     /// * `root_path` - The path to the existing vault directory.
+    /// * `password` - An optional password. Required if the vault is encrypted.
     ///
     /// # Errors
-    /// Returns `OpenError` if the path does not exist, or if the configuration
-    /// or database files are missing or corrupt.
-    pub fn open_vault(root_path: &Path) -> Result<Vault, OpenError> {
-        open_vault(root_path)
+    /// Returns `OpenError` if the path does not exist, the configuration
+    /// is missing or corrupt, or if an incorrect password is provided for an
+    /// encrypted vault.
+    // [修改] 更新函数签名，增加 password 参数
+    pub fn open_vault(root_path: &Path, password: Option<&str>) -> Result<Vault, OpenError> {
+        // [修改] 将 password 参数传递给后端的 open_vault 函数
+        open_vault(root_path, password)
     }
 
     /// Finds a file entry by its normalized path name.
