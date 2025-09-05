@@ -7,3 +7,12 @@ edition = "2024"
 
 vavavult = { path = "../vavavult" }
 
+# 从工作区继承 clap 的配置
+clap = { workspace = true, features = ["derive"] }
+
+# 添加 rustyline 用于创建交互式 Shell
+rustyline = "17.0.1"
+# 添加 rpassword 用于安全地读取密码
+rpassword = "7.4.0"
+shlex = "1.3.0"
+

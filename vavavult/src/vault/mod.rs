@@ -17,7 +17,7 @@ pub use update::{UpdateError};
 pub use remove::{RemoveError};
 pub use query::{ListResult};
 use crate::common::metadata::MetadataEntry;
-use crate::file::FileEntry;
+pub use crate::file::FileEntry;
 use crate::vault::add::add_file;
 use crate::vault::create::{create_vault, open_vault};
 use crate::vault::extract::{extract_file, ExtractError};
