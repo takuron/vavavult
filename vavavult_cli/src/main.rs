@@ -56,6 +56,14 @@ enum ReplCommand {
         #[arg(short = 's', long = "search", group = "list_mode")]
         search: Option<String>,
     },
+    Open {
+        /// 要打开的文件的名称
+        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
+        vault_name: Option<String>,
+        /// 要打开的文件的 SHA256 哈希值
+        #[arg(short = 's', long = "sha256", group = "identifier")]
+        sha256: Option<String>,
+    },
     #[command(visible_alias = "get")]
     Extract {
         /// 要提取的文件的名称 (在保险库中)
@@ -282,6 +290,29 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
                 }
                 // clap 的 group 功能会阻止这种情况发生，但 match 需要它是详尽的
                 (Some(_), Some(_)) => unreachable!(),
+            }
+        }
+        ReplCommand::Open { vault_name, sha256 } => {
+            let file_entry = find_file_entry(vault, vault_name, sha256)?;
+
+            // 1. 创建一个临时文件路径
+            let temp_dir = env::temp_dir();
+            let file_name = Path::new(&file_entry.name).file_name().unwrap_or_default();
+            let temp_path = temp_dir.join(file_name);
+
+            // 2. 提取文件到临时路径
+            println!("Extracting a temporary copy to {:?}...", temp_path);
+            vault.extract_file(&file_entry.sha256sum, &temp_path)?;
+
+            // 3. 使用 opener 打开文件
+            match opener::open(&temp_path) {
+                Ok(_) => {
+                    println!("Successfully opened '{}'.", file_entry.name);
+                    println!("NOTE: You are viewing a temporary copy. Any changes will NOT be saved to the vault.");
+                }
+                Err(e) => {
+                    eprintln!("Failed to open file with default application: {}", e);
+                }
             }
         }
         ReplCommand::Extract { vault_name, sha256, dir_path, destination, output_name, delete } => {
