@@ -3,8 +3,9 @@ use clap::{Parser, Subcommand};
 use rustyline::DefaultEditor;
 use vavavult::vault::{OpenError, Vault, FileEntry, ListResult, QueryResult}; // 引入 FileEntry 和 ListResult
 use std::error::Error;
-use std::env;
+use std::{env, fs};
 use std::io::{self, Write};
+use walkdir::WalkDir;
 
 // --- AppState 和 CLI/REPL 定义 (不变) ---
 struct AppState {
@@ -36,8 +37,11 @@ enum TopLevelCommands {
 enum ReplCommand {
     /// 将一个文件添加到保险库
     Add {
+        /// 要添加的本地文件或目录的路径
         #[arg(required = true)]
         local_path: PathBuf,
+
+        /// 在保险库中为文件设置一个自定义名称 (对于目录，则作为名称前缀)
         #[arg(short = 'n', long = "name")]
         vault_name: Option<String>,
     },
@@ -52,16 +56,29 @@ enum ReplCommand {
         #[arg(short = 's', long = "search", group = "list_mode")]
         search: Option<String>,
     },
+    #[command(visible_alias = "get")]
     Extract {
-        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
+        /// 要提取的文件的名称 (在保险库中)
+        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present_any = ["sha256", "dir_path"])]
         vault_name: Option<String>,
+
+        /// 要提取的文件的 SHA256 哈希值
         #[arg(short = 's', long = "sha256", group = "identifier")]
         sha256: Option<String>,
+
+        /// 要提取的保险库虚拟目录 (会递归提取所有文件)
+        #[arg(short = 'd', long = "dir", group = "identifier")]
+        dir_path: Option<String>,
+
+        /// 文件将被保存到的本地目标目录
         #[arg(required = true)]
         destination: PathBuf,
-        #[arg(short = 'o', long = "output")]
+
+        /// (可选) 为提取出的文件指定一个新的名称 (仅限单文件提取)
+        #[arg(short = 'o', long = "output", conflicts_with = "dir_path")]
         output_name: Option<String>,
-        /// 提取成功后从保险库中删除该文件
+
+        /// 提取成功后从保险库中删除源文件
         #[arg(long)]
         delete: bool,
     },
@@ -232,10 +249,15 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
 
     match command {
         ReplCommand::Add { local_path, vault_name } => {
-            println!("Adding file {:?}...", local_path);
-            match vault.add_file(&local_path, vault_name.as_deref()) {
-                Ok(hash) => println!("Successfully added file. Hash: {}", hash),
-                Err(e) => eprintln!("Error adding file: {}", e),
+            if !local_path.exists() {
+                return Err(format!("Path does not exist: {:?}", local_path).into());
+            }
+
+            // --- 新逻辑：区分文件和目录 ---
+            if local_path.is_dir() {
+                handle_add_directory(vault, &local_path, vault_name)?;
+            } else {
+                handle_add_file(vault, &local_path, vault_name)?;
             }
         }
         ReplCommand::List { path, search } => {
@@ -262,28 +284,13 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
                 (Some(_), Some(_)) => unreachable!(),
             }
         }
-        ReplCommand::Extract { vault_name, sha256, destination, output_name, delete } => {
-            let file_entry = find_file_entry(vault, vault_name, sha256)?;
-            let final_path = determine_output_path(&file_entry, destination, output_name);
-
-            if delete {
-                if !confirm_action(&format!(
-                    "This will extract '{}' to {:?} and then PERMANENTLY DELETE it. Are you sure?",
-                    file_entry.name, final_path
-                ))? {
-                    println!("Operation cancelled.");
-                    return Ok(());
-                }
-            }
-
-            println!("Extracting '{}' to {:?}...", file_entry.name, final_path);
-            vault.extract_file(&file_entry.sha256sum, &final_path)?;
-            println!("File extracted successfully.");
-
-            if delete {
-                println!("Deleting '{}' from vault...", file_entry.name);
-                vault.remove_file(&file_entry.sha256sum)?;
-                println!("File successfully deleted from vault.");
+        ReplCommand::Extract { vault_name, sha256, dir_path, destination, output_name, delete } => {
+            if let Some(dir) = dir_path {
+                // 新增：处理目录提取
+                handle_extract_directory(vault, &dir, &destination, delete)?;
+            } else {
+                // 现有：处理单文件提取
+                handle_extract_single_file(vault, vault_name, sha256, &destination, output_name, delete)?;
             }
         }
         ReplCommand::Remove { vault_name, sha256 } => {
@@ -316,6 +323,191 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
         }
     }
     Ok(())
+}
+
+/// 处理添加单个文件的逻辑
+fn handle_add_file(vault: &Vault, local_path: &Path, vault_name: Option<String>) -> Result<(), Box<dyn Error>> {
+    println!("Adding file {:?}...", local_path);
+    match vault.add_file(local_path, vault_name.as_deref()) {
+        Ok(hash) => println!("Successfully added file. Hash: {}", hash),
+        Err(e) => eprintln!("Error adding file: {}", e),
+    }
+    Ok(())
+}
+
+/// 处理批量添加目录的逻辑
+fn handle_add_directory(vault: &Vault, local_path: &Path, prefix: Option<String>) -> Result<(), Box<dyn Error>> {
+    println!("Scanning directory {:?}...", local_path);
+
+    // 1. 收集所有待添加的文件
+    let mut files_to_add = Vec::new();
+    for entry in WalkDir::new(local_path).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            let source_path = entry.into_path();
+            // 计算文件相对于根目录的路径
+            let relative_path = source_path.strip_prefix(local_path)?.to_path_buf();
+
+            // 构建在 vault 中的目标路径
+            let vault_target_path = if let Some(p) = &prefix {
+                // 如果有前缀，则拼接
+                Path::new(p).join(&relative_path)
+            } else {
+                // 否则直接使用相对路径
+                relative_path
+            };
+
+            files_to_add.push((source_path, vault_target_path));
+        }
+    }
+
+    if files_to_add.is_empty() {
+        println!("No files found to add in the directory.");
+        return Ok(());
+    }
+
+    // 2. 向用户展示并请求确认
+    println!("The following {} files will be added:", files_to_add.len());
+    for (source, target) in &files_to_add {
+        println!("  - {:?} -> {}", source, target.display());
+    }
+    if !confirm_action("Do you want to proceed with adding these files?")? {
+        println!("Operation cancelled.");
+        return Ok(());
+    }
+
+    // 3. 执行添加
+    let mut success_count = 0;
+    let mut fail_count = 0;
+    for (source, target) in files_to_add {
+        print!("Adding {:?}...", source);
+        io::stdout().flush()?;
+        match vault.add_file(&source, target.to_str()) {
+            Ok(_) => {
+                println!(" OK");
+                success_count += 1;
+            }
+            Err(e) => {
+                println!(" FAILED ({})", e);
+                fail_count += 1;
+            }
+        }
+    }
+
+    println!("\nBatch add complete. {} succeeded, {} failed.", success_count, fail_count);
+    Ok(())
+}
+
+/// 处理提取单个文件的逻辑
+fn handle_extract_single_file(vault: &Vault, vault_name: Option<String>, sha256: Option<String>, destination: &Path, output_name: Option<String>, delete: bool) -> Result<(), Box<dyn Error>> {
+    let file_entry = find_file_entry(vault, vault_name, sha256)?;
+    let final_path = determine_output_path(&file_entry, destination.to_path_buf(), output_name);
+
+    if delete {
+        if !confirm_action(&format!(
+            "This will extract '{}' to {:?} and then PERMANENTLY DELETE it. Are you sure?",
+            file_entry.name, final_path
+        ))? {
+            println!("Operation cancelled.");
+            return Ok(());
+        }
+    }
+
+    println!("Extracting '{}' to {:?}...", file_entry.name, final_path);
+    if let Some(parent) = final_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    vault.extract_file(&file_entry.sha256sum, &final_path)?;
+    println!("File extracted successfully.");
+
+    if delete {
+        println!("Deleting '{}' from vault...", file_entry.name);
+        vault.remove_file(&file_entry.sha256sum)?;
+        println!("File successfully deleted from vault.");
+    }
+    Ok(())
+}
+
+/// 处理提取整个目录的逻辑
+fn handle_extract_directory(vault: &Vault, dir_path: &str, destination: &Path, delete: bool) -> Result<(), Box<dyn Error>> {
+    println!("Scanning vault directory '{}' for extraction...", dir_path);
+    let files_to_extract = get_all_files_recursively(vault, dir_path)?;
+
+    if files_to_extract.is_empty() {
+        println!("No files found in vault directory '{}'.", dir_path);
+        return Ok(());
+    }
+
+    println!("The following {} files will be extracted to {:?}", files_to_extract.len(), destination);
+    if delete {
+        println!("WARNING: The original files will be PERMANENTLY DELETED from the vault after extraction.");
+    }
+    if !confirm_action("Do you want to proceed?")? {
+        println!("Operation cancelled.");
+        return Ok(());
+    }
+
+    let mut success_count = 0;
+    let mut fail_count = 0;
+    for entry in &files_to_extract {
+        let relative_path = Path::new(&entry.name).strip_prefix(dir_path).unwrap_or(Path::new(&entry.name));
+        let final_path = destination.join(relative_path);
+
+        print!("Extracting {} -> {:?} ...", entry.name, final_path);
+        io::stdout().flush()?;
+
+        if let Some(parent) = final_path.parent() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                println!(" FAILED (could not create local directory: {})", e);
+                fail_count += 1;
+                continue;
+            }
+        }
+
+        match vault.extract_file(&entry.sha256sum, &final_path) {
+            Ok(_) => {
+                println!(" OK");
+                success_count += 1;
+            }
+            Err(e) => {
+                println!(" FAILED ({})", e);
+                fail_count += 1;
+            }
+        }
+    }
+
+    println!("\nExtraction complete. {} succeeded, {} failed.", success_count, fail_count);
+
+    if delete && success_count > 0 {
+        println!("\nDeleting {} extracted files from vault...", success_count);
+        if !confirm_action("Confirm deletion of successfully extracted files?")? {
+            println!("Deletion cancelled.");
+            return Ok(());
+        }
+        for entry in files_to_extract.iter().filter(|_| fail_count == 0) { // Simple filter for now
+            match vault.remove_file(&entry.sha256sum) {
+                Ok(_) => println!("Deleted {}.", entry.name),
+                Err(e) => eprintln!("Failed to delete {}: {}", entry.name, e),
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 递归地获取一个 vault 目录下的所有文件
+fn get_all_files_recursively(vault: &Vault, dir_path: &str) -> Result<Vec<FileEntry>, Box<dyn Error>> {
+    let mut all_files = Vec::new();
+    let mut dirs_to_scan = vec![dir_path.to_string()];
+
+    while let Some(current_dir) = dirs_to_scan.pop() {
+        let result = vault.list_by_path(&current_dir)?;
+        all_files.extend(result.files);
+        for subdir in result.subdirectories {
+            let full_subdir_path = Path::new(&current_dir).join(subdir).to_string_lossy().into_owned();
+            dirs_to_scan.push(full_subdir_path);
+        }
+    }
+    Ok(all_files)
 }
 
 // --- 新增: 格式化输出的辅助函数 ---
