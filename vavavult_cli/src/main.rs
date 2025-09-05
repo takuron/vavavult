@@ -52,24 +52,28 @@ enum ReplCommand {
         #[arg(short = 's', long = "search", group = "list_mode")]
         search: Option<String>,
     },
-    /// 从保险库提取一个文件
-    #[command(visible_alias = "get")]
     Extract {
-        /// 要提取的文件的名称 (在保险库中)
         #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
         vault_name: Option<String>,
-
-        /// 要提取的文件的 SHA256 哈希值
         #[arg(short = 's', long = "sha256", group = "identifier")]
         sha256: Option<String>,
-
-        /// 文件将被保存到的目标目录
         #[arg(required = true)]
         destination: PathBuf,
-
-        /// (可选) 为提取出的文件指定一个新的名称
         #[arg(short = 'o', long = "output")]
         output_name: Option<String>,
+        /// 提取成功后从保险库中删除该文件
+        #[arg(long)]
+        delete: bool,
+    },
+    /// 从保险库中永久删除一个文件
+    #[command(visible_alias = "rm")]
+    Remove {
+        /// 要删除的文件的名称
+        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
+        vault_name: Option<String>,
+        /// 要删除的文件的 SHA256 哈希值
+        #[arg(short = 's', long = "sha256", group = "identifier")]
+        sha256: Option<String>,
     },
     /// 显示当前保险库的状态
     Status,
@@ -258,40 +262,44 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
                 (Some(_), Some(_)) => unreachable!(),
             }
         }
-        ReplCommand::Extract { vault_name, sha256, destination, output_name } => {
-            // 1. 查找文件条目
-            let query_result = if let Some(name) = vault_name {
-                vault.find_by_name(&name)?
-            } else if let Some(hash) = sha256 {
-                vault.find_by_hash(&hash)?
-            } else {
-                // Clap 的 `required_unless_present` 应该能阻止这种情况
-                return Err("Either a name (-n) or a sha256 hash (-s) must be provided.".into());
-            };
+        ReplCommand::Extract { vault_name, sha256, destination, output_name, delete } => {
+            let file_entry = find_file_entry(vault, vault_name, sha256)?;
+            let final_path = determine_output_path(&file_entry, destination, output_name);
 
-            let file_entry = match query_result {
-                QueryResult::Found(entry) => entry,
-                QueryResult::NotFound => {
-                    return Err("File not found in the vault.".into());
+            if delete {
+                if !confirm_action(&format!(
+                    "This will extract '{}' to {:?} and then PERMANENTLY DELETE it. Are you sure?",
+                    file_entry.name, final_path
+                ))? {
+                    println!("Operation cancelled.");
+                    return Ok(());
                 }
-            };
+            }
 
-            // 2. 构建最终的输出路径
-            let final_filename = match output_name {
-                Some(name) => name,
-                // 如果没有提供 -o, 则从 vault 路径中提取文件名
-                None => Path::new(&file_entry.name)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unnamed_file")
-                    .to_string(),
-            };
-            let final_path = destination.join(final_filename);
-
-            // 3. 执行提取
             println!("Extracting '{}' to {:?}...", file_entry.name, final_path);
             vault.extract_file(&file_entry.sha256sum, &final_path)?;
             println!("File extracted successfully.");
+
+            if delete {
+                println!("Deleting '{}' from vault...", file_entry.name);
+                vault.remove_file(&file_entry.sha256sum)?;
+                println!("File successfully deleted from vault.");
+            }
+        }
+        ReplCommand::Remove { vault_name, sha256 } => {
+            let file_entry = find_file_entry(vault, vault_name, sha256)?;
+
+            if !confirm_action(&format!(
+                "Are you sure you want to PERMANENTLY DELETE '{}'?",
+                file_entry.name
+            ))? {
+                println!("Operation cancelled.");
+                return Ok(());
+            }
+
+            println!("Deleting '{}' from vault...", file_entry.name);
+            vault.remove_file(&file_entry.sha256sum)?;
+            println!("File successfully deleted.");
         }
         ReplCommand::Status => {
             println!("Active vault: {}", vault.config.name);
@@ -330,6 +338,46 @@ fn print_file_entries(files: &[FileEntry]) {
         // 调整变量的打印顺序
         println!("{:<60} {:<30} {}", entry.name, tags, short_hash);
     }
+}
+
+
+// --- 新增: 辅助函数 ---
+
+/// 根据 name 或 sha256 查找文件，返回找到的 FileEntry
+fn find_file_entry(vault: &Vault, name: Option<String>, sha: Option<String>) -> Result<FileEntry, Box<dyn Error>> {
+    let query_result = if let Some(n) = name {
+        vault.find_by_name(&n)?
+    } else if let Some(s) = sha {
+        vault.find_by_hash(&s)?
+    } else {
+        unreachable!(); // Clap 应该已经阻止了这种情况
+    };
+
+    match query_result {
+        QueryResult::Found(entry) => Ok(entry),
+        QueryResult::NotFound => Err("File not found in the vault.".into()),
+    }
+}
+
+/// 确定最终的输出路径
+fn determine_output_path(entry: &FileEntry, dest_dir: PathBuf, output_name: Option<String>) -> PathBuf {
+    let final_filename = output_name.unwrap_or_else(|| {
+        Path::new(&entry.name)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unnamed_file")
+            .to_string()
+    });
+    dest_dir.join(final_filename)
+}
+
+/// 向用户请求确认破坏性操作
+fn confirm_action(prompt: &str) -> Result<bool, io::Error> {
+    print!("{} [y/N]: ", prompt);
+    io::stdout().flush()?;
+    let mut confirmation = String::new();
+    io::stdin().read_line(&mut confirmation)?;
+    Ok(confirmation.trim().eq_ignore_ascii_case("y") || confirmation.trim().eq_ignore_ascii_case("yes"))
 }
 
 /// 打印 `ListResult` 的辅助函数
