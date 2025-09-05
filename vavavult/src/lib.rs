@@ -5,4 +5,4 @@ pub mod vault;
 #[cfg(test)]
 
 mod tests;
-mod util;
+mod utils;

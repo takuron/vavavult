@@ -1,6 +1,6 @@
 use rusqlite::params;
 use crate::common::metadata::MetadataEntry;
-use crate::util::normalize_path_name;
+use crate::utils::normalize_path_name;
 use crate::vault::{query, QueryResult, Vault};
 
 #[derive(Debug, thiserror::Error)]

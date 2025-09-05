@@ -3,7 +3,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use crate::file::encrypt::{EncryptError, EncryptionCheck, EncryptionType};
-use crate::util::{generate_random_password, generate_random_string, normalize_path_name};
+use crate::utils::{generate_random_password, generate_random_string, normalize_path_name};
 use crate::vault::query;
 use crate::vault::query::QueryResult;
 pub(crate) use crate::vault::Vault;
