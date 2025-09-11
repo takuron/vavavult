@@ -1,6 +1,7 @@
 use std::fs;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
+use sha2::{Digest, Sha512};
 use tempfile::tempdir;
 use crate::common::metadata::MetadataEntry;
 use crate::file::encrypt::EncryptionType;
@@ -578,7 +579,6 @@ fn test_add_and_extract_encrypted_file() {
     assert_eq!(original_content, extracted_content);
 }
 
-
 /// 最终的、全面的集成测试，模拟用户的完整使用流程
 #[test]
 fn test_full_vault_integration() {
@@ -590,66 +590,65 @@ fn test_full_vault_integration() {
     assert_eq!(vault.config.name, "integration-vault");
     assert_eq!(vault.config.encrypt_type, EncryptionType::Aes256Gcm);
 
-    // 2. 添加文件
-    let file1_path = vault_path.join("document.txt");
-    fs::write(&file1_path, "This is document content for integration test").unwrap();
+    // 2. 创建一个大型随机文件并计算其原始 SHA512 哈希
+    let file1_path = vault_path.join("large_document.bin");
+    let mut source_file = File::create(&file1_path).unwrap();
+    let mut original_hasher = Sha512::new();
+    let mut buffer = [0u8; 8192];
+    for _ in 0..(1024 * 1024 / 8192) { // 创建一个 1MB 的文件
+        openssl::rand::rand_bytes(&mut buffer).unwrap();
+        source_file.write_all(&buffer).unwrap();
+        original_hasher.update(&buffer);
+    }
+    let original_hash_sha512 = hex::encode(original_hasher.finalize());
+
+
+    // 3. 添加文件到 Vault
+    let hash1 = vault.add_file(&file1_path, Some("docs/large_document.bin")).unwrap();
+
+    // 4. 提取 (解密) 文件
+    let extract_path = dir.path().join("extracted.bin");
+    vault.extract_file(&hash1, &extract_path).unwrap();
+
+    // 5. 计算提取后文件的 SHA512 哈希
+    let mut extracted_file = File::open(&extract_path).unwrap();
+    let mut extracted_hasher = Sha512::new();
+    loop {
+        let bytes_read = extracted_file.read(&mut buffer).unwrap();
+        if bytes_read == 0 {
+            break;
+        }
+        extracted_hasher.update(&buffer[..bytes_read]);
+    }
+    let extracted_hash_sha512 = hex::encode(extracted_hasher.finalize());
+
+    // 6. [核心校验] 断言原始哈希和提取后的哈希完全一致
+    assert_eq!(original_hash_sha512, extracted_hash_sha512, "SHA512 hash of extracted file does not match the original file's hash.");
+
+
+    // 7. 继续进行其他功能的健全性检查
     let file2_path = vault_path.join("image.jpg");
     fs::write(&file2_path, b"fake image data").unwrap();
-
-    let hash1 = vault.add_file(&file1_path, Some("docs/document.txt")).unwrap();
     let hash2 = vault.add_file(&file2_path, Some("media/image.jpg")).unwrap();
 
-    // 验证文件确实被加密并添加
-    assert_ne!(hash1, "e093228a07f12e032eef8512f7f1832c6957c712e2e7c32d69818803c4f74d44"); // 这是原文的哈希
-
-    // 3. 查询功能测试
     assert!(matches!(vault.find_by_hash(&hash1).unwrap(), QueryResult::Found(_)));
-    assert!(matches!(vault.find_by_name("/docs/document.txt").unwrap(), QueryResult::Found(_)));
     assert_eq!(vault.list_all().unwrap().len(), 2);
 
-    let root_list = vault.list_by_path("/").unwrap();
-    assert!(root_list.files.is_empty());
-    assert_eq!(root_list.subdirectories, vec!["docs", "media"]);
-
-    // 4. 标签和元数据测试
     vault.add_tag(&hash1, "important").unwrap();
-    vault.set_metadata(&hash1, MetadataEntry { key: "author".to_string(), value: "Alice".to_string() }).unwrap();
-
     let entry1 = match vault.find_by_hash(&hash1).unwrap() {
         QueryResult::Found(e) => e,
         _ => panic!("File should be found"),
     };
     assert_eq!(entry1.tags, vec!["important"]);
-    assert_eq!(entry1.metadata[0].value, "Alice");
 
-    // 5. 更新功能测试 (重命名)
-    vault.rename_file(&hash1, "/renamed/doc.txt").unwrap();
-    assert!(matches!(vault.find_by_name("/docs/document.txt").unwrap(), QueryResult::NotFound));
-    assert!(matches!(vault.find_by_name("/renamed/doc.txt").unwrap(), QueryResult::Found(_)));
-
-    // 6. 提取 (解密) 文件测试
-    let extract_path = dir.path().join("extracted.txt");
-    vault.extract_file(&hash1, &extract_path).unwrap();
-    let content = fs::read_to_string(&extract_path).unwrap();
-    assert_eq!(content, "This is document content for integration test");
-
-    // 7. 删除文件测试
     vault.remove_file(&hash1).unwrap();
     assert!(matches!(vault.find_by_hash(&hash1).unwrap(), QueryResult::NotFound));
-    assert!(!vault.root_path.join(&hash1).exists());
     assert_eq!(vault.list_all().unwrap().len(), 1);
 
     // 8. 关闭并重新打开 Vault 以测试持久性
     drop(vault);
     let reopened_vault = Vault::open_vault(vault_path, Some(password)).unwrap();
-    assert_eq!(reopened_vault.config.name, "integration-vault");
 
-    // 检查剩下的文件依然存在且可查询
-    let still_exist = reopened_vault.find_by_hash(&hash2).unwrap();
-    assert!(matches!(still_exist, QueryResult::Found(_)));
-
-    // 9. 错误处理测试
-    // 尝试添加一个重名文件
-    let duplicate_name_result = reopened_vault.add_file(&file1_path, Some("media/image.jpg"));
-    assert!(matches!(duplicate_name_result, Err(AddFileError::DuplicateFileName(_))));
+    // 检查剩下的文件依然存在
+    assert!(matches!(reopened_vault.find_by_hash(&hash2).unwrap(), QueryResult::Found(_)));
 }

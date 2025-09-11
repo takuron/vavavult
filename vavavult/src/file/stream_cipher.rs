@@ -26,7 +26,7 @@ pub enum StreamCipherError {
 /// 流式处理文件加密和计算 SHA256 哈希值。
 ///
 /// 一次性遍历源文件，同时完成两项任务：
-/// 1.  计算原始文件的 SHA256 哈希值。
+/// 1.  对加密后的完整文件流（包括 salt, iv, 密文, tag）计算 SHA256 哈希值。
 /// 2.  使用 AES-256-GCM 对文件内容进行加密。
 ///
 /// # Arguments
@@ -46,7 +46,7 @@ pub fn stream_encrypt_and_hash(
     password: &str,
 ) -> Result<(String, EncryptionCheck), StreamCipherError> {
     // --- 1. 初始化 ---
-    let mut hasher = Sha256::new(); // Hasher 现在要计算密文的哈希
+    let mut hasher = Sha256::new();
     let mut buffer = [0u8; BUFFER_LEN];
 
     // --- 2. 密钥派生 (KDF) ---
@@ -193,9 +193,9 @@ pub fn stream_decrypt(
 mod tests {
     use super::*;
     use std::io::Cursor;
-    use sha2::{Digest, Sha256};
+    use sha2::{Digest, Sha256, Sha512};
     use tempfile::NamedTempFile;
-    
+
     /// 一个完整的加密到解密的往返测试 (验证密文哈希)
     #[test]
     fn test_encryption_decryption_roundtrip_success() {
@@ -319,5 +319,72 @@ mod tests {
         let mut decrypted_read_handle = decrypted_file.reopen().unwrap();
         decrypted_read_handle.read_to_end(&mut decrypted_data).unwrap();
         assert_eq!(decrypted_data, original_data, "Decrypted file content does not match original");
+    }
+    /// 对大型文件进行加密 -> 解密 -> 再加密的循环，并用 SHA512 验证一致性
+    #[test]
+    fn test_large_media_file_cycle_consistency() {
+        // --- 1. 准备阶段 (Arrange) ---
+        let password = "a-password-for-a-large-file";
+        // 创建一个约 5MB 的大型随机文件
+        let mut source_file = NamedTempFile::new().unwrap();
+        let mut buffer = [0u8; BUFFER_LEN];
+        for _ in 0..(5 * 1024 * 1024 / BUFFER_LEN) {
+            openssl::rand::rand_bytes(&mut buffer).unwrap();
+            source_file.write_all(&buffer).unwrap();
+        }
+        source_file.flush().unwrap();
+
+        // 准备用于存储中间结果的临时文件
+        let mut encrypted_file = NamedTempFile::new().unwrap();
+        let mut decrypted_file = NamedTempFile::new().unwrap();
+
+        // a. 计算原始文件的 SHA512 哈希值
+        let mut original_hasher = Sha512::new();
+        source_file.seek(SeekFrom::Start(0)).unwrap();
+        let mut reader1 = source_file.reopen().unwrap();
+        loop {
+            let bytes_read = reader1.read(&mut buffer).unwrap();
+            if bytes_read == 0 {
+                break;
+            }
+            original_hasher.update(&buffer[..bytes_read]);
+        }
+        let original_hash = hex::encode(original_hasher.finalize());
+
+        // --- 2. 执行阶段 (Act) ---
+
+        // b. 加密
+        source_file.seek(SeekFrom::Start(0)).unwrap();
+        stream_encrypt_and_hash(
+            source_file.reopen().unwrap(),
+            encrypted_file.reopen().unwrap(),
+            password
+        ).expect("Encryption failed");
+
+        // c. 解密
+        encrypted_file.seek(SeekFrom::Start(0)).unwrap();
+        stream_decrypt(
+            encrypted_file.reopen().unwrap(),
+            decrypted_file.reopen().unwrap(),
+            password
+        ).expect("Decryption failed");
+
+        // --- 3. 断言阶段 (Assert) ---
+
+        // d. 计算解密后文件的 SHA512 哈希值
+        let mut decrypted_hasher = Sha512::new();
+        decrypted_file.seek(SeekFrom::Start(0)).unwrap();
+        let mut reader2 = decrypted_file.reopen().unwrap();
+        loop {
+            let bytes_read = reader2.read(&mut buffer).unwrap();
+            if bytes_read == 0 {
+                break;
+            }
+            decrypted_hasher.update(&buffer[..bytes_read]);
+        }
+        let decrypted_hash = hex::encode(decrypted_hasher.finalize());
+
+        // e. 断言原始哈希值和解密后的哈希值必须完全相同
+        assert_eq!(original_hash, decrypted_hash, "SHA512 hash of decrypted file does not match the original file's hash.");
     }
 }
