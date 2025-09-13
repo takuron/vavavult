@@ -1,23 +1,21 @@
-# 使用一个具体的 Rust 版本以保证构建的可复现性，而不是 'latest'
+# .gitlab-ci.yml
+
 image: rust:latest
 
-# 定义全局变量
+# 定义全局变量，用于优化 Cargo 并便于缓存
 variables:
-  # 将 Cargo 的主目录设置在项目工作区内，以便于缓存
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
-  # 优化 cargo fetch/clone 的方式
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 # 定义流水线的各个阶段
 stages:
   - build
   - test
+  - release
 
-# 定义全局缓存策略
-# 这样每个作业都会继承这个缓存配置
+# 定义全局缓存策略，加速后续构建
 cache:
   # 使用 Cargo.lock 文件的哈希作为缓存键
-  # 当依赖更新时，会自动生成新的缓存
   key:
     files:
       - Cargo.lock
@@ -25,52 +23,53 @@ cache:
   paths:
     - .cargo/
     - target/
-  # "pull-push" 是默认策略，表示作业会下载缓存，并在成功后上传更新
-  # "pull" 策略则只会下载缓存，不会上传，适用于不修改依赖和编译产物的作业
+  # 默认策略：拉取缓存，并在作业成功后推送更新
   policy: pull-push
 
-# 构建作业
+# --- 普通的构建和测试作业 ---
+# 这些作业会在每次提交时运行
+
 build_job:
   stage: build
   script:
-    # --verbose 标志可以提供更详细的构建日志，有助于调试
     - cargo build --verbose
-  # 这个作业会下载缓存，然后构建代码，最后将更新后的 target 目录推送到缓存
 
-# 测试作业
 test_job:
   stage: test
   script:
+    # Cargo 会自动利用缓存，跳过不必要的编译
     - cargo test --verbose
-  # 这个作业会下载 build_job 生成的缓存，但不会再次上传，因为测试不产生需要缓存的新产物
   cache:
-    policy: pull # 覆盖默认的 pull-push 策略
+    # 测试作业只需要拉取缓存，无需再次上传
+    policy: pull
 
-# --- 发布作业 ---
-# .release_template 定义了所有发布作业的通用模板
+# --- 发布作业模板 ---
+# .release_template 定义了所有发布作业的通用配置
 .release_template:
   stage: release
   cache:
-    policy: pull  # 发布作业只需要拉取缓存，不需要再次上传
+    policy: pull
   artifacts:
     # 将编译产物保存为 GitLab Artifacts，方便下载
     paths:
-      - target/release/vavavult_cli*
+      # 使用通配符匹配 Linux 和 Windows 的产物
+      - target/release/vavavult_cli-*
     expire_in: 1 week # 设置产物的过期时间
   rules:
     # 关键规则：仅当推送一个 Git 标签时才运行这些作业
-    # 这通常是发布新版本的标准做法 (e.g., git tag v0.2.1 && git push --tags)
+    # 例如: git tag v0.2.1 && git push --tags
     - if: $CI_COMMIT_TAG
+
+# --- 具体的发布作业 ---
 
 # 为 Linux (GNU) 构建
 release-linux:
   extends: .release_template
   before_script:
-    # 添加 x86_64-unknown-linux-gnu 目标
     - rustup target add x86_64-unknown-linux-gnu
   script:
-    # 为 vavavult_cli 这个 package 构建 release 版本
     - cargo build --release --package vavavult_cli --target x86_64-unknown-linux-gnu
+    # 重命名产物以包含平台标识
     - mv target/x86_64-unknown-linux-gnu/release/vavavult_cli target/release/vavavult_cli-x86_64-unknown-linux-gnu
 
 # 为 Windows (MinGW) 构建
@@ -78,24 +77,13 @@ release-windows:
   extends: .release_template
   before_script:
     # 安装交叉编译到 Windows 所需的 MinGW 工具链
-    - apt-get update && apt-get install -y gcc-mingw-w64-x86-64
+    - apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
     - rustup target add x86_64-pc-windows-gnu
   script:
-    # cargo 需要知道使用哪个 linker 来进行交叉编译
+    # 在 .cargo/config.toml 中配置 Windows 目标的链接器
+    # '>>' 会创建文件或向文件追加内容
     - echo '[target.x86_64-pc-windows-gnu]' >> .cargo/config.toml
     - echo 'linker = "x86_64-w64-mingw32-gcc"' >> .cargo/config.toml
     - cargo build --release --package vavavult_cli --target x86_64-pc-windows-gnu
+    # 重命名产物以包含平台标识
     - mv target/x86_64-pc-windows-gnu/release/vavavult_cli.exe target/release/vavavult_cli-x86_64-pc-windows-gnu.exe
-
-# 为 macOS 构建
-# 注意：从 Linux 交叉编译到 macOS 非常复杂，通常需要 macOS SDK，这有法律和技术上的限制。
-# 最可靠的方法是使用一个 macOS runner 来进行原生构建。
-# 这里的示例展示了如果使用 macOS runner 该如何配置。
-release-macos:
-  extends: .release_template
-  tags:
-    - macos # 假设你有一个注册了 "macos" 标签的 GitLab Runner
-  script:
-    - cargo build --release --package vavavult_cli
-    - mv target/release/vavavult_cli target/release/vavavult_cli-x86_64-apple-darwin
-  # macOS 作业不需要 before_script 来安装 target，因为它是在 macOS 上原生编译的
