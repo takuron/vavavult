@@ -23,7 +23,7 @@ use crate::vault::create::{create_vault, open_vault};
 use crate::vault::extract::{extract_file, ExtractError};
 use crate::vault::query::{check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy, find_by_tag, list_all_files, list_by_path};
 use crate::vault::remove::remove_file;
-use crate::vault::update::{add_tag, add_tags, clear_tags, remove_metadata, remove_tag, rename_file, set_metadata};
+use crate::vault::update::{add_tag, add_tags, clear_tags, remove_metadata, remove_tag, remove_vault_metadata, rename_file, set_metadata, set_name, set_vault_metadata};
 
 /// Represents a vault loaded into memory.
 ///
@@ -330,5 +330,45 @@ impl Vault {
     /// Returns `RemoveError` if the file is not found or if there is a filesystem error.
     pub fn remove_file(&self, sha256sum: &str) -> Result<(), RemoveError> {
         remove_file(self, sha256sum)
+    }
+
+    /// Sets the name of the vault.
+    ///
+    /// This updates the `name` property in the in-memory config and writes the
+    /// change to the `master.json` file.
+    ///
+    /// # Arguments
+    /// * `new_name` - The new name for the vault.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` if the configuration cannot be serialized or written to disk.
+    pub fn set_name(&mut self, new_name: &str) -> Result<(), UpdateError> {
+        set_name(self, new_name)
+    }
+    /// Sets a metadata key-value pair for the vault itself.
+    ///
+    /// This is an "upsert" operation. If the key already exists, its value is
+    /// updated. If not, a new entry is created.
+    ///
+    /// # Arguments
+    /// * `metadata` - The `MetadataEntry` to set in the vault's configuration.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` on I/O or serialization issues.
+    pub fn set_vault_metadata(&mut self, metadata: MetadataEntry) -> Result<(), UpdateError> {
+        set_vault_metadata(self, metadata)
+    }
+
+    /// Removes a metadata key-value pair from the vault.
+    ///
+    /// If the key does not exist, the operation succeeds with no change.
+    ///
+    /// # Arguments
+    /// * `key` - The key of the metadata entry to remove.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` on I/O or serialization issues if the key is removed.
+    pub fn remove_vault_metadata(&mut self, key: &str) -> Result<(), UpdateError> {
+        remove_vault_metadata(self, key)
     }
 }

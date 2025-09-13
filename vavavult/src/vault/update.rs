@@ -1,6 +1,7 @@
+use std::fs;
 use rusqlite::params;
 use crate::common::metadata::MetadataEntry;
-use crate::utils::normalize_path_name;
+use crate::utils::path::normalize_path_name;
 use crate::vault::{query, QueryResult, Vault};
 
 #[derive(Debug, thiserror::Error)]
@@ -16,6 +17,12 @@ pub enum UpdateError {
 
     #[error("The new name '{0}' is already taken.")]
     DuplicateFileName(String),
+
+    #[error("Failed to write configuration file: {0}")]
+    ConfigWriteError(#[from] std::io::Error),
+
+    #[error("Failed to serialize configuration: {0}")]
+    SerializationError(#[from] serde_json::Error),
 }
 
 /// 重命名保险库中的一个文件。
@@ -144,5 +151,37 @@ pub fn remove_metadata(vault: &Vault, sha256sum: &str, key: &str) -> Result<(), 
         params![sha256sum, key],
     )?;
 
+    Ok(())
+}
+
+/// 设置保险库的新名称。
+pub fn set_name(vault: &mut Vault, new_name: &str) -> Result<(), UpdateError> {
+    vault.config.name = new_name.to_string();
+    save_config(vault)
+}
+
+/// 为保险库设置一个元数据键值对 (upsert 操作)。
+pub fn set_vault_metadata(vault: &mut Vault, metadata_entry: MetadataEntry) -> Result<(), UpdateError> {
+    // 如果键已存在，则更新它的值
+    if let Some(existing) = vault.config.metadata.iter_mut().find(|m| m.key == metadata_entry.key) {
+        existing.value = metadata_entry.value;
+    } else {
+        // 否则，添加新的键值对
+        vault.config.metadata.push(metadata_entry);
+    }
+    save_config(vault)
+}
+
+/// 从保险库中移除一个元数据键值对。
+pub fn remove_vault_metadata(vault: &mut Vault, key: &str) -> Result<(), UpdateError> {
+    vault.config.metadata.retain(|m| m.key != key);
+    save_config(vault)
+}
+
+// --- 私有辅助函数，用于保存配置 ---
+fn save_config(vault: &Vault) -> Result<(), UpdateError> {
+    let config_json = serde_json::to_string_pretty(&vault.config)?;
+    let config_path = vault.root_path.join("master.json");
+    fs::write(config_path, config_json.as_bytes())?;
     Ok(())
 }

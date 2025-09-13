@@ -16,6 +16,7 @@ rusqlite = { workspace = true }
 openssl = { workspace = true }
 serde_rusqlite = { workspace = true }
 base64 = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
