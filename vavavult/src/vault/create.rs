@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use rusqlite::{Connection};
-use crate::common::constants::{META_CREATE_TIME, META_UPDATE_TIME};
+use serde_json::Value;
+use crate::common::constants::{CURRENT_VAULT_VERSION, META_CREATE_TIME, META_UPDATE_TIME};
 use crate::common::metadata::MetadataEntry;
 use crate::file::encrypt::{EncryptError, EncryptionCheck, EncryptionType};
 use crate::utils::time::now_as_rfc3339_string;
@@ -23,7 +24,6 @@ pub enum CreateError {
     #[error("Failed to init database: {0}")]
     DatabaseInitError(#[from] rusqlite::Error), // 可以从 serde_json::Error 自动转换
 
-    // [新增] 添加一个新的错误类型，用于处理加密相关的错误
     #[error("Failed to create encryption check: {0}")]
     EncryptionError(#[from] EncryptError),
 }
@@ -56,7 +56,7 @@ pub fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>)
     let now = now_as_rfc3339_string();
     let new_config = VaultConfig {
         name: vault_name.to_string(),
-        version: 1,
+        version: CURRENT_VAULT_VERSION,
         encrypt_type: encrypt_type.clone(),
         encrypt_check,
         database: PathBuf::from("master.db"),
@@ -146,6 +146,12 @@ pub enum OpenError {
 
     #[error("Password required for an encrypted vault but was not provided.")]
     PasswordRequired,
+
+    #[error("Unsupported vault version: found {found}, but this library supports version {supported}.")]
+    UnsupportedVersion {
+        supported: u32,
+        found: u32,
+    },
 }
 
 /// Opens an existing vault from a given path.
@@ -169,6 +175,24 @@ pub fn open_vault(vault_path: &Path, password: Option<&str>) -> Result<Vault, Op
     }
 
     let config_content = fs::read_to_string(config_path)?;
+
+    // --- 版本检查 ---
+    // 步骤 1: 将 JSON 解析为一个通用的 Value
+    let config_value: Value = serde_json::from_str(&config_content)
+        .map_err(OpenError::ConfigParseError)?;
+
+    // 步骤 2: 从 Value 中提取版本号
+    let version = config_value["version"].as_u64().unwrap_or(0) as u32;
+
+    // 步骤 3: 比较版本号
+    if version != CURRENT_VAULT_VERSION {
+        return Err(OpenError::UnsupportedVersion {
+            supported: CURRENT_VAULT_VERSION,
+            found: version,
+        });
+    }
+    // --- 版本检查结束 ---
+
     let config: VaultConfig = serde_json::from_str(&config_content)?;
 
     let db_path = vault_path.join(&config.database);

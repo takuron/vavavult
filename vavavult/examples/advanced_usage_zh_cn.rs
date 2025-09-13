@@ -33,11 +33,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("标签已添加。");
 
     // 设置元数据
-    vault.set_metadata(&report_hash, MetadataEntry {
+    vault.set_file_metadata(&report_hash, MetadataEntry {
         key: "author".to_string(),
         value: "张三".to_string(),
     })?;
-    vault.set_metadata(&report_hash, MetadataEntry {
+    vault.set_file_metadata(&report_hash, MetadataEntry {
         key: "status".to_string(),
         value: "final".to_string(),
     })?;

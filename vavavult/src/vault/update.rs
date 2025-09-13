@@ -129,7 +129,7 @@ pub fn clear_tags(vault: &Vault, sha256sum: &str) -> Result<(), UpdateError> {
 }
 
 /// Sets a metadata key-value pair for a file (upsert operation).
-pub fn set_metadata(vault: &Vault, sha256sum: &str, metadata:MetadataEntry) -> Result<(), UpdateError> {
+pub fn set_file_metadata(vault: &Vault, sha256sum: &str, metadata:MetadataEntry) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -143,7 +143,7 @@ pub fn set_metadata(vault: &Vault, sha256sum: &str, metadata:MetadataEntry) -> R
 }
 
 /// Removes a metadata key-value pair from a file.
-pub fn remove_metadata(vault: &Vault, sha256sum: &str, key: &str) -> Result<(), UpdateError> {
+pub fn remove_file_metadata(vault: &Vault, sha256sum: &str, key: &str) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -184,7 +184,7 @@ pub fn remove_vault_metadata(vault: &mut Vault, key: &str) -> Result<(), UpdateE
 
 /// 仅负责将当前的配置状态保存到 `master.json`。
 fn save_config(vault: &Vault) -> Result<(), UpdateError> {
-    let config_json = serde_json::to_string_pretty(&vault.config)?;
+    let config_json = serde_json::to_string(&vault.config)?;
     let config_path = vault.root_path.join("master.json");
     fs::write(config_path, config_json.as_bytes())?;
     Ok(())

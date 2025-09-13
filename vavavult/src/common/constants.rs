@@ -1,4 +1,5 @@
-
+/// The current version of the vault configuration file format.
+pub const CURRENT_VAULT_VERSION: u32 = 1;
 
 // Key of default metadata
 

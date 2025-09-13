@@ -4,12 +4,12 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use sha2::{Digest, Sha512};
 use tempfile::tempdir;
-use crate::common::constants::{META_CREATE_TIME, META_UPDATE_TIME};
-use crate::common::metadata::MetadataEntry;
-use crate::file::encrypt::EncryptionType;
-use crate::utils::time::parse_rfc3339_string;
-use crate::vault;
-use crate::vault::{AddFileError, OpenError, QueryError, QueryResult, Vault, VaultConfig};
+use vavavult::common::constants::{META_CREATE_TIME, META_UPDATE_TIME};
+use vavavult::common::metadata::MetadataEntry;
+use vavavult::file::encrypt::EncryptionType;
+use vavavult::utils::time::parse_rfc3339_string;
+use vavavult::vault;
+use vavavult::vault::{AddFileError, OpenError, QueryError, QueryResult, Vault, VaultConfig};
 
 #[test]
 fn test_create_vault_success() {
@@ -83,7 +83,7 @@ fn test_open_nonexistent_vault_error() {
     let dir = tempdir().unwrap();
     let non_existent_path = dir.path().join("nonexistent");
     let result = Vault::open_vault(&non_existent_path,None);
-    assert!(matches!(result, Err(vault::OpenError::PathNotFound(_))));
+    assert!(matches!(result, Err(OpenError::PathNotFound(_))));
 }
 
 
@@ -396,7 +396,7 @@ fn test_metadata_management() {
     let sha256sum = vault.add_file(&source_file_path, Some("metadata_file.txt")).unwrap();
 
     // 2. Set a new metadata entry
-    vault.set_metadata(&sha256sum, MetadataEntry{
+    vault.set_file_metadata(&sha256sum, MetadataEntry{
         key:"author".to_string(),
         value:"John Doe".to_string()
     }).unwrap();
@@ -409,7 +409,7 @@ fn test_metadata_management() {
     }
 
     // 3. Update an existing metadata entry
-    vault.set_metadata(&sha256sum, MetadataEntry{
+    vault.set_file_metadata(&sha256sum, MetadataEntry{
         key:"author".to_string(),
         value:"Jane Smith".to_string()
     }).unwrap();
@@ -421,7 +421,7 @@ fn test_metadata_management() {
     }
 
     // 4. Set a second metadata entry
-    vault.set_metadata(&sha256sum, MetadataEntry{
+    vault.set_file_metadata(&sha256sum, MetadataEntry{
         key:"status".to_string(),
         value:"draft".to_string()
     }).unwrap();
@@ -432,7 +432,7 @@ fn test_metadata_management() {
     }
 
     // 5. Remove a metadata entry
-    vault.remove_metadata(&sha256sum, "author").unwrap();
+    vault.remove_file_metadata(&sha256sum, "author").unwrap();
     if let QueryResult::Found(entry) = vault.find_by_hash(&sha256sum).unwrap() {
         assert_eq!(entry.metadata.len(), 1);
         assert_eq!(entry.metadata[0].key, "status");
@@ -441,7 +441,7 @@ fn test_metadata_management() {
     }
 
     // 6. Remove the last metadata entry
-    vault.remove_metadata(&sha256sum, "status").unwrap();
+    vault.remove_file_metadata(&sha256sum, "status").unwrap();
     if let QueryResult::Found(entry) = vault.find_by_hash(&sha256sum).unwrap() {
         assert!(entry.metadata.is_empty());
     } else {

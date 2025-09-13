@@ -70,7 +70,7 @@ mod tests {
             ],
         };
 
-        let json_string = serde_json::to_string_pretty(&config1).unwrap();
+        let json_string = serde_json::to_string(&config1).unwrap();
         let json_value: serde_json::Value = serde_json::from_str(&json_string).unwrap();
         assert_eq!(json_value["encryptType"].as_u64(), Some(0));
         assert_eq!(json_value["name"].as_str(), Some("my_new_vault"));

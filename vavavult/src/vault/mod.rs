@@ -23,7 +23,7 @@ use crate::vault::create::{create_vault, open_vault};
 use crate::vault::extract::{extract_file, ExtractError};
 use crate::vault::query::{check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy, find_by_tag, list_all_files, list_by_path};
 use crate::vault::remove::remove_file;
-use crate::vault::update::{add_tag, add_tags, clear_tags, remove_metadata, remove_tag, remove_vault_metadata, rename_file, set_metadata, set_name, set_vault_metadata, touch_update_time};
+use crate::vault::update::{add_tag, add_tags, clear_tags, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file, set_file_metadata, set_name, set_vault_metadata, touch_update_time};
 
 /// Represents a vault loaded into memory.
 ///
@@ -290,8 +290,8 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
-    pub fn set_metadata(&mut self, sha256sum: &str, metadata:MetadataEntry) -> Result<(), UpdateError> {
-        set_metadata(self, sha256sum, metadata)?;
+    pub fn set_file_metadata(&mut self, sha256sum: &str, metadata:MetadataEntry) -> Result<(), UpdateError> {
+        set_file_metadata(self, sha256sum, metadata)?;
         touch_update_time(self)
     }
 
@@ -305,8 +305,8 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
-    pub fn remove_metadata(&mut self, sha256sum: &str, key: &str) -> Result<(), UpdateError> {
-        remove_metadata(self, sha256sum, key)?;
+    pub fn remove_file_metadata(&mut self, sha256sum: &str, key: &str) -> Result<(), UpdateError> {
+        remove_file_metadata(self, sha256sum, key)?;
         touch_update_time(self)
     }
 

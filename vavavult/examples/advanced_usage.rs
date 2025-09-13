@@ -33,11 +33,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Tags added.");
 
     // Set metadata
-    vault.set_metadata(&report_hash, MetadataEntry {
+    vault.set_file_metadata(&report_hash, MetadataEntry {
         key: "author".to_string(),
         value: "John Doe".to_string(),
     })?;
-    vault.set_metadata(&report_hash, MetadataEntry {
+    vault.set_file_metadata(&report_hash, MetadataEntry {
         key: "status".to_string(),
         value: "final".to_string(),
     })?;
