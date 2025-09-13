@@ -41,9 +41,7 @@ build_job:
 test_job:
   stage: test
   script:
-    # --no-build 标志告诉 cargo 直接运行测试，因为它假定代码已经被 build_job 编译好了
-    # 这可以节省大量时间
-    - cargo test --verbose --no-build
+    - cargo test --verbose
   # 这个作业会下载 build_job 生成的缓存，但不会再次上传，因为测试不产生需要缓存的新产物
   cache:
     policy: pull # 覆盖默认的 pull-push 策略
