@@ -1,6 +1,6 @@
 use std::fs;
 use rusqlite::params;
-use crate::common::constants::META_UPDATE_TIME;
+use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_UPDATE_TIME};
 use crate::common::metadata::MetadataEntry;
 use crate::utils::path::normalize_path_name;
 use crate::utils::time::now_as_rfc3339_string;
@@ -63,6 +63,8 @@ pub fn rename_file(vault: &Vault, sha256sum: &str, new_name: &str) -> Result<(),
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
 
+    touch_file_update_time(vault, sha256sum)?;
+
     Ok(())
 }
 
@@ -76,6 +78,8 @@ pub fn add_tag(vault: &Vault, sha256sum: &str, tag: &str) -> Result<(), UpdateEr
         "INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES (?1, ?2)",
         params![sha256sum, tag],
     )?;
+
+    touch_file_update_time(vault, sha256sum)?;
 
     Ok(())
 }
@@ -97,6 +101,8 @@ pub fn add_tags(vault: &Vault, sha256sum: &str, tags: &[&str]) -> Result<(), Upd
         stmt.execute(params![sha256sum, tag])?;
     }
 
+    touch_file_update_time(vault, sha256sum)?;
+
     Ok(())
 }
 
@@ -110,6 +116,8 @@ pub fn remove_tag(vault: &Vault, sha256sum: &str, tag: &str) -> Result<(), Updat
         "DELETE FROM tags WHERE file_sha256sum = ?1 AND tag = ?2",
         params![sha256sum, tag],
     )?;
+
+    touch_file_update_time(vault, sha256sum)?;
 
     Ok(())
 }
@@ -125,6 +133,8 @@ pub fn clear_tags(vault: &Vault, sha256sum: &str) -> Result<(), UpdateError> {
         params![sha256sum],
     )?;
 
+    touch_file_update_time(vault, sha256sum)?;
+
     Ok(())
 }
 
@@ -139,6 +149,12 @@ pub fn set_file_metadata(vault: &Vault, sha256sum: &str, metadata:MetadataEntry)
         params![sha256sum, metadata.key, metadata.value],
     )?;
 
+    // --- 只有当被修改的键不是系统保留键时，才更新文件时间戳 ---
+    // 这可以防止对系统元数据的直接修改触发更新循环，并保护了系统字段。
+    if !metadata.key.starts_with(META_PREFIX) {
+        touch_file_update_time(vault, sha256sum)?;
+    }
+
     Ok(())
 }
 
@@ -152,6 +168,12 @@ pub fn remove_file_metadata(vault: &Vault, sha256sum: &str, key: &str) -> Result
         "DELETE FROM metadata WHERE file_sha256sum = ?1 AND meta_key = ?2",
         params![sha256sum, key],
     )?;
+
+    // --- 只有当被修改的键不是系统保留键时，才更新文件时间戳 ---
+    // 这可以防止对系统元数据的直接修改触发更新循环，并保护了系统字段。
+    if !key.starts_with(META_PREFIX) {
+        touch_file_update_time(vault, sha256sum)?;
+    }
 
     Ok(())
 }
@@ -190,18 +212,30 @@ fn save_config(vault: &Vault) -> Result<(), UpdateError> {
     Ok(())
 }
 
-/// **新增**: 更新保险库的 `_vavavult_update_time` 元数据并保存。
+/// 更新保险库的 `_vavavult_update_time` 元数据并保存。
 /// 这是所有修改操作都应调用的核心函数。
-pub(super) fn touch_update_time(vault: &mut Vault) -> Result<(), UpdateError> {
+pub(super) fn touch_vault_update_time(vault: &mut Vault) -> Result<(), UpdateError> {
     let now = now_as_rfc3339_string();
-    if let Some(update_meta) = vault.config.metadata.iter_mut().find(|m| m.key == META_UPDATE_TIME) {
+    if let Some(update_meta) = vault.config.metadata.iter_mut().find(|m| m.key == META_VAULT_UPDATE_TIME) {
         update_meta.value = now;
     } else {
         // 如果 _vavavult_update_time 不存在 (可能来自旧版本)，则添加它
         vault.config.metadata.push(MetadataEntry {
-            key: META_UPDATE_TIME.to_string(),
+            key: META_VAULT_UPDATE_TIME.to_string(),
             value: now,
         });
     }
     save_config(vault)
+}
+
+/// **新增**: 更新文件的 `_vavavult_update_time` 元数据。
+/// 这是一个内部函数，它直接调用 set_file_metadata 来完成工作。
+pub(super) fn touch_file_update_time(vault: &Vault, sha256sum: &str) -> Result<(), UpdateError> {
+    let now = now_as_rfc3339_string();
+    let metadata_entry = MetadataEntry {
+        key: META_FILE_UPDATE_TIME.to_string(),
+        value: now,
+    };
+    // 直接复用 set_file_metadata 的 "upsert" 逻辑来更新或插入时间戳
+    set_file_metadata(vault, sha256sum, metadata_entry)
 }

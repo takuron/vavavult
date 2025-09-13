@@ -1,40 +1,49 @@
-# .gitlab-ci.yml
-
-# 1. 指定用于运行作业的 Docker 镜像。
-# 这相当于 GitHub Actions 中的 `runs-on: ubuntu-latest`。
-# 我们使用官方的 Rust 镜像。
+# 使用一个具体的 Rust 版本以保证构建的可复现性，而不是 'latest'
 image: rust:latest
 
-# 2. 定义流水线（pipeline）的各个阶段。
-# 作业（job）会按照阶段的顺序执行。`build` 阶段成功后才会执行 `test` 阶段。
+# 定义全局变量
+variables:
+  # 将 Cargo 的主目录设置在项目工作区内，以便于缓存
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  # 优化 cargo fetch/clone 的方式
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+# 定义流水线的各个阶段
 stages:
   - build
   - test
 
-# 3. 定义全局环境变量。
-# 这相当于 GitHub Actions 中的 `env:`。
-variables:
-  CARGO_TERM_COLOR: "always"
+# 定义全局缓存策略
+# 这样每个作业都会继承这个缓存配置
+cache:
+  # 使用 Cargo.lock 文件的哈希作为缓存键
+  # 当依赖更新时，会自动生成新的缓存
+  key:
+    files:
+      - Cargo.lock
+  # 需要缓存的目录
+  paths:
+    - .cargo/
+    - target/
+  # "pull-push" 是默认策略，表示作业会下载缓存，并在成功后上传更新
+  # "pull" 策略则只会下载缓存，不会上传，适用于不修改依赖和编译产物的作业
+  policy: pull-push
 
-# 4. 定义一个名为 `build_job` 的作业。
+# 构建作业
 build_job:
   stage: build
-  # `script` 包含要执行的命令，类似于 GitHub Actions 中的 `run:`。
-  # GitLab 会自动拉取代码，所以不需要 `actions/checkout` 步骤。
   script:
+    # --verbose 标志可以提供更详细的构建日志，有助于调试
     - cargo build --verbose
-  # `rules` 定义了何时运行此作业。
-  # 这相当于 GitHub Actions 中的 `on:`。
-  # 以下规则表示：在合并请求（merge request）或推送到默认分支（如 main）时运行。
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  # 这个作业会下载缓存，然后构建代码，最后将更新后的 target 目录推送到缓存
 
-# 5. 定义一个名为 `test_job` 的作业。
+# 测试作业
 test_job:
   stage: test
   script:
-    - cargo test --verbose
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    # --no-build 标志告诉 cargo 直接运行测试，因为它假定代码已经被 build_job 编译好了
+    # 这可以节省大量时间
+    - cargo test --verbose --no-build
+  # 这个作业会下载 build_job 生成的缓存，但不会再次上传，因为测试不产生需要缓存的新产物
+  cache:
+    policy: pull # 覆盖默认的 pull-push 策略

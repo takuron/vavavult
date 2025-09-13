@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 use sha2::{Digest, Sha512};
 use tempfile::tempdir;
-use vavavult::common::constants::{META_CREATE_TIME, META_UPDATE_TIME};
+use vavavult::common::constants::{META_FILE_UPDATE_TIME, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
 use vavavult::common::metadata::MetadataEntry;
 use vavavult::file::encrypt::EncryptionType;
 use vavavult::utils::time::parse_rfc3339_string;
@@ -38,8 +38,8 @@ fn test_create_vault_success() {
     assert_eq!(parsed_config.name, "my-test-vault");
 
     // 验证创建和更新时间戳是否存在且有效
-    let create_time_meta = parsed_config.metadata.iter().find(|m| m.key == META_CREATE_TIME).expect("Create time metadata should exist");
-    let update_time_meta = parsed_config.metadata.iter().find(|m| m.key == META_UPDATE_TIME).expect("Update time metadata should exist");
+    let create_time_meta = parsed_config.metadata.iter().find(|m| m.key == META_VAULT_CREATE_TIME).expect("Create time metadata should exist");
+    let update_time_meta = parsed_config.metadata.iter().find(|m| m.key == META_VAULT_UPDATE_TIME).expect("Update time metadata should exist");
 
     assert!(parse_rfc3339_string(&create_time_meta.value).is_ok());
     assert!(parse_rfc3339_string(&update_time_meta.value).is_ok());
@@ -384,69 +384,102 @@ fn test_tag_management() {
     }
 }
 
+
 #[test]
 fn test_metadata_management() {
-    // 1. Setup
+    // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "metadata-coexist-test", None).unwrap();
 
     let source_file_path = vault_path.join("metadata_file.txt");
     File::create(&source_file_path).unwrap().write_all(b"metadata content").unwrap();
-    let sha256sum = vault.add_file(&source_file_path, Some("metadata_file.txt")).unwrap();
+    let sha256sum = vault.add_file(&source_file_path, None).unwrap();
 
-    // 2. Set a new metadata entry
-    vault.set_file_metadata(&sha256sum, MetadataEntry{
-        key:"author".to_string(),
-        value:"John Doe".to_string()
+    // 2. 验证初始状态：应该有4个自动生成的系统元数据
+    let initial_update_time = match vault.find_by_hash(&sha256sum).unwrap() {
+        QueryResult::Found(entry) => {
+            assert_eq!(entry.metadata.len(), 4, "Should have 4 system metadata entries initially");
+            entry.metadata.iter()
+                .find(|m| m.key == META_FILE_UPDATE_TIME)
+                .expect("Update time metadata should exist") // 使用 expect 更清晰
+                .value.clone()
+        },
+        QueryResult::NotFound => panic!("File should be found immediately after adding"),
+    };
+
+    // 3. 添加一个自定义元数据 ("author")
+    thread::sleep(Duration::from_secs(1)); // 确保时间戳有变化
+    vault.set_file_metadata(&sha256sum, MetadataEntry {
+        key: "author".to_string(),
+        value: "John Doe".to_string(),
     }).unwrap();
-    if let QueryResult::Found(entry) = vault.find_by_hash(&sha256sum).unwrap() {
-        assert_eq!(entry.metadata.len(), 1);
-        assert_eq!(entry.metadata[0].key, "author");
-        assert_eq!(entry.metadata[0].value, "John Doe");
-    } else {
-        panic!("File not found after setting metadata");
-    }
 
-    // 3. Update an existing metadata entry
-    vault.set_file_metadata(&sha256sum, MetadataEntry{
-        key:"author".to_string(),
-        value:"Jane Smith".to_string()
+    // 验证: 元数据总数变为5，并且 update_time 已更新
+    let update_time_after_add = match vault.find_by_hash(&sha256sum).unwrap() {
+        QueryResult::Found(entry) => {
+            assert_eq!(entry.metadata.len(), 5, "Should have 5 metadata entries after adding one");
+            assert_eq!(entry.metadata.iter().find(|m| m.key == "author").expect("Author metadata should exist").value, "John Doe");
+            let time_val = entry.metadata.iter()
+                .find(|m| m.key == META_FILE_UPDATE_TIME).expect("Update time metadata should exist").value.clone();
+            assert_ne!(initial_update_time, time_val, "Update time should change after adding custom metadata");
+            time_val // 返回新的时间戳以供后续比较
+        },
+        QueryResult::NotFound => panic!("File should be found after adding metadata"),
+    };
+
+    // 4. 更新自定义元数据 ("author")
+    thread::sleep(Duration::from_secs(1));
+    vault.set_file_metadata(&sha256sum, MetadataEntry {
+        key: "author".to_string(),
+        value: "Jane Smith".to_string(),
     }).unwrap();
-    if let QueryResult::Found(entry) = vault.find_by_hash(&sha256sum).unwrap() {
-        assert_eq!(entry.metadata.len(), 1);
-        assert_eq!(entry.metadata[0].value, "Jane Smith");
-    } else {
-        panic!("File not found after updating metadata");
-    }
 
-    // 4. Set a second metadata entry
-    vault.set_file_metadata(&sha256sum, MetadataEntry{
-        key:"status".to_string(),
-        value:"draft".to_string()
+    // 验证: 元数据总数仍为5，但 update_time 再次更新
+    let update_time_after_update = match vault.find_by_hash(&sha256sum).unwrap() {
+        QueryResult::Found(entry) => {
+            assert_eq!(entry.metadata.len(), 5, "Metadata count should remain 5 after update");
+            assert_eq!(entry.metadata.iter().find(|m| m.key == "author").expect("Author metadata should exist").value, "Jane Smith");
+            let time_val = entry.metadata.iter()
+                .find(|m| m.key == META_FILE_UPDATE_TIME).expect("Update time metadata should exist").value.clone();
+            assert_ne!(update_time_after_add, time_val, "Update time should change after updating custom metadata");
+            time_val
+        },
+        QueryResult::NotFound => panic!("File should be found after updating metadata"),
+    };
+
+    // 5. 尝试修改一个系统元数据 (不应触发更新)
+    thread::sleep(Duration::from_secs(1));
+    vault.set_file_metadata(&sha256sum, MetadataEntry {
+        key: "_vavavult_file_size".to_string(), // 这是一个系统保留键
+        value: "999".to_string(),
     }).unwrap();
-    if let QueryResult::Found(entry) = vault.find_by_hash(&sha256sum).unwrap() {
-        assert_eq!(entry.metadata.len(), 2);
-    } else {
-        panic!("File not found after adding second metadata entry");
-    }
 
-    // 5. Remove a metadata entry
+    // 验证: update_time 保持不变
+    match vault.find_by_hash(&sha256sum).unwrap() {
+        QueryResult::Found(entry) => {
+            let update_time_after_system_set = entry.metadata.iter()
+                .find(|m| m.key == META_FILE_UPDATE_TIME).expect("Update time metadata should exist").value.clone();
+            assert_eq!(update_time_after_update, update_time_after_system_set, "Update time should NOT change after setting a system metadata");
+        },
+        QueryResult::NotFound => panic!("File should be found after attempting to set system metadata"),
+    };
+
+    // 6. 删除自定义元数据 ("author")
+    thread::sleep(Duration::from_secs(1));
     vault.remove_file_metadata(&sha256sum, "author").unwrap();
-    if let QueryResult::Found(entry) = vault.find_by_hash(&sha256sum).unwrap() {
-        assert_eq!(entry.metadata.len(), 1);
-        assert_eq!(entry.metadata[0].key, "status");
-    } else {
-        panic!("File not found after removing metadata");
-    }
 
-    // 6. Remove the last metadata entry
-    vault.remove_file_metadata(&sha256sum, "status").unwrap();
-    if let QueryResult::Found(entry) = vault.find_by_hash(&sha256sum).unwrap() {
-        assert!(entry.metadata.is_empty());
-    } else {
-        panic!("File not found after clearing metadata");
-    }
+    // 验证: 元数据总数回到4，并且 update_time 再次更新
+    match vault.find_by_hash(&sha256sum).unwrap() {
+        QueryResult::Found(entry) => {
+            assert_eq!(entry.metadata.len(), 4, "Metadata count should be 4 after removal");
+            assert!(entry.metadata.iter().find(|m| m.key == "author").is_none(), "Author metadata should be gone");
+            let update_time_after_remove = entry.metadata.iter()
+                .find(|m| m.key == META_FILE_UPDATE_TIME).expect("Update time metadata should exist").value.clone();
+            assert_ne!(update_time_after_update, update_time_after_remove, "Update time should change after removing custom metadata");
+        },
+        QueryResult::NotFound => panic!("File should be found after removing metadata"),
+    };
 }
 
 #[test]
@@ -594,9 +627,9 @@ fn test_timestamp_metadata_auto_update() {
 
     // 2. 获取初始时间戳
     let initial_create_time_str = vault.config.metadata.iter()
-        .find(|m| m.key == META_CREATE_TIME).unwrap().value.clone();
+        .find(|m| m.key == META_VAULT_CREATE_TIME).unwrap().value.clone();
     let initial_update_time_str = vault.config.metadata.iter()
-        .find(|m| m.key == META_UPDATE_TIME).unwrap().value.clone();
+        .find(|m| m.key == META_VAULT_UPDATE_TIME).unwrap().value.clone();
 
     // 3. 等待一段时间，以确保下一次更新的时间戳会有所不同
     thread::sleep(Duration::from_secs(1));
@@ -612,9 +645,9 @@ fn test_timestamp_metadata_auto_update() {
     let updated_vault = Vault::open_vault(vault_path, None).unwrap();
 
     let final_create_time_str = updated_vault.config.metadata.iter()
-        .find(|m| m.key == META_CREATE_TIME).unwrap().value.clone();
+        .find(|m| m.key == META_VAULT_CREATE_TIME).unwrap().value.clone();
     let final_update_time_str = updated_vault.config.metadata.iter()
-        .find(|m| m.key == META_UPDATE_TIME).unwrap().value.clone();
+        .find(|m| m.key == META_VAULT_UPDATE_TIME).unwrap().value.clone();
 
     // 6. 断言
     // a. 创建时间应该保持不变
