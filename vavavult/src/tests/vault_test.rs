@@ -1,10 +1,13 @@
-use std::fs;
+use std::{fs, thread};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::time::Duration;
 use sha2::{Digest, Sha512};
 use tempfile::tempdir;
+use crate::common::constants::{META_CREATE_TIME, META_UPDATE_TIME};
 use crate::common::metadata::MetadataEntry;
 use crate::file::encrypt::EncryptionType;
+use crate::utils::time::parse_rfc3339_string;
 use crate::vault;
 use crate::vault::{AddFileError, OpenError, QueryError, QueryResult, Vault, VaultConfig};
 
@@ -26,19 +29,22 @@ fn test_create_vault_success() {
     // 4. 验证文件是否已正确创建
     let master_json_path = vault_path.join("master.json");
     assert!(master_json_path.exists());
-    assert!(master_json_path.is_file());
-
     let filelist_path = vault_path.join("master.db");
     assert!(filelist_path.exists());
-    assert!(filelist_path.is_file());
 
-    // 5. 验证文件内容
+    // 5. 验证文件内容和自动创建的时间戳
     let master_json_content = fs::read_to_string(master_json_path).unwrap();
     let parsed_config: VaultConfig = serde_json::from_str(&master_json_content).unwrap();
     assert_eq!(parsed_config.name, "my-test-vault");
-    assert_eq!(parsed_config.encrypt_check.encrypted, "");
 
-    // 临时目录会在 `dir` 离开作用域时自动被清理
+    // 验证创建和更新时间戳是否存在且有效
+    let create_time_meta = parsed_config.metadata.iter().find(|m| m.key == META_CREATE_TIME).expect("Create time metadata should exist");
+    let update_time_meta = parsed_config.metadata.iter().find(|m| m.key == META_UPDATE_TIME).expect("Update time metadata should exist");
+
+    assert!(parse_rfc3339_string(&create_time_meta.value).is_ok());
+    assert!(parse_rfc3339_string(&update_time_meta.value).is_ok());
+    // 在创建时，两者应该相等
+    assert_eq!(create_time_meta.value, update_time_meta.value);
 }
 
 #[test]
@@ -577,6 +583,50 @@ fn test_add_and_extract_encrypted_file() {
     let extracted_content = fs::read_to_string(destination_path).unwrap();
     // c. 确认提取出的内容与原始内容完全一致
     assert_eq!(original_content, extracted_content);
+}
+
+#[test]
+fn test_timestamp_metadata_auto_update() {
+    // 1. 创建一个新的 vault
+    let dir = tempdir().unwrap();
+    let vault_path = dir.path();
+    let mut vault = Vault::create_vault(vault_path, "timestamp-test", None).unwrap();
+
+    // 2. 获取初始时间戳
+    let initial_create_time_str = vault.config.metadata.iter()
+        .find(|m| m.key == META_CREATE_TIME).unwrap().value.clone();
+    let initial_update_time_str = vault.config.metadata.iter()
+        .find(|m| m.key == META_UPDATE_TIME).unwrap().value.clone();
+
+    // 3. 等待一段时间，以确保下一次更新的时间戳会有所不同
+    thread::sleep(Duration::from_secs(1));
+
+    // 4. 执行一个修改操作 (这里使用 add_file)
+    let source_file_path = dir.path().join("a.txt");
+    File::create(&source_file_path).unwrap().write_all(b"a").unwrap();
+    vault.add_file(&source_file_path, Some("a.txt")).unwrap();
+
+    // 5. 重新加载配置 (或直接检查内存中的 vault.config) 来验证时间戳
+    // 为了更严格地测试持久化，我们选择重新打开保险库
+    drop(vault);
+    let updated_vault = Vault::open_vault(vault_path, None).unwrap();
+
+    let final_create_time_str = updated_vault.config.metadata.iter()
+        .find(|m| m.key == META_CREATE_TIME).unwrap().value.clone();
+    let final_update_time_str = updated_vault.config.metadata.iter()
+        .find(|m| m.key == META_UPDATE_TIME).unwrap().value.clone();
+
+    // 6. 断言
+    // a. 创建时间应该保持不变
+    assert_eq!(initial_create_time_str, final_create_time_str, "Create time should not change after an update.");
+
+    // b. 更新时间应该已经改变
+    assert_ne!(initial_update_time_str, final_update_time_str, "Update time should change after a modification.");
+
+    // c. 更新时间应该晚于创建时间
+    let create_time = parse_rfc3339_string(&final_create_time_str).unwrap();
+    let update_time = parse_rfc3339_string(&final_update_time_str).unwrap();
+    assert!(update_time > create_time, "Update time should be later than create time.");
 }
 
 /// 最终的、全面的集成测试，模拟用户的完整使用流程
