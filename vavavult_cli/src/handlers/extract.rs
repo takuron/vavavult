@@ -6,7 +6,7 @@ use vavavult::file::FileEntry;
 use vavavult::vault::Vault;
 use crate::utils::{confirm_action, determine_output_path, find_file_entry};
 
-pub fn handle_extract(vault: &Vault,vault_name:Option<String>, sha256:Option<String>, dir_path:Option<String>, destination:PathBuf, output_name:Option<String>, delete:bool) -> Result<(), Box<dyn Error>> {
+pub fn handle_extract(vault: &mut Vault,vault_name:Option<String>, sha256:Option<String>, dir_path:Option<String>, destination:PathBuf, output_name:Option<String>, delete:bool) -> Result<(), Box<dyn Error>> {
     if let Some(dir) = dir_path {
         // 新增：处理目录提取
         Ok(handle_extract_directory(vault, &dir, &destination, delete)?)
@@ -17,7 +17,7 @@ pub fn handle_extract(vault: &Vault,vault_name:Option<String>, sha256:Option<Str
 }
 
 /// 处理提取单个文件的逻辑
-fn handle_extract_single_file(vault: &Vault, vault_name: Option<String>, sha256: Option<String>, destination: &Path, output_name: Option<String>, delete: bool) -> Result<(), Box<dyn Error>> {
+fn handle_extract_single_file(vault: &mut Vault, vault_name: Option<String>, sha256: Option<String>, destination: &Path, output_name: Option<String>, delete: bool) -> Result<(), Box<dyn Error>> {
     let file_entry = find_file_entry(vault, vault_name, sha256)?;
     let final_path = determine_output_path(&file_entry, destination.to_path_buf(), output_name);
 
@@ -47,7 +47,7 @@ fn handle_extract_single_file(vault: &Vault, vault_name: Option<String>, sha256:
 }
 
 /// 处理提取整个目录的逻辑
-fn handle_extract_directory(vault: &Vault, dir_path: &str, destination: &Path, delete: bool) -> Result<(), Box<dyn Error>> {
+fn handle_extract_directory(vault: &mut Vault, dir_path: &str, destination: &Path, delete: bool) -> Result<(), Box<dyn Error>> {
     println!("Scanning vault directory '{}' for extraction...", dir_path);
     let files_to_extract = get_all_files_recursively(vault, dir_path)?;
 

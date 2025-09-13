@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use rusqlite::{Connection};
+use crate::common::constants::{META_CREATE_TIME, META_UPDATE_TIME};
+use crate::common::metadata::MetadataEntry;
 use crate::file::encrypt::{EncryptError, EncryptionCheck, EncryptionType};
+use crate::utils::time::now_as_rfc3339_string;
 use crate::vault::config::VaultConfig;
 use crate::vault::create::CreateError::VaultAlreadyExists;
 use crate::vault::Vault;
@@ -49,14 +52,24 @@ pub fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>)
             encrypted: "".to_string(),
         })
     };
-
+    
+    let now = now_as_rfc3339_string();
     let new_config = VaultConfig {
         name: vault_name.to_string(),
         version: 1,
         encrypt_type: encrypt_type.clone(),
         encrypt_check,
         database: PathBuf::from("master.db"),
-        metadata: vec![],
+        metadata: vec![
+            MetadataEntry {
+                key: META_CREATE_TIME.to_string(),
+                value: now.clone(),
+            },
+            MetadataEntry {
+                key: META_UPDATE_TIME.to_string(),
+                value: now,
+            },
+        ],
     };
     let config_path = vault_path.join("master.json");
     let config_json = serde_json::to_string(&new_config)?;

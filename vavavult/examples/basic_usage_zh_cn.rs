@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 创建一个新保险库 ---
     println!("\n正在创建一个名为 'my-first-vault' 的新保险库...");
-    let vault = Vault::create_vault(vault_path, "my-first-vault", None)?;
+    let mut vault = Vault::create_vault(vault_path, "my-first-vault", None)?;
     println!("保险库创建成功!");
     assert_eq!(vault.config.name, "my-first-vault");
 

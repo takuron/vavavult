@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Create a new Vault ---
     println!("\nCreating a new vault named 'my-first-vault'...");
-    let vault = Vault::create_vault(vault_path, "my-first-vault", None)?;
+    let mut vault = Vault::create_vault(vault_path, "my-first-vault", None)?;
     println!("Vault created successfully!");
     assert_eq!(vault.config.name, "my-first-vault");
 

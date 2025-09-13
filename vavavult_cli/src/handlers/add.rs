@@ -6,7 +6,7 @@ use walkdir::WalkDir;
 use vavavult::vault::Vault;
 use crate::utils::confirm_action;
 
-pub fn handle_add(vault: &Vault, local_path: &Path, vault_name: Option<String>) -> Result<(), Box<dyn Error>> {
+pub fn handle_add(vault: &mut Vault, local_path: &Path, vault_name: Option<String>) -> Result<(), Box<dyn Error>> {
     if !local_path.exists() {
         return Err(format!("Path does not exist: {:?}", local_path).into());
     }
@@ -19,7 +19,7 @@ pub fn handle_add(vault: &Vault, local_path: &Path, vault_name: Option<String>) 
 }
 
 /// 处理添加单个文件的逻辑
-fn handle_add_file(vault: &Vault, local_path: &Path, vault_name: Option<String>) -> Result<(), Box<dyn Error>> {
+fn handle_add_file(vault: &mut Vault, local_path: &Path, vault_name: Option<String>) -> Result<(), Box<dyn Error>> {
     println!("Adding file {:?}...", local_path);
     match vault.add_file(local_path, vault_name.as_deref()) {
         Ok(hash) => println!("Successfully added file. Hash: {}", hash),
@@ -29,7 +29,7 @@ fn handle_add_file(vault: &Vault, local_path: &Path, vault_name: Option<String>)
 }
 
 /// 处理批量添加目录的逻辑
-fn handle_add_directory(vault: &Vault, local_path: &Path, prefix: Option<String>) -> Result<(), Box<dyn Error>> {
+fn handle_add_directory(vault: &mut Vault, local_path: &Path, prefix: Option<String>) -> Result<(), Box<dyn Error>> {
     println!("Scanning directory {:?}...", local_path);
 
     // 1. 收集所有待添加的文件

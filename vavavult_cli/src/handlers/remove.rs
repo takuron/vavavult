@@ -2,7 +2,7 @@ use std::error::Error;
 use vavavult::vault::Vault;
 use crate::utils::{confirm_action, find_file_entry};
 
-pub fn handle_remove(vault: &Vault, vault_name: Option<String>, sha256: Option<String>) -> Result<(), Box<dyn Error>>{
+pub fn handle_remove(vault: &mut Vault, vault_name: Option<String>, sha256: Option<String>) -> Result<(), Box<dyn Error>>{
     let file_entry = find_file_entry(vault, vault_name, sha256)?;
 
     if !confirm_action(&format!(

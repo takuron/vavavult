@@ -47,7 +47,7 @@ fn test_open_vault() {
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
     let original_vault_name = "my-persistent-vault";
-    let vault = Vault::create_vault(vault_path, original_vault_name,None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, original_vault_name, None).unwrap();
 
     // Add a file to ensure state is persisted
     let source_file_path = vault_path.join("a.txt");
@@ -86,7 +86,7 @@ fn test_add_file_successfully() {
     // 1. 准备环境
     let dir = tempdir().unwrap(); // 创建一个临时目录
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     // 创建临时源文件
     let source_file_path1 = vault_path.join("my_test_file.txt");
@@ -128,7 +128,7 @@ fn test_add_duplicate_file_name() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     // 创建第一个文件
     let source_file_path1 = vault_path.join("file1.txt");
@@ -159,7 +159,7 @@ fn test_query_file_missing_from_disk_error() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     let source_file_path = vault_path.join("my_file.txt");
     File::create(&source_file_path).unwrap().write_all(b"i will be deleted").unwrap();
@@ -179,7 +179,7 @@ fn test_list_and_path_query() {
     // 1. Setup
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     // Create a file structure
     let file_a_path = vault_path.join("a.txt");
@@ -244,7 +244,7 @@ fn test_advanced_searches() {
     // 1. Setup
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     // Create files
     let report_path = vault_path.join("report.txt");
@@ -300,7 +300,7 @@ fn test_rename_file() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     let source_file_path = vault_path.join("rename_me.txt");
     File::create(&source_file_path).unwrap().write_all(b"rename content").unwrap();
@@ -338,7 +338,7 @@ fn test_tag_management() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     let source_file_path = vault_path.join("tag_me.txt");
     File::create(&source_file_path).unwrap().write_all(b"tag content").unwrap();
@@ -383,7 +383,7 @@ fn test_metadata_management() {
     // 1. Setup
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     let source_file_path = vault_path.join("metadata_file.txt");
     File::create(&source_file_path).unwrap().write_all(b"metadata content").unwrap();
@@ -448,7 +448,7 @@ fn test_extract_file() {
     // 1. Setup
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     let source_file_path = vault_path.join("extract_me.txt");
     let original_content = "content to be extracted";
@@ -475,7 +475,7 @@ fn test_remove_file() {
     // 1. 准备环境
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
-    let vault = Vault::create_vault(vault_path, "test_vault",None).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "test_vault", None).unwrap();
 
     let source_file_path = vault_path.join("delete_me.txt");
     File::create(&source_file_path).unwrap().write_all(b"delete content").unwrap();
@@ -508,7 +508,7 @@ fn test_encrypted_vault_creation_and_access() {
     let password = "a_strong_password_123!";
 
     // 2. 成功创建加密库
-    let vault = Vault::create_vault(vault_path, vault_name, Some(password)).unwrap();
+    let mut vault = Vault::create_vault(vault_path, vault_name, Some(password)).unwrap();
 
     // 验证配置是否正确
     assert_eq!(vault.config.encrypt_type, EncryptionType::Aes256Gcm);
@@ -548,7 +548,7 @@ fn test_add_and_extract_encrypted_file() {
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
     let password = "my-vault-password";
-    let vault = Vault::create_vault(vault_path, "encrypted_extract_test", Some(password)).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "encrypted_extract_test", Some(password)).unwrap();
 
     // 2. 准备源文件
     let source_file_path = vault_path.join("secret_data.txt");
@@ -586,7 +586,7 @@ fn test_full_vault_integration() {
     let dir = tempdir().unwrap();
     let vault_path = dir.path();
     let password = "full-integration-test-password-!@#";
-    let vault = Vault::create_vault(vault_path, "integration-vault", Some(password)).unwrap();
+    let mut vault = Vault::create_vault(vault_path, "integration-vault", Some(password)).unwrap();
     assert_eq!(vault.config.name, "integration-vault");
     assert_eq!(vault.config.encrypt_type, EncryptionType::Aes256Gcm);
 

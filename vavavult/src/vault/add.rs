@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use crate::file::encrypt::{EncryptError, EncryptionCheck, EncryptionType};
 use crate::utils::path::normalize_path_name;
 use crate::utils::random::{generate_random_password, generate_random_string};
-use crate::vault::query;
+use crate::vault::{query, UpdateError};
 use crate::vault::query::QueryResult;
 pub(crate) use crate::vault::Vault;
 
@@ -34,6 +34,9 @@ pub enum AddFileError {
 
     #[error("File encryption failed: {0}")]
     EncryptionError(#[from] EncryptError),
+
+    #[error("Failed to update vault timestamp: {0}")]
+    TimestampUpdateError(#[from] UpdateError),
 }
 
 

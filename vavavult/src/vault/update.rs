@@ -1,7 +1,9 @@
 use std::fs;
 use rusqlite::params;
+use crate::common::constants::META_UPDATE_TIME;
 use crate::common::metadata::MetadataEntry;
 use crate::utils::path::normalize_path_name;
+use crate::utils::time::now_as_rfc3339_string;
 use crate::vault::{query, QueryResult, Vault};
 
 #[derive(Debug, thiserror::Error)]
@@ -178,10 +180,28 @@ pub fn remove_vault_metadata(vault: &mut Vault, key: &str) -> Result<(), UpdateE
     save_config(vault)
 }
 
-// --- 私有辅助函数，用于保存配置 ---
+// --- 私有辅助函数 ---
+
+/// 仅负责将当前的配置状态保存到 `master.json`。
 fn save_config(vault: &Vault) -> Result<(), UpdateError> {
     let config_json = serde_json::to_string_pretty(&vault.config)?;
     let config_path = vault.root_path.join("master.json");
     fs::write(config_path, config_json.as_bytes())?;
     Ok(())
+}
+
+/// **新增**: 更新保险库的 `_vavavult_update_time` 元数据并保存。
+/// 这是所有修改操作都应调用的核心函数。
+pub(super) fn touch_update_time(vault: &mut Vault) -> Result<(), UpdateError> {
+    let now = now_as_rfc3339_string();
+    if let Some(update_meta) = vault.config.metadata.iter_mut().find(|m| m.key == META_UPDATE_TIME) {
+        update_meta.value = now;
+    } else {
+        // 如果 _vavavult_update_time 不存在 (可能来自旧版本)，则添加它
+        vault.config.metadata.push(MetadataEntry {
+            key: META_UPDATE_TIME.to_string(),
+            value: now,
+        });
+    }
+    save_config(vault)
 }

@@ -1,4 +1,4 @@
-use crate::vault::{Vault, query, QueryResult};
+use crate::vault::{Vault, query, QueryResult, UpdateError};
 use rusqlite::params;
 use std::fs as std_fs;
 
@@ -15,6 +15,9 @@ pub enum RemoveError {
 
     #[error("File with SHA256 '{0}' not found.")]
     FileNotFound(String),
+
+    #[error("Failed to update vault timestamp: {0}")]
+    TimestampUpdateError(#[from] UpdateError),
 }
 
 /// 从保险库中删除一个文件。

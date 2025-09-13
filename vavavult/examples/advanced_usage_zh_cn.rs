@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 创建一个新的加密保险库 ---
     println!("正在创建一个新的加密保险库...");
-    let vault = Vault::create_vault(vault_path, "secure-vault", Some(password))?;
+    let mut vault = Vault::create_vault(vault_path, "secure-vault", Some(password))?;
     println!("加密保险库创建成功!");
 
     // --- 添加多个带标签和元数据的文件 ---

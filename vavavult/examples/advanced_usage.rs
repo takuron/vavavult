@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Create a new ENCRYPTED Vault ---
     println!("Creating a new ENCRYPTED vault with password...");
-    let vault = Vault::create_vault(vault_path, "secure-vault", Some(password))?;
+    let mut vault = Vault::create_vault(vault_path, "secure-vault", Some(password))?;
     println!("Encrypted vault created successfully!");
 
     // --- Add multiple files with tags and metadata ---
