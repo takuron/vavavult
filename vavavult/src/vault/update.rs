@@ -85,23 +85,29 @@ pub fn add_tag(vault: &Vault, sha256sum: &str, tag: &str) -> Result<(), UpdateEr
 }
 
 /// 为文件批量添加多个标签。
-pub fn add_tags(vault: &Vault, sha256sum: &str, tags: &[&str]) -> Result<(), UpdateError> {
+/// 此操作在一个事务中执行，以保证原子性和高性能。
+pub fn add_tags(vault: &mut Vault, sha256sum: &str, tags: &[&str]) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 构建批量插入语句
-    let placeholders = tags.iter().map(|_| "(?1, ?2)").collect::<Vec<_>>().join(",");
-    let sql = format!("INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES {}", placeholders);
+    // 1. 开始一个数据库事务
+    // tx 会在作用域结束时自动提交 (commit)。如果中间发生错误，它会自动回滚 (rollback)。
+    let tx = vault.database_connection.transaction()?;
 
-    let mut stmt = vault.database_connection.prepare(&sql)?;
+    // 2. 在事务内部，准备一次 SQL 语句
+    {
+        let mut stmt = tx.prepare("INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES (?1, ?2)")?;
 
-    // 逐个执行插入
-    for tag in tags {
-        stmt.execute(params![sha256sum, tag])?;
-    }
+        // 3. 循环执行插入操作
+        for tag in tags {
+            // 如果任何一次 execute 失败，? 会立即返回错误，tx 将被丢弃并触发回滚
+            stmt.execute(params![sha256sum, tag])?;
+        }
+    } // stmt 在这里被销毁
 
-    touch_file_update_time(vault, sha256sum)?;
+    // 4. 提交事务
+    tx.commit()?;
 
     Ok(())
 }
