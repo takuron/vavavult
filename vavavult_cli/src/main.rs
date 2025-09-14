@@ -145,8 +145,8 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             // open 是只读操作
             handlers::open::handle_open(vault, vault_name, sha256)?;
         }
-        ReplCommand::Extract { vault_name, sha256, dir_path, destination, output_name, delete } => {
-            handlers::extract::handle_extract(vault, vault_name, sha256, dir_path, destination, output_name, delete)?;
+        ReplCommand::Extract { vault_name, sha256, dir_path, destination, output_name, delete, recursive } => {
+            handlers::extract::handle_extract(vault, vault_name, sha256, dir_path, destination, output_name, delete, recursive)?;
         }
         ReplCommand::Remove { vault_name, sha256 } => {
             handlers::remove::handle_remove(vault, vault_name, sha256)?;
@@ -160,12 +160,11 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
         // --- 修改 Tag 命令的处理逻辑 ---
         ReplCommand::Tag(tag_command) => {
             match tag_command {
-                TagCommand::Add { vault_name, sha256, dir_path, tags } => {
-                    // 调用现有的处理器，无需修改处理器代码
-                    handlers::tag::handle_tag(vault, vault_name, sha256, dir_path, &tags)?;
+                TagCommand::Add { vault_name, sha256, dir_path, tags, recursive } => {
+                    handlers::tag::handle_tag_add(vault, vault_name, sha256, dir_path, &tags, recursive)?;
                 }
-                TagCommand::Remove { vault_name, sha256, dir_path, tags } => {
-                    handlers::tag::handle_tag_remove(vault, vault_name, sha256, dir_path, &tags)?;
+                TagCommand::Remove { vault_name, sha256, dir_path, tags, recursive } => {
+                    handlers::tag::handle_tag_remove(vault, vault_name, sha256, dir_path, &tags, recursive)?;
                 }
                 TagCommand::Clear { vault_name, sha256 } => {
                     handlers::tag::handle_tag_clear(vault, vault_name, sha256)?;

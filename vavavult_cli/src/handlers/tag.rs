@@ -3,25 +3,26 @@ use vavavult::vault::Vault;
 use crate::utils::{confirm_action, find_file_entry, get_all_files_recursively};
 
 /// 主处理器，根据参数分发到单文件或批量模式
-pub fn handle_tag(
+pub fn handle_tag_add(
     vault: &mut Vault,
     vault_name: Option<String>,
     sha256: Option<String>,
     dir_path: Option<String>,
     tags: &[String],
+    recursive: bool
 ) -> Result<(), Box<dyn Error>> {
     // add_tags 方法需要 `&[&str]` 类型
     let tags_as_str: Vec<&str> = tags.iter().map(AsRef::as_ref).collect();
 
     if let Some(dir) = dir_path {
-        handle_tag_directory(vault, &dir, &tags_as_str)
+        handle_add_tags_directory(vault, &dir, &tags_as_str, recursive)
     } else {
-        handle_tag_single_file(vault, vault_name, sha256, &tags_as_str)
+        handle_add_tag_single_file(vault, vault_name, sha256, &tags_as_str)
     }
 }
 
 /// 处理为单个文件添加标签
-fn handle_tag_single_file(
+fn handle_add_tag_single_file(
     vault: &mut Vault,
     vault_name: Option<String>,
     sha256: Option<String>,
@@ -37,9 +38,14 @@ fn handle_tag_single_file(
 }
 
 /// 处理为整个目录下的文件批量添加标签
-fn handle_tag_directory(vault: &mut Vault, dir_path: &str, tags: &[&str]) -> Result<(), Box<dyn Error>> {
+fn handle_add_tags_directory(vault: &mut Vault, dir_path: &str, tags: &[&str], recursive: bool) -> Result<(), Box<dyn Error>> {
     println!("Scanning vault directory '{}' to add tags...", dir_path);
-    let files_to_tag = get_all_files_recursively(vault, dir_path)?;
+    let files_to_tag = if recursive {
+        println!("(Recursive mode enabled)");
+        get_all_files_recursively(vault, dir_path)?
+    } else {
+        vault.list_by_path(dir_path)?.files
+    };
 
     if files_to_tag.is_empty() {
         println!("No files found in vault directory '{}'.", dir_path);
@@ -70,11 +76,12 @@ pub fn handle_tag_remove(
     sha256: Option<String>,
     dir_path: Option<String>,
     tags: &[String],
+    recursive: bool
 ) -> Result<(), Box<dyn Error>> {
     let tags_as_str: Vec<&str> = tags.iter().map(AsRef::as_ref).collect();
 
     if let Some(dir) = dir_path {
-        handle_remove_tags_directory(vault, &dir, &tags_as_str)
+        handle_remove_tags_directory(vault, &dir, &tags_as_str, recursive)
     } else {
         handle_remove_tags_single_file(vault, vault_name, sha256, &tags_as_str)
     }
@@ -99,9 +106,14 @@ fn handle_remove_tags_single_file(
 }
 
 /// 处理为整个目录下的文件批量移除标签
-fn handle_remove_tags_directory(vault: &mut Vault, dir_path: &str, tags: &[&str]) -> Result<(), Box<dyn Error>> {
+fn handle_remove_tags_directory(vault: &mut Vault, dir_path: &str, tags: &[&str], recursive: bool) -> Result<(), Box<dyn Error>> {
     println!("Scanning vault directory '{}' to remove tags...", dir_path);
-    let files_to_process = get_all_files_recursively(vault, dir_path)?;
+    let files_to_process = if recursive {
+        println!("(Recursive mode enabled)");
+        get_all_files_recursively(vault, dir_path)?
+    } else {
+        vault.list_by_path(dir_path)?.files
+    };
 
     if files_to_process.is_empty() {
         println!("No files found in vault directory '{}'.", dir_path);

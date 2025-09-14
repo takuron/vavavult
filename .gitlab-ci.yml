@@ -7,83 +7,37 @@ variables:
   CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
-# 定义流水线的各个阶段
+# 定义流水线的各个阶段（已移除 release）
 stages:
   - build
   - test
-  - release
 
 # 定义全局缓存策略，加速后续构建
+# 这将缓存 .cargo/ 和 target/ 目录，以 Cargo.lock 为键
 cache:
-  # 使用 Cargo.lock 文件的哈希作为缓存键
   key:
     files:
       - Cargo.lock
-  # 需要缓存的目录
   paths:
     - .cargo/
     - target/
   # 默认策略：拉取缓存，并在作业成功后推送更新
   policy: pull-push
 
-# --- 普通的构建和测试作业 ---
-# 这些作业会在每次提交时运行
-
+# --- 构建作业 ---
+# 这个作业会在每次提交时运行
 build_job:
   stage: build
   script:
     - cargo build --verbose
 
+# --- 测试作业 ---
+# 这个作业会在构建成功后运行
 test_job:
   stage: test
   script:
-    # Cargo 会自动利用缓存，跳过不必要的编译
+    # Cargo 会自动利用缓存，跳过不必要的重新编译
     - cargo test --verbose
   cache:
-    # 测试作业只需要拉取缓存，无需再次上传
+    # 测试作业只需要拉取缓存，无需再次上传，可以提高效率
     policy: pull
-
-# --- 发布作业模板 ---
-# .release_template 定义了所有发布作业的通用配置
-.release_template:
-  stage: release
-  cache:
-    policy: pull
-  artifacts:
-    # 将编译产物保存为 GitLab Artifacts，方便下载
-    paths:
-      # 使用通配符匹配 Linux 和 Windows 的产物
-      - target/release/vavavult_cli-*
-    expire_in: 1 week # 设置产物的过期时间
-  rules:
-    # 关键规则：仅当推送一个 Git 标签时才运行这些作业
-    # 例如: git tag v0.2.1 && git push --tags
-    - if: $CI_COMMIT_TAG
-
-# --- 具体的发布作业 ---
-
-# 为 Linux (GNU) 构建
-release-linux:
-  extends: .release_template
-  before_script:
-    - rustup target add x86_64-unknown-linux-gnu
-  script:
-    - cargo build --release --package vavavult_cli --target x86_64-unknown-linux-gnu
-    # 重命名产物以包含平台标识
-    - mv target/x86_64-unknown-linux-gnu/release/vavavult_cli target/release/vavavult_cli-x86_64-unknown-linux-gnu
-
-# 为 Windows (MinGW) 构建
-release-windows:
-  extends: .release_template
-  before_script:
-    # 安装交叉编译到 Windows 所需的 MinGW 工具链
-    - apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
-    - rustup target add x86_64-pc-windows-gnu
-  script:
-    # 在 .cargo/config.toml 中配置 Windows 目标的链接器
-    # '>>' 会创建文件或向文件追加内容
-    - echo '[target.x86_64-pc-windows-gnu]' >> .cargo/config.toml
-    - echo 'linker = "x86_64-w64-mingw32-gcc"' >> .cargo/config.toml
-    - cargo build --release --package vavavult_cli --target x86_64-pc-windows-gnu
-    # 重命名产物以包含平台标识
-    - mv target/x86_64-pc-windows-gnu/release/vavavult_cli.exe target/release/vavavult_cli-x86_64-pc-windows-gnu.exe

@@ -86,6 +86,10 @@ pub enum ReplCommand {
         /// 提取成功后从保险库中删除源文件
         #[arg(long)]
         delete: bool,
+
+        /// 递归提取子目录中的所有文件 (仅限目录模式)
+        #[arg(short = 'r', long, requires = "dir_path")] // <-- 为 Extract 添加
+        recursive: bool,
     },
     /// 从保险库中永久删除一个文件
     #[command(visible_alias = "rm")]
@@ -134,6 +138,10 @@ pub enum TagCommand {
         /// One or more tags to add, separated by spaces
         #[arg(required = true, num_args = 1..)]
         tags: Vec<String>,
+
+        /// 递归地为子目录中的所有文件添加标签 (仅限目录模式)
+        #[arg(short = 'r', long, requires = "dir_path")] // <-- 为 Tag Add 添加
+        recursive: bool,
     },
     Remove {
         /// The name of the file to remove tags from (in the vault)
@@ -151,6 +159,10 @@ pub enum TagCommand {
         /// One or more tags to remove, separated by spaces
         #[arg(required = true, num_args = 1..)]
         tags: Vec<String>,
+
+        /// 递归地为子目录中的所有文件添加标签 (仅限目录模式)
+        #[arg(short = 'r', long, requires = "dir_path")] // <-- 为 Tag Add 添加
+        recursive: bool,
     },
     Clear {
         /// The name of the file to clear tags from (in the vault)

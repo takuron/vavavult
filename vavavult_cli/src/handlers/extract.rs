@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use vavavult::vault::Vault;
 use crate::utils::{confirm_action, determine_output_path, find_file_entry, get_all_files_recursively};
 
-pub fn handle_extract(vault: &mut Vault,vault_name:Option<String>, sha256:Option<String>, dir_path:Option<String>, destination:PathBuf, output_name:Option<String>, delete:bool) -> Result<(), Box<dyn Error>> {
+// 更新主处理函数签名
+pub fn handle_extract(vault: &mut Vault, vault_name:Option<String>, sha256:Option<String>, dir_path:Option<String>, destination:PathBuf, output_name:Option<String>, delete:bool, recursive: bool) -> Result<(), Box<dyn Error>> {
     if let Some(dir) = dir_path {
-        // 新增：处理目录提取
-        Ok(handle_extract_directory(vault, &dir, &destination, delete)?)
+        // 将 recursive 参数传递下去
+        Ok(handle_extract_directory(vault, &dir, &destination, delete, recursive)?)
     } else {
-        // 现有：处理单文件提取
         Ok(handle_extract_single_file(vault, vault_name, sha256, &destination, output_name, delete)?)
     }
 }
@@ -46,9 +46,18 @@ fn handle_extract_single_file(vault: &mut Vault, vault_name: Option<String>, sha
 }
 
 /// 处理提取整个目录的逻辑
-fn handle_extract_directory(vault: &mut Vault, dir_path: &str, destination: &Path, delete: bool) -> Result<(), Box<dyn Error>> {
+/// 处理提取整个目录的逻辑 (更新函数签名)
+fn handle_extract_directory(vault: &mut Vault, dir_path: &str, destination: &Path, delete: bool, recursive: bool) -> Result<(), Box<dyn Error>> {
     println!("Scanning vault directory '{}' for extraction...", dir_path);
-    let files_to_extract = get_all_files_recursively(vault, dir_path)?;
+
+    // --- 核心逻辑修改 ---
+    let files_to_extract = if recursive {
+        println!("(Recursive mode enabled)");
+        get_all_files_recursively(vault, dir_path)?
+    } else {
+        // 非递归模式：只获取当前目录的文件
+        vault.list_by_path(dir_path)?.files
+    };
 
     if files_to_extract.is_empty() {
         println!("No files found in vault directory '{}'.", dir_path);
