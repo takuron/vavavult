@@ -2,9 +2,8 @@ use std::error::Error;
 use std::{fs, io};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use vavavult::file::FileEntry;
 use vavavult::vault::Vault;
-use crate::utils::{confirm_action, determine_output_path, find_file_entry};
+use crate::utils::{confirm_action, determine_output_path, find_file_entry, get_all_files_recursively};
 
 pub fn handle_extract(vault: &mut Vault,vault_name:Option<String>, sha256:Option<String>, dir_path:Option<String>, destination:PathBuf, output_name:Option<String>, delete:bool) -> Result<(), Box<dyn Error>> {
     if let Some(dir) = dir_path {
@@ -111,20 +110,4 @@ fn handle_extract_directory(vault: &mut Vault, dir_path: &str, destination: &Pat
     }
 
     Ok(())
-}
-
-/// 递归地获取一个 vault 目录下的所有文件
-fn get_all_files_recursively(vault: &Vault, dir_path: &str) -> Result<Vec<FileEntry>, Box<dyn Error>> {
-    let mut all_files = Vec::new();
-    let mut dirs_to_scan = vec![dir_path.to_string()];
-
-    while let Some(current_dir) = dirs_to_scan.pop() {
-        let result = vault.list_by_path(&current_dir)?;
-        all_files.extend(result.files);
-        for subdir in result.subdirectories {
-            let full_subdir_path = Path::new(&current_dir).join(subdir).to_string_lossy().into_owned();
-            dirs_to_scan.push(full_subdir_path);
-        }
-    }
-    Ok(all_files)
 }

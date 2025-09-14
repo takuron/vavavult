@@ -120,3 +120,19 @@ pub fn print_list_result(result: &ListResult) {
     // 再打印文件
     print_file_entries(&result.files);
 }
+
+/// 递归地获取一个 vault 目录下的所有文件
+pub(crate) fn get_all_files_recursively(vault: &Vault, dir_path: &str) -> Result<Vec<FileEntry>, Box<dyn Error>> {
+    let mut all_files = Vec::new();
+    let mut dirs_to_scan = vec![dir_path.to_string()];
+
+    while let Some(current_dir) = dirs_to_scan.pop() {
+        let result = vault.list_by_path(&current_dir)?;
+        all_files.extend(result.files);
+        for subdir in result.subdirectories {
+            let full_subdir_path = Path::new(&current_dir).join(subdir).to_string_lossy().into_owned();
+            dirs_to_scan.push(full_subdir_path);
+        }
+    }
+    Ok(all_files)
+}

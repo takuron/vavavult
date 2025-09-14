@@ -103,10 +103,62 @@ pub enum ReplCommand {
         #[arg(required = true)]
         new_name: String,
     },
+    /// Manage tags for files (管理文件标签)
+    #[command(subcommand)] // <-- 告诉 clap, `Tag` 有子命令
+    Tag(TagCommand),       // <-- 将之前的实现包裹在新枚举中
     /// 显示当前保险库的状态
     Status,
     /// 关闭当前保险库
     Close,
     /// 退出交互式会话
     Exit,
+}
+
+// --- 新增：为 `tag` 创建一个子命令枚举 ---
+#[derive(Parser, Debug)]
+pub enum TagCommand {
+    /// Add one or more tags to a file or a directory of files
+    Add {
+        /// The name of the file to tag (in the vault)
+        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present_any = ["sha256", "dir_path"])]
+        vault_name: Option<String>,
+
+        /// The SHA256 hash of the file to tag
+        #[arg(short = 's', long = "sha256", group = "identifier")]
+        sha256: Option<String>,
+
+        /// The vault directory to apply tags to recursively (batch mode)
+        #[arg(short = 'd', long = "dir", group = "identifier")]
+        dir_path: Option<String>,
+
+        /// One or more tags to add, separated by spaces
+        #[arg(required = true, num_args = 1..)]
+        tags: Vec<String>,
+    },
+    Remove {
+        /// The name of the file to remove tags from (in the vault)
+        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present_any = ["sha256", "dir_path"])]
+        vault_name: Option<String>,
+
+        /// The SHA256 hash of the file to remove tags from
+        #[arg(short = 's', long = "sha256", group = "identifier")]
+        sha256: Option<String>,
+
+        /// The vault directory to remove tags from recursively (batch mode)
+        #[arg(short = 'd', long = "dir", group = "identifier")]
+        dir_path: Option<String>,
+
+        /// One or more tags to remove, separated by spaces
+        #[arg(required = true, num_args = 1..)]
+        tags: Vec<String>,
+    },
+    Clear {
+        /// The name of the file to clear tags from (in the vault)
+        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
+        vault_name: Option<String>,
+
+        /// The SHA256 hash of the file to clear tags from
+        #[arg(short = 's', long = "sha256", group = "identifier")]
+        sha256: Option<String>,
+    },
 }

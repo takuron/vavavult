@@ -9,7 +9,7 @@ use vavavult::vault::{OpenError, Vault};
 use std::error::Error;
 use std::{env};
 use std::io::{self, Write};
-use crate::cli::{Cli, ReplCommand, TopLevelCommands};
+use crate::cli::{Cli, ReplCommand, TagCommand, TopLevelCommands};
 
 struct AppState {
     active_vault: Option<Vault>,
@@ -138,7 +138,7 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
         ReplCommand::Add { local_path, vault_name } => {
             handlers::add::handle_add(vault, &local_path, vault_name)?;
         }
-        ReplCommand::List { path, search, tag, detail } => { 
+        ReplCommand::List { path, search, tag, detail } => {
             handlers::list::handle_list(vault, path, search, tag, detail)?; // <-- 传递 tag
         }
         ReplCommand::Open { vault_name, sha256 } => {
@@ -156,6 +156,21 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
         }
         ReplCommand::Rename { new_name } => { // <-- 添加这个匹配分支
             handlers::rename::handle_rename(vault, &new_name)?;
+        }
+        // --- 修改 Tag 命令的处理逻辑 ---
+        ReplCommand::Tag(tag_command) => {
+            match tag_command {
+                TagCommand::Add { vault_name, sha256, dir_path, tags } => {
+                    // 调用现有的处理器，无需修改处理器代码
+                    handlers::tag::handle_tag(vault, vault_name, sha256, dir_path, &tags)?;
+                }
+                TagCommand::Remove { vault_name, sha256, dir_path, tags } => {
+                    handlers::tag::handle_tag_remove(vault, vault_name, sha256, dir_path, &tags)?;
+                }
+                TagCommand::Clear { vault_name, sha256 } => {
+                    handlers::tag::handle_tag_clear(vault, vault_name, sha256)?;
+                }
+            }
         }
         ReplCommand::Close => {
             let vault_name = app_state.active_vault.take().unwrap().config.name;
