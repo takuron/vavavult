@@ -35,7 +35,7 @@ pub enum ReplCommand {
         vault_name: Option<String>,
     },
     /// 列出保险库中的文件和目录
-    #[command(visible_alias = "ls")] // 我们可以为 list 添加一个别名 `ls`
+    #[command(visible_alias = "ls")]
     List {
         /// 按虚拟路径列出内容
         #[arg(short = 'p', long = "path", group = "list_mode")]
@@ -44,6 +44,14 @@ pub enum ReplCommand {
         /// 根据关键词模糊搜索文件名
         #[arg(short = 's', long = "search", group = "list_mode")]
         search: Option<String>,
+
+        /// 根据标签搜索文件
+        #[arg(short = 't', long = "tag", group = "list_mode")] // <-- 添加这个新标志
+        tag: Option<String>,
+
+        /// 显示每个文件的详细信息
+        #[arg(short = 'd', long = "detail")] // <-- 添加这个新标志
+        detail: bool,
     },
     Open {
         /// 要打开的文件的名称
@@ -88,6 +96,12 @@ pub enum ReplCommand {
         /// 要删除的文件的 SHA256 哈希值
         #[arg(short = 's', long = "sha256", group = "identifier")]
         sha256: Option<String>,
+    },
+    /// 重命名当前保险库
+    Rename {
+        /// 保险库的新名称
+        #[arg(required = true)]
+        new_name: String,
     },
     /// 显示当前保险库的状态
     Status,

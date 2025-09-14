@@ -20,8 +20,24 @@ pub fn handle_add(vault: &mut Vault, local_path: &Path, vault_name: Option<Strin
 
 /// 处理添加单个文件的逻辑
 fn handle_add_file(vault: &mut Vault, local_path: &Path, vault_name: Option<String>) -> Result<(), Box<dyn Error>> {
+    // --- 新增逻辑：处理以 / 结尾的路径 ---
+    let final_vault_name = match vault_name {
+        Some(name) if name.ends_with('/') => {
+            // 如果 name 以 / 结尾，则将其视为目录
+            let file_name = local_path.file_name()
+                .and_then(|s| s.to_str())
+                .ok_or("无法从源路径中提取文件名。")?; // 错误处理
+            // 拼接成 "目录/文件名" 的形式
+            Some(format!("{}{}", name, file_name))
+        }
+        // 对于其他情况 (None 或不以 / 结尾)，保持原样
+        other => other,
+    };
+    // --- 逻辑结束 ---
+
     println!("Adding file {:?}...", local_path);
-    match vault.add_file(local_path, vault_name.as_deref()) {
+    // 使用我们处理过后的 `final_vault_name`
+    match vault.add_file(local_path, final_vault_name.as_deref()) {
         Ok(hash) => println!("Successfully added file. Hash: {}", hash),
         Err(e) => eprintln!("Error adding file: {}", e),
     }

@@ -1,28 +1,55 @@
 use std::error::Error;
 use vavavult::vault::Vault;
-use crate::utils::{print_file_entries, print_list_result};
+use crate::utils::{print_file_details, print_file_entries, print_list_result};
 
-pub fn handle_list(vault: &Vault, path: Option<String>, search: Option<String>) -> Result<(), Box<dyn Error>> {
-    match (path, search) {
-        // 模式 1: list -s <keyword>
-        (None, Some(keyword)) => {
-            let files = vault.find_by_name_fuzzy(&keyword)?;
-            println!("Found {} file(s) matching '{}':", files.len(), keyword);
-            Ok(print_file_entries(&files))
+pub fn handle_list(
+    vault: &Vault,
+    path: Option<String>,
+    search: Option<String>,
+    tag: Option<String>, // <-- 新增参数
+    detail: bool,
+)  -> Result<(), Box<dyn Error>> {
+    // 根据模式获取文件列表
+    let files = match (path, search, tag) { // <-- 更新 match 表达式
+        // 按名称搜索
+        (None, Some(keyword), None) => {
+            let found = vault.find_by_name_fuzzy(&keyword)?;
+            println!("Found {} file(s) matching '{}':", found.len(), keyword);
+            found
         }
-        // 模式 2: list -p <path>
-        (Some(p), None) => {
+        // 按路径列出
+        (Some(p), None, None) => {
             let result = vault.list_by_path(&p)?;
             println!("Contents of '{}':", p);
-            Ok(print_list_result(&result))
+            print_list_result(&result);
+            return Ok(());
         }
-        // 模式 3: list (无参数)
-        (None, None) => {
-            let files = vault.list_all()?;
-            println!("All {} file(s) in the vault:", files.len());
-            Ok(print_file_entries(&files))
+        // --- 新增：按标签搜索 ---
+        (None, None, Some(t)) => {
+            let found = vault.find_by_tag(&t)?;
+            println!("Found {} file(s) with tag '{}':", found.len(), &t);
+            found
         }
-        // clap 的 group 功能会阻止这种情况发生，但 match 需要它是详尽的
-        (Some(_), Some(_)) => unreachable!(),
+        // 列出全部
+        (None, None, None) => {
+            let all_files = vault.list_all()?;
+            println!("All {} file(s) in the vault:", all_files.len());
+            all_files
+        }
+        _ => unreachable!(),
+    };
+
+    // 根据 `detail` 标志决定调用哪个打印函数
+    if detail {
+        for file in &files {
+            print_file_details(file);
+        }
+        if !files.is_empty() {
+            println!("----------------------------------------");
+        }
+    } else {
+        print_file_entries(&files);
     }
+
+    Ok(())
 }

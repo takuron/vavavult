@@ -138,9 +138,8 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
         ReplCommand::Add { local_path, vault_name } => {
             handlers::add::handle_add(vault, &local_path, vault_name)?;
         }
-        ReplCommand::List { path, search } => {
-            // list 是只读操作，传递 &mut vault 也是安全的
-            handlers::list::handle_list(vault, path, search)?;
+        ReplCommand::List { path, search, tag, detail } => { 
+            handlers::list::handle_list(vault, path, search, tag, detail)?; // <-- 传递 tag
         }
         ReplCommand::Open { vault_name, sha256 } => {
             // open 是只读操作
@@ -153,9 +152,10 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             handlers::remove::handle_remove(vault, vault_name, sha256)?;
         }
         ReplCommand::Status => {
-            println!("Active vault: {}", vault.config.name);
-            println!("Path: {:?}", vault.root_path);
-            println!("Encryption: {:?}", vault.config.encrypt_type);
+            handlers::status::handle_status(vault)?;
+        }
+        ReplCommand::Rename { new_name } => { // <-- 添加这个匹配分支
+            handlers::rename::handle_rename(vault, &new_name)?;
         }
         ReplCommand::Close => {
             let vault_name = app_state.active_vault.take().unwrap().config.name;
