@@ -6,6 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/vavavult_cli/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/vavavult/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/vavavult/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/vavavult_cli/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/vavavult/target" />
     </content>

@@ -409,7 +409,7 @@ fn test_metadata_management() {
     };
 
     // 3. 添加一个自定义元数据 ("author")
-    thread::sleep(Duration::from_secs(1)); // 确保时间戳有变化
+    thread::sleep(Duration::from_micros(100)); // 确保时间戳有变化
     vault.set_file_metadata(&sha256sum, MetadataEntry {
         key: "author".to_string(),
         value: "John Doe".to_string(),
@@ -429,7 +429,7 @@ fn test_metadata_management() {
     };
 
     // 4. 更新自定义元数据 ("author")
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_micros(100));
     vault.set_file_metadata(&sha256sum, MetadataEntry {
         key: "author".to_string(),
         value: "Jane Smith".to_string(),
@@ -449,7 +449,7 @@ fn test_metadata_management() {
     };
 
     // 5. 尝试修改一个系统元数据 (不应触发更新)
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_micros(100));
     vault.set_file_metadata(&sha256sum, MetadataEntry {
         key: "_vavavult_file_size".to_string(), // 这是一个系统保留键
         value: "999".to_string(),
@@ -466,7 +466,7 @@ fn test_metadata_management() {
     };
 
     // 6. 删除自定义元数据 ("author")
-    thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_micros(100));
     vault.remove_file_metadata(&sha256sum, "author").unwrap();
 
     // 验证: 元数据总数回到4，并且 update_time 再次更新

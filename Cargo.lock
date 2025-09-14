@@ -868,6 +868,7 @@ dependencies = [
  "rpassword",
  "rustyline",
  "shlex",
+ "tempfile",
  "vavavult",
  "walkdir",
 ]
