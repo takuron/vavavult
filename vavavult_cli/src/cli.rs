@@ -50,6 +50,11 @@ pub enum ReplCommand {
         // (可选) 指定在保险库中的目标目录
         #[arg(short = 'd', long = "dir")]
         dest_dir: Option<String>,
+
+        /// (EXPERIMENTAL) Use multiple threads to add files in parallel
+        // (实验性) 使用多线程并行添加文件
+        #[arg(long)]
+        parallel: bool,
     },
     /// List files and directories in the vault
     //  列出保险库中的文件和目录
@@ -125,6 +130,11 @@ pub enum ReplCommand {
         //  递归提取子目录中的所有文件 (仅限目录模式)
         #[arg(short = 'r', long, requires = "dir_path")]
         recursive: bool,
+
+        /// (EXPERIMENTAL) Use multiple threads to extract files in parallel
+        // (实验性) 使用多线程并行提取文件
+        #[arg(long, requires = "dir_path")]
+        parallel: bool,
     },
     /// Permanently delete a file from the vault
     // 从保险库中永久删除一个文件

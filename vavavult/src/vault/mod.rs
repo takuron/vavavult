@@ -11,14 +11,14 @@ mod extract;
 
 pub use config::{VaultConfig};
 pub use create::{CreateError,OpenError};
-pub use add::{AddFileError};
+pub use add::{AddTransaction,AddFileError};
 pub use query::{QueryError, QueryResult};
 pub use update::{UpdateError};
 pub use remove::{RemoveError};
 pub use query::{ListResult};
 use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
-use crate::vault::add::add_file;
+use crate::vault::add::{add_file, commit_add_transaction_local, prepare_add_transaction};
 use crate::vault::create::{create_vault, open_vault};
 use crate::vault::extract::{extract_file, ExtractError};
 use crate::vault::query::{check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy, find_by_tag, list_all_files, list_by_path};
@@ -201,6 +201,22 @@ impl Vault {
         dest_name: Option<&str>,
     ) -> Result<String, AddFileError> {
         let result = add_file(self, source_path, dest_name)?;
+        touch_vault_update_time(self)?;
+        Ok(result)
+    }
+    /// 阶段 1: 准备一个文件添加事务 (线程安全)。
+    ///
+    /// 这个方法执行所有耗时的操作：读取文件、计算哈希、加密。
+    /// 它不修改 vault 状态，因此是线程安全的。
+    pub fn prepare_add_transaction(&self, source_path: &Path) -> Result<AddTransaction, AddFileError> {
+        prepare_add_transaction(self, source_path)
+    }
+
+    /// 阶段 2: 提交一个文件添加事务 (需要独占访问)。
+    ///
+    /// 这个方法执行所有快速的、需要写入权限的操作。
+    pub fn commit_add_transaction(&mut self, transaction: AddTransaction, dest_name: &str) -> Result<String, AddFileError> {
+        let result = commit_add_transaction_local(self, transaction, dest_name)?;
         touch_vault_update_time(self)?;
         Ok(result)
     }

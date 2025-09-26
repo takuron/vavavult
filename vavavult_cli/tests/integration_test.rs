@@ -126,3 +126,102 @@ fn test_create_non_encrypted_vault() {
     assert!(vault_path.exists());
     assert!(vault_path.join("master.json").exists());
 }
+
+// --- 全新重写的、基于实际输出的并行操作集成测试 ---
+#[test]
+fn test_parallel_add_and_extract_lifecycle() {
+    // 1. 准备环境
+    let dir = tempdir().unwrap();
+    let source_dir = dir.path().join("source_files");
+    fs::create_dir_all(&source_dir).unwrap();
+    let extract_dir = dir.path().join("extracted_files");
+    let extract_and_delete_dir = dir.path().join("extract_and_delete_files");
+
+    // 创建 10 个小文件
+    for i in 0..10 {
+        fs::write(source_dir.join(format!("file_{}.txt", i)), format!("content_{}", i)).unwrap();
+    }
+
+    // 准备跨平台的路径字符串
+    let vault_parent_path = dir.path().to_string_lossy().replace('\\', "/");
+    let sanitized_source_path = source_dir.to_string_lossy().replace('\\', "/");
+    let sanitized_extract_path = extract_dir.to_string_lossy().replace('\\', "/");
+    let sanitized_extract_delete_path = extract_and_delete_dir.to_string_lossy().replace('\\', "/");
+
+    // 2. 启动 CLI 进程
+    let mut child = Command::new(get_cli_binary())
+        .arg("create")
+        .arg(&vault_parent_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Failed to start CLI process");
+
+    let mut stdin = child.stdin.take().expect("Failed to open stdin");
+
+    // 3. 自动化命令序列
+    write_to_stdin(&mut stdin, "parallel-vault\n");
+    write_to_stdin(&mut stdin, "n\n");
+
+    // 并行添加 (目标是 vault 的根目录)
+    write_to_stdin(&mut stdin, &format!("add \"{}\" --parallel\n", sanitized_source_path));
+    write_to_stdin(&mut stdin, "y\n");
+
+    // 列出以验证
+    write_to_stdin(&mut stdin, "list\n");
+
+    // 并行提取 (从 vault 的根目录递归提取)
+    write_to_stdin(&mut stdin, &format!("extract -d / --recursive --parallel \"{}\"\n", sanitized_extract_path));
+    write_to_stdin(&mut stdin, "y\n");
+
+    // 并行提取并删除
+    write_to_stdin(&mut stdin, &format!("extract -d / --recursive --parallel --delete \"{}\"\n", sanitized_extract_delete_path));
+    write_to_stdin(&mut stdin, "y\n");
+    write_to_stdin(&mut stdin, "y\n");
+
+    // 再次列出以验证删除
+    write_to_stdin(&mut stdin, "list\n");
+
+    write_to_stdin(&mut stdin, "exit\n");
+
+    // 4. 捕获输出
+    let output = child.wait_with_output().expect("Failed to wait for child process");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    println!("--- PARALLEL STDOUT ---\n{}\n--------------", stdout);
+    println!("--- PARALLEL STDERR ---\n{}\n--------------", stderr);
+
+    // 5. 断言
+    assert!(output.status.success(), "CLI process exited with an error. Stderr:\n{}", stderr);
+
+    // Validate adding
+    assert!(stdout.contains("Batch add complete. 10 succeeded, 0 failed."));
+
+    // Validate first list
+    assert!(stdout.contains("/file_9.txt"));
+
+    // Validate extraction
+    assert!(stdout.contains("10 succeeded, 0 failed."));
+
+    // Validate second list (should be empty)
+    assert!(stdout.contains("All 0 file(s) in the vault:") || stdout.contains("(empty)"));
+
+
+    // 6. 验证文件系统
+    for i in 0..10 {
+        let filename = format!("file_{}.txt", i);
+        let content = format!("content_{}", i);
+
+        // 检查第一次提取的文件 (直接在目标目录下)
+        let extracted_file = extract_dir.join(&filename);
+        assert!(extracted_file.exists(), "File {} was not extracted correctly!", filename);
+        assert_eq!(fs::read_to_string(extracted_file).unwrap(), content);
+
+        // 检查第二次提取的文件
+        let extracted_deleted_file = extract_and_delete_dir.join(&filename);
+        assert!(extracted_deleted_file.exists(), "File {} was not extracted correctly before delete!", filename);
+        assert_eq!(fs::read_to_string(extracted_deleted_file).unwrap(), content);
+    }
+}
