@@ -135,8 +135,8 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
     };
 
     match command {
-        ReplCommand::Add { local_path, vault_name } => {
-            handlers::add::handle_add(vault, &local_path, vault_name)?;
+        ReplCommand::Add { local_path, file_name, dest_dir } => {
+            handlers::add::handle_add(vault, &local_path, file_name, dest_dir)?;
         }
         ReplCommand::List { path, search, tag, detail } => {
             handlers::list::handle_list(vault, path, search, tag, detail)?; // <-- 传递 tag

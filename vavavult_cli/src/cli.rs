@@ -41,10 +41,15 @@ pub enum ReplCommand {
         #[arg(required = true)]
         local_path: PathBuf,
 
-        /// Set a custom name for the file in the vault (acts as a prefix for directories)
-        //  在保险库中为文件设置一个自定义名称 (对于目录，则作为名称前缀)
+        /// (Optional) Specify a new name for the added file (single file only)
+        // (可选) 为添加的文件指定一个新名称 (仅限单文件)
         #[arg(short = 'n', long = "name")]
-        vault_name: Option<String>,
+        file_name: Option<String>,
+
+        /// (Optional) Specify the destination directory inside the vault
+        // (可选) 指定在保险库中的目标目录
+        #[arg(short = 'd', long = "dir")]
+        dest_dir: Option<String>,
     },
     /// List files and directories in the vault
     //  列出保险库中的文件和目录
