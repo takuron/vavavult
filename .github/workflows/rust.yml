@@ -1,0 +1,53 @@
+# .github/workflows/rust.yml
+
+name: Rust CI
+
+# 控制工作流何时运行
+on:
+  # [修改] 移除 branches 过滤器，使其在所有分支的 push 事件上运行
+  push:
+  # branches: [ "main" ] # 移除此行或注释掉
+  # [修改] 移除 branches 过滤器，使其在针对所有分支的 pull_request 事件上运行
+  pull_request:
+  # branches: [ "main" ] # 移除此行或注释掉
+
+# 设置环境变量，优化 Cargo (可选，但推荐)
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # 定义一个名为 build_and_test 的作业
+  build_and_test:
+    # 指定运行环境为最新的 Ubuntu
+    runs-on: ubuntu-latest
+
+    steps:
+      # 第一步：检出代码库
+      - uses: actions/checkout@v4
+
+      # 第二步：设置 Rust 工具链
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      # 第三步：缓存 Cargo 依赖项
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # 第四步：构建项目
+      - name: Build
+        run: cargo build --verbose --workspace
+
+      # 第五步：运行测试
+      - name: Run tests
+        run: cargo test --verbose --workspace

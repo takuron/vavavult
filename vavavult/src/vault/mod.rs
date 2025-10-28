@@ -97,6 +97,19 @@ impl Vault {
         check_by_name(self, name)
     }
 
+    /// [EXPERIMENTAL] Finds a file entry using a VaultPath.
+    ///
+    /// This method requires the `experimental_paths` feature to be enabled.
+    ///
+    /// # Arguments
+    /// * `path` - A [`VaultPath`] representing the normalized path of the file.
+    ///
+    /// # Returns
+    /// A `QueryResult` which is `Found(FileEntry)` if the file exists,
+    /// or `NotFound` otherwise.
+    ///
+    /// # Errors
+    /// Returns `QueryError` if there is a database issue or data inconsistency.
     #[cfg(feature = "experimental_paths")]
     pub fn find_by_vault_path(&self, path: &VaultPath) -> Result<QueryResult, QueryError> {
         // 桥接：调用现有的 &str API
@@ -147,6 +160,19 @@ impl Vault {
         list_by_path(self, path)
     }
 
+    /// [EXPERIMENTAL] Lists files and subdirectories directly under a given VaultPath.
+    ///
+    /// This method requires the `experimental_paths` feature to be enabled.
+    ///
+    /// # Arguments
+    /// * `path` - The [`VaultPath`] to list. It must represent a directory (e.g., `/a/b/` or `/`).
+    ///   If a file path is provided, the contents of its parent directory will be listed.
+    ///
+    /// # Returns
+    /// A `ListResult` containing separate vectors for files and subdirectory names.
+    ///
+    /// # Errors
+    /// Returns `QueryError` if there is a database issue.
     #[cfg(feature = "experimental_paths")]
     pub fn list_by_vault_path(&self, path: &VaultPath) -> Result<ListResult, QueryError> {
         // 桥接：调用现有的 &str API
@@ -193,6 +219,7 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `QueryError` if there is a database issue.
+    #[deprecated(since = "0.2.2", note = "Please use `find_by_name_or_tag_fuzzy` instead for combined searching")]
     pub fn find_by_name_and_tag_fuzzy(
         &self,
         name_pattern: &str,
@@ -240,6 +267,23 @@ impl Vault {
         Ok(result)
     }
 
+    /// [EXPERIMENTAL] Adds a new file to the vault at a specific VaultPath.
+    ///
+    /// This method requires the `experimental_paths` feature to be enabled.
+    /// `dest_path` must represent a file path (not ending in '/').
+    ///
+    /// # Arguments
+    /// * `source_path` - The path to the file on the local filesystem.
+    /// * `dest_path` - The [`VaultPath`] where the file should be stored in the vault.
+    ///   Must be a file path (e.g., `/a/b.txt`).
+    ///
+    /// # Returns
+    /// The SHA256 hash of the added file on success.
+    ///
+    /// # Errors
+    /// Returns `AddFileError` if the source file doesn't exist, if `dest_path` is
+    /// a directory path (`InvalidFilePath`), or if a file with the same name or
+    /// content already exists.
     #[cfg(feature = "experimental_paths")]
     pub fn add_file_at_path(
         &mut self,
@@ -250,10 +294,21 @@ impl Vault {
         self.add_file(source_path, Some(dest_path.as_str()))
     }
 
-    /// 阶段 1: 准备一个文件添加事务 (线程安全)。
+    /// Stage 1: Prepares a file addition transaction (thread-safe).
     ///
-    /// 这个方法执行所有耗时的操作：读取文件、计算哈希、加密。
-    /// 它不修改 vault 状态，因此是线程安全的。
+    /// Performs potentially time-consuming operations like reading the source file,
+    /// calculating its hash, and encrypting it (if applicable) into a temporary file.
+    /// This operation does not modify the vault's state.
+    ///
+    /// # Arguments
+    /// * `source_path` - The path to the file on the local filesystem.
+    ///
+    /// # Returns
+    /// An [`AddTransaction`] containing the necessary information (hash, temp path, etc.)
+    /// to commit the addition later using `commit_add_transaction` or `commit_add_transaction_at_path`.
+    ///
+    /// # Errors
+    /// Returns `AddFileError` if the source file cannot be read or encryption fails.
     pub fn prepare_add_transaction(
         &self,
         source_path: &Path,
@@ -261,9 +316,24 @@ impl Vault {
         prepare_add_transaction(self, source_path)
     }
 
-    /// 阶段 2: 提交一个文件添加事务 (需要独占访问)。
+    /// Stage 2: Commits a prepared file addition transaction (requires exclusive access).
     ///
-    /// 这个方法执行所有快速的、需要写入权限的操作。
+    /// Performs quick operations requiring write access: checks for duplicates in the
+    /// database, renames the temporary file to its final hash-based name, and inserts
+    /// the file record into the database. Enforces file name rules.
+    ///
+    /// # Arguments
+    /// * `transaction` - The [`AddTransaction`] returned by `prepare_add_transaction`.
+    /// * `dest_name` - The desired name/path for the file inside the vault. Must adhere
+    ///   to file name rules. Relative names are placed under the root.
+    ///
+    /// # Returns
+    /// The SHA256 hash of the added file on success.
+    ///
+    /// # Errors
+    /// Returns `AddFileError` if `dest_name` violates naming rules (`InvalidFilePath`),
+    /// or if a file with the same name or content already exists. Also returns errors
+    /// on database or filesystem issues during the commit phase.
     pub fn commit_add_transaction(
         &mut self,
         transaction: AddTransaction,
@@ -273,6 +343,23 @@ impl Vault {
         touch_vault_update_time(self)?;
         Ok(result)
     }
+
+    /// [EXPERIMENTAL] Stage 2: Commits a prepared file addition transaction using a VaultPath (requires exclusive access).
+    ///
+    /// This method requires the `experimental_paths` feature to be enabled.
+    /// `dest_path` must represent a file path.
+    ///
+    /// # Arguments
+    /// * `transaction` - The [`AddTransaction`] returned by `prepare_add_transaction`.
+    /// * `dest_path` - The [`VaultPath`] where the file should be stored in the vault. Must be a file path.
+    ///
+    /// # Returns
+    /// The SHA256 hash of the added file on success.
+    ///
+    /// # Errors
+    /// Returns `AddFileError` if `dest_path` is a directory path (`InvalidFilePath`),
+    /// or if a file with the same name or content already exists. Also returns errors
+    /// on database or filesystem issues during the commit phase.
     #[cfg(feature = "experimental_paths")]
     pub fn commit_add_transaction_at_path(
         &mut self,
@@ -298,6 +385,19 @@ impl Vault {
         rename_file(self, sha256sum, new_name)?;
         touch_vault_update_time(self)
     }
+
+    /// [EXPERIMENTAL] Renames a file identified by its SHA256 hash to a new VaultPath.
+    ///
+    /// This method requires the `experimental_paths` feature to be enabled.
+    /// `new_path` must represent a file path.
+    ///
+    /// # Arguments
+    /// * `sha256sum` - The hash of the file to rename.
+    /// * `new_path` - The new [`VaultPath`] for the file. Must be a file path.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` if the file is not found, if `new_path` is a directory
+    /// path (`InvalidNewFilePath`), or if the new name is already taken.
     #[cfg(feature = "experimental_paths")]
     pub fn rename_file_to_path(
         &mut self,
