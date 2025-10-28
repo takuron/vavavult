@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match vault.find_by_hash(&file_hash)? {
         QueryResult::Found(entry) => {
             println!("已通过哈希值找到文件!");
-            println!("  - 在保险库中的名称: {}", entry.name);
+            println!("  - 在保险库中的名称: {}", entry.path);
             println!("  - SHA256: {}", entry.sha256sum);
         }
         QueryResult::NotFound => {
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_name_in_vault = "/docs/greeting/hello.txt";
     match vault.find_by_name(file_name_in_vault)? {
         QueryResult::Found(entry) => {
-            println!("已通过名称 '{}' 找到文件!", entry.name);
+            println!("已通过名称 '{}' 找到文件!", entry.path);
         }
         QueryResult::NotFound => {
             panic!("文件应该能通过名称被找到!");

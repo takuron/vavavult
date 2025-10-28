@@ -1,3 +1,4 @@
+use crate::common::constants::DATA_SUBDIR;
 use crate::vault::{Vault, query, QueryResult, UpdateError};
 use rusqlite::params;
 use std::fs as std_fs;
@@ -20,38 +21,35 @@ pub enum RemoveError {
     TimestampUpdateError(#[from] UpdateError),
 }
 
-/// 从保险库中删除一个文件。
+/// [V2 修改] 从保险库中删除一个文件。
 ///
 /// 此操作会：
-/// 1. 从数据库中删除文件的记录（以及通过级联删除关联的标签和元数据）。
-/// 2. 从文件系统中删除物理文件。
+/// 1. 从数据库中删除文件的记录 (级联删除标签和元数据)。
+/// 2. 从文件系统 (`data/` 子目录) 中删除物理文件。
 ///
 /// # Arguments
 /// * `vault` - 一个 Vault 实例。
-/// * `sha256sum` - 要删除的文件的哈希值。
+/// * `sha256sum` - 要删除的文件的加密后内容的 Base64 哈希。
 pub fn remove_file(vault: &Vault, sha256sum: &str) -> Result<(), RemoveError> {
-    // 1. 确认文件存在于数据库中
+    // 1. 确认文件存在于数据库中 (query::check_by_hash 已更新为 V2)
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(RemoveError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 2. 从文件系统中删除物理文件
-    let file_path = vault.root_path.join(sha256sum);
-    // 如果文件存在，则删除它。如果不存在，我们也可以继续，因为目标是确保它消失。
+    // 2. [V2 修改] 从文件系统中删除物理文件 (在 data/ 子目录下)
+    let file_path = vault.root_path.join(DATA_SUBDIR).join(sha256sum);
     if file_path.exists() {
         std_fs::remove_file(file_path)?;
-    }
+    } // 如果文件不存在，也继续，目标是确保数据库记录被删除
 
-    // 3. 从数据库中删除记录
-    // 由于外键设置了 ON DELETE CASCADE，相关的 tags 和 metadata 记录会自动被删除。
+    // 3. 从数据库中删除记录 (SQL 语句不变，外键级联删除)
     let rows_affected = vault.database_connection.execute(
         "DELETE FROM files WHERE sha256sum = ?1",
         params![sha256sum],
     )?;
 
     if rows_affected == 0 {
-        // 这理论上不应该发生，因为我们一开始就检查了文件是否存在。
-        // 但作为一个额外的安全检查，我们还是处理这种情况。
+        // 理论上不应该发生，因为我们先检查了文件是否存在
         return Err(RemoveError::FileNotFound(sha256sum.to_string()));
     }
 

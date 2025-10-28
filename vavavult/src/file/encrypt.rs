@@ -1,54 +1,9 @@
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
-use rusqlite::{
-    types::{FromSql, FromSqlResult, ToSql, ToSqlOutput, ValueRef},
-    Error as RusqliteError, Result as RusqliteResult,
-};
 use crate::file::stream_cipher;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use openssl::rand;
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EncryptionCheck {
-    pub raw: String,
-    pub encrypted: String,
-}
-
-impl EncryptionCheck {
-    /// 创建一个新的、基于随机字符串的 EncryptionCheck 结构体。
-    pub fn new(password: &str) -> Result<Self, EncryptError> {
-        // 1. 生成 16 个随机字节作为原始数据
-        let mut raw_bytes = [0u8; 16];
-        rand::rand_bytes(&mut raw_bytes)?;
-
-        // 2. 将随机字节编码为 Base64 字符串，作为原始明文
-        let raw_base64_string = BASE64_STANDARD.encode(raw_bytes);
-
-        // 3. 使用 encrypt_string 函数加密这个 Base64 字符串
-        let encrypted_base64 = encrypt_string(&raw_base64_string, password)?;
-
-        Ok(EncryptionCheck {
-            raw: raw_base64_string,
-            encrypted: encrypted_base64,
-        })
-    }
-
-    /// 使用此 EncryptionCheck 实例来验证密码是否正确。
-    pub fn verify(&self, password: &str) -> bool {
-        match decrypt_string(&self.encrypted, password) {
-            Ok(decrypted_raw) => {
-                // 如果解密成功，比较解密出的明文是否与原始明文一致
-                decrypted_raw == self.raw
-            },
-            Err(_) => {
-                // 如果解密失败，则密码无效
-                false
-            }
-        }
-    }
-}
+use crate::utils::random::generate_random_string;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EncryptError {
@@ -59,113 +14,73 @@ pub enum EncryptError {
     #[error("String is not valid UTF-8: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
     #[error("Base64 decoding error: {0}")]
-    Base64(#[from] base64::DecodeError), // 从 Hex 改为 Base64
+    Base64(#[from] base64::DecodeError),
     #[error("OpenSSL rand error: {0}")]
     Rand(#[from] openssl::error::ErrorStack),
 }
 
-/// 实现 ToSql，将 EncryptionCheck 序列化为 JSON 字符串以便存入 TEXT 列
-impl ToSql for EncryptionCheck {
-    fn to_sql(&self) -> RusqliteResult<ToSqlOutput<'_>> {
-        // 1. 使用 serde_json 将结构体序列化为 String
-        let json_string = serde_json::to_string(self).map_err(|e| {
-            // 2. 如果序列化失败，转换为 rusqlite 的错误类型
-            RusqliteError::ToSqlConversionFailure(Box::new(e))
-        })?;
+/// V2: 创建一个新的、带随机明文的加密检查字符串 "raw:encrypted_base64"
+///
+/// # Arguments
+/// * `password` - 用于加密的密码
+///
+/// # Returns
+/// 成功时返回 "raw:encrypted_base64" 格式的字符串
+pub fn create_v2_encrypt_check(password: &str) -> Result<String, EncryptError> {
+    // [修改] 1. 生成一个 16 位的随机字母数字字符串作为 "raw"
+    // (使用我们已有的 random 工具)
+    let raw_check_string = generate_random_string(16);
 
-        // 3. 将 String 包装在 ToSqlOutput 中
-        Ok(ToSqlOutput::from(json_string))
+    // [修改] 2. 加密这个随机字符串
+    let encrypted_base64 = encrypt_string(&raw_check_string, password)?;
+
+    // 3. 按格式返回
+    Ok(format!("{}:{}", raw_check_string, encrypted_base64))
+}
+
+/// V2: 验证加密检查字符串 (此函数无需更改)
+///
+/// # Arguments
+/// * `check_string` - "raw:encrypted_base64" 格式的字符串
+/// * `password` - 用于解密的密码
+///
+/// # Returns
+/// `true` 如果密码正确且解密后的字符串与 raw 匹配，否则 `false`
+pub fn verify_v2_encrypt_check(check_string: &str, password: &str) -> bool {
+    let parts: Vec<&str> = check_string.splitn(2, ':').collect();
+    if parts.len() != 2 {
+        return false; // 格式无效
+    }
+    let raw = parts[0];
+    let encrypted_base64 = parts[1];
+
+    match decrypt_string(encrypted_base64, password) {
+        Ok(decrypted_raw) => decrypted_raw == raw, // 比较解密后的是否等于原始的
+        Err(_) => false, // 解密失败
     }
 }
 
-/// 实现 FromSql，将 TEXT 列中的 JSON 字符串反序列化为 EncryptionCheck
-impl FromSql for EncryptionCheck {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        // 1. 从数据库获取 TEXT 值
-        let json_str = value.as_str()?;
-
-        // 2. 使用 serde_json 将字符串反序列化为结构体
-        serde_json::from_str(json_str).map_err(|e| {
-            // 3. 如果反序列化失败，转换为 rusqlite 的错误类型
-            rusqlite::types::FromSqlError::Other(Box::new(e))
-        })
-    }
-}
-
-
-#[derive(Debug, PartialEq, Eq, Clone,Serialize, Deserialize)]
-#[serde(try_from = "u32", into = "u32")]
-pub enum EncryptionType {
-    None,
-    Aes256Gcm,
-}
-
-// --- Serde 驱动的枚举与整数转换 ---
-// 现在我们使用 serde 的属性宏来定义转换，这样 JSON 和 数据库都可以复用
-impl From<EncryptionType> for u32 {
-    fn from(item: EncryptionType) -> Self {
-        match item {
-            EncryptionType::None => 0,
-            EncryptionType::Aes256Gcm => 1,
-        }
-    }
-}
-
-impl TryFrom<u32> for EncryptionType {
-    type Error = String; // serde::de::Error::custom 需要一个Displayable的Error
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(EncryptionType::None),
-            1 => Ok(EncryptionType::Aes256Gcm),
-            other => Err(format!("无效的加密类型值: {}", other)),
-        }
-    }
-}
-
-
-/// 实现 ToSql trait，使得 EncryptionType 可以被写入数据库
-impl ToSql for EncryptionType {
-    fn to_sql(&self) -> RusqliteResult<ToSqlOutput<'_>> {
-        // 复用已有的转换逻辑，将枚举转换为 u32
-        // 注意这里我们克隆了self (`*self` 对于 `Copy` 类型，`self.clone()` 对于 `Clone` 类型)
-        // 来调用 into()，或者直接调用 u32::from(self.clone())
-        let val: u32 = self.clone().into();
-        // 将 u32 转换为 rusqlite 能理解的 ToSqlOutput
-        Ok(ToSqlOutput::from(val as i64)) // 推荐转为 i64，因为 SQLite 内部整数是 i64
-    }
-}
-
-/// 实现 FromSql trait，使得可以从数据库读取值并转换为 EncryptionType
-impl FromSql for EncryptionType {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        // 1. 先将数据库的值转换为 i64 (或者 u32)
-        let val_u32 = value.as_i64()? as u32;
-
-        // 2. 复用已有的 try_from 逻辑
-        EncryptionType::try_from(val_u32).map_err(|e| {
-            // 3. 如果转换失败，将其转换为 rusqlite 能理解的错误类型
-            rusqlite::types::FromSqlError::Other(Box::from(e))
-        })
-    }
-}
 
 // --- 文件加解密 (保持不变) ---
 
 /// 加密一个文件。
+/// [注意] V2 中，此函数需要更新以返回 (encrypted_sha256, original_sha256)
+/// 我们将在稍后修改 'stream_cipher.rs' 时更新它。
 pub fn encrypt_file(
     source_path: &Path,
     dest_path: &Path,
     password: &str,
-) -> Result<String, EncryptError> {
+) -> Result<(String, String), EncryptError> { // [修改] 返回值
     let mut source_file = File::open(source_path)?;
     let mut dest_file = File::create(dest_path)?;
-    let (sha256sum, _check) = stream_cipher::stream_encrypt_and_hash(
+
+    // [修改] stream_encrypt_and_hash 现在返回两个哈希值
+    let (encrypted_sha256, original_sha256) = stream_cipher::stream_encrypt_and_hash(
         &mut source_file,
         &mut dest_file,
         password,
     )?;
-    Ok(sha256sum)
+    Ok((encrypted_sha256, original_sha256))
 }
 
 /// 解密一个文件。
@@ -180,14 +95,14 @@ pub fn decrypt_file(
     Ok(())
 }
 
-// --- 更新：字符串加解密 API ---
+// --- 字符串加解密 API (保持不变) ---
 
 /// 加密一个字符串，并返回 Base64 编码的密文。
 pub fn encrypt_string(plaintext: &str, password: &str) -> Result<String, EncryptError> {
     let source = Cursor::new(plaintext.as_bytes());
     let mut destination_bytes = Vec::new();
 
-    // 底层流处理函数返回加密后的原始字节
+    // [修改] 底层函数现在返回两个哈希值，我们忽略它们
     stream_cipher::stream_encrypt_and_hash(source, &mut destination_bytes, password)?;
 
     // 将原始字节编码为 Base64 字符串
@@ -215,26 +130,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_encryption_check_logic() {
+    fn test_v2_encrypt_check_logic() {
         let password = "my_strong_password_123";
 
-        // 1. 创建一个新的 EncryptionCheck 实例
-        let check = EncryptionCheck::new(password).expect("Failed to create EncryptionCheck");
+        // 1. 创建一个新的 check 字符串
+        let check_string = create_v2_encrypt_check(password)
+            .expect("Failed to create V2 check string");
 
-        // 打印出来看看它的结构
-        println!("Generated EncryptionCheck:");
-        println!("  Raw (Base64): {}", check.raw);
-        println!("  Encrypted (Base64): {}", check.encrypted);
+        println!("Generated V2 Check String: {}", check_string);
 
-        // 2. 使用正确的密码进行验证，应该成功
-        assert!(check.verify(password), "Verification should succeed with the correct password");
+        // 2. 使用正确密码验证
+        assert!(verify_v2_encrypt_check(&check_string, password), "Verification should succeed with correct password");
 
-        // 3. 使用错误的密码进行验证，应该失败
-        assert!(!check.verify("wrong_password"), "Verification should fail with an incorrect password");
+        // 3. 使用错误密码验证
+        assert!(!verify_v2_encrypt_check(&check_string, "wrong_password"), "Verification should fail with incorrect password");
 
-        // 4. 验证原始数据不是空的
-        assert!(!check.raw.is_empty(), "Raw string should not be empty");
-        assert!(!check.encrypted.is_empty(), "Encrypted string should not be empty");
+        // 4. 使用格式错误的字符串验证
+        assert!(!verify_v2_encrypt_check("invalid_format", password), "Verification should fail with invalid format");
     }
 }
-

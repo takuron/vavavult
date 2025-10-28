@@ -15,14 +15,14 @@ pub fn print_file_entries(files: &[FileEntry]) {
     // 彻底移除表头
     for entry in files {
         let short_hash = &entry.sha256sum[..12];
-        println!("{:<14} {}", short_hash, entry.name);
+        println!("{:<14} {}", short_hash, entry.path);
     }
 }
 
 /// 打印单个文件详细信息的辅助函数
 pub fn print_file_details(entry: &FileEntry) {
     println!("----------------------------------------");
-    println!("  Name:    {}", entry.name);
+    println!("  Name:    {}", entry.path);
     println!("  SHA256:  {}", entry.sha256sum);
 
     // 打印标签，如果存在
@@ -89,7 +89,7 @@ pub fn find_file_entry(vault: &Vault, name: Option<String>, sha: Option<String>)
 /// 确定最终的输出路径
 pub fn determine_output_path(entry: &FileEntry, dest_dir: PathBuf, output_name: Option<String>) -> PathBuf {
     let final_filename = output_name.unwrap_or_else(|| {
-        Path::new(&entry.name)
+        Path::new(&entry.path)
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("unnamed_file")

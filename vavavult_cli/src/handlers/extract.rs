@@ -29,14 +29,14 @@ fn handle_extract_single_file(vault: Arc<Mutex<Vault>>, vault_name: Option<Strin
     if delete {
         if !confirm_action(&format!(
             "This will extract '{}' to {:?} and then PERMANENTLY DELETE it. Are you sure?",
-            file_entry.name, final_path
+            file_entry.path, final_path
         ))? {
             println!("Operation cancelled.");
             return Ok(());
         }
     }
 
-    println!("Extracting '{}' to {:?}...", file_entry.name, final_path);
+    println!("Extracting '{}' to {:?}...", file_entry.path, final_path);
     if let Some(parent) = final_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -44,7 +44,7 @@ fn handle_extract_single_file(vault: Arc<Mutex<Vault>>, vault_name: Option<Strin
     println!("File extracted successfully.");
 
     if delete {
-        println!("Deleting '{}' from vault...", file_entry.name);
+        println!("Deleting '{}' from vault...", file_entry.path);
         vault_guard.remove_file(&file_entry.sha256sum)?;
         println!("File successfully deleted from vault.");
     }
@@ -75,10 +75,10 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
 
     // --- 修改: 在打印前统一路径分隔符 ---
     for entry in &files_to_extract {
-        let relative_path = Path::new(&entry.name).strip_prefix(dir_path).unwrap_or(Path::new(&entry.name));
+        let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
         let final_path = destination.join(relative_path);
         let final_path_display = final_path.to_string_lossy().replace('\\', "/");
-        println!("  - {} -> \"{}\"", entry.name, final_path_display);
+        println!("  - {} -> \"{}\"", entry.path, final_path_display);
     }
 
     if delete {
@@ -98,12 +98,12 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
     let mut success_count = 0;
     let mut fail_count = 0;
     for entry in &files_to_extract {
-        let relative_path = Path::new(&entry.name).strip_prefix(dir_path).unwrap_or(Path::new(&entry.name));
+        let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
         let final_path = destination.join(relative_path);
 
         if let Some(parent) = final_path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
-                pb.println(format!("FAILED to create local directory for {}: {}", entry.name, e));
+                pb.println(format!("FAILED to create local directory for {}: {}", entry.path, e));
                 fail_count += 1;
                 pb.inc(1);
                 continue;
@@ -116,7 +116,7 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
                 success_count += 1;
             }
             Err(e) => {
-                pb.println(format!("FAILED to extract {}: {}", entry.name, e));
+                pb.println(format!("FAILED to extract {}: {}", entry.path, e));
                 fail_count += 1;
             }
         }
@@ -135,8 +135,8 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
         for entry in files_to_extract.iter().filter(|_| fail_count == 0) { // Simple filter for now
             let mut vault_guard = vault.lock().unwrap();
             match vault_guard.remove_file(&entry.sha256sum) {
-                Ok(_) => println!("Deleted {}.", entry.name),
-                Err(e) => eprintln!("Failed to delete {}: {}", entry.name, e),
+                Ok(_) => println!("Deleted {}.", entry.path),
+                Err(e) => eprintln!("Failed to delete {}: {}", entry.path, e),
             }
         }
     }
@@ -167,10 +167,10 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
 
     // --- 修改: 在打印前统一路径分隔符 ---
     for entry in &files_to_extract {
-        let relative_path = Path::new(&entry.name).strip_prefix(dir_path).unwrap_or(Path::new(&entry.name));
+        let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
         let final_path = destination.join(relative_path);
         let final_path_display = final_path.to_string_lossy().replace('\\', "/");
-        println!("  - {} -> \"{}\"", entry.name, final_path_display);
+        println!("  - {} -> \"{}\"", entry.path, final_path_display);
     }
 
     if delete {
@@ -193,12 +193,12 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
             let vault_clone = Arc::clone(&vault);
             let pb_clone = pb.clone();
 
-            let relative_path = Path::new(&entry.name).strip_prefix(dir_path).unwrap_or(Path::new(&entry.name));
+            let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
             let final_path = destination.join(relative_path);
 
             if let Some(parent) = final_path.parent() {
                 if let Err(e) = fs::create_dir_all(parent) {
-                    pb_clone.println(format!("FAILED to create local directory for {}: {}", entry.name, e));
+                    pb_clone.println(format!("FAILED to create local directory for {}: {}", entry.path, e));
                     pb_clone.inc(1);
                     return (entry, Err(Box::new(e) as Box<dyn Error + Send + Sync>));
                 }
@@ -210,7 +210,7 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
             };
 
             if let Err(e) = &result {
-                pb_clone.println(format!("FAILED to extract {}: {}", entry.name, e));
+                pb_clone.println(format!("FAILED to extract {}: {}", entry.path, e));
             }
 
             pb_clone.inc(1);
@@ -247,7 +247,7 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
         for entry in successfully_extracted {
             let mut vault_guard = vault.lock().unwrap();
             if let Err(e) = vault_guard.remove_file(&entry.sha256sum) {
-                pb_delete.println(format!("FAILED to delete {}: {}", entry.name, e));
+                pb_delete.println(format!("FAILED to delete {}: {}", entry.path, e));
             }
             pb_delete.inc(1);
         }

@@ -11,7 +11,7 @@ pub fn handle_file_rename(
 ) -> Result<(), Box<dyn Error>> {
     // 1. 查找要重命名的文件
     let file_entry = find_file_entry(vault, vault_name, sha256)?;
-    let old_name = file_entry.name.clone(); // 保存旧名称用于输出
+    let old_name = file_entry.path.clone(); // 保存旧名称用于输出
 
     println!("Renaming '{}' to '{}'...", old_name, new_name);
 

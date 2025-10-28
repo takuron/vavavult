@@ -30,6 +30,7 @@ pub use query::ListResult;
 pub use query::{QueryError, QueryResult};
 pub use remove::RemoveError;
 pub use update::UpdateError;
+use crate::file::VaultPath;
 
 /// Represents a vault loaded into memory.
 ///
@@ -262,7 +263,30 @@ impl Vault {
         source_path: &Path,
         dest_name: Option<&str>,
     ) -> Result<String, AddFileError> {
-        let result = add_file(self, source_path, dest_name)?;
+        // --- 桥接逻辑 ---
+        // 1. 确定最终的路径字符串 (V1 行为)
+        let final_path_str = dest_name.map(|s| s.to_string()).unwrap_or_else(|| {
+            source_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default() // V1 add_file 内部有空检查，这里也需要
+                .to_string()
+        });
+
+        // V1 add_file 在这里会检查 raw_name 是否为空，我们也加上
+        if final_path_str.is_empty() {
+            // V1 返回 InvalidFileName，V2 我们映射到 InvalidFilePath
+            return Err(AddFileError::InvalidFilePath("".to_string()));
+        }
+
+        // 2. 将字符串转换为 VaultPath
+        let dest_vault_path = VaultPath::from(final_path_str.as_str());
+
+        // 3. 调用 V2 内部的 add_file (它现在接受 &VaultPath)
+        // 注意：add::add_file 是我们在 add.rs 中定义的便捷函数
+        let result = add_file(self, source_path, &dest_vault_path)?;
+        // --- 桥接结束 ---
+
         touch_vault_update_time(self)?;
         Ok(result)
     }
@@ -339,7 +363,8 @@ impl Vault {
         transaction: AddTransaction,
         dest_name: &str,
     ) -> Result<String, AddFileError> {
-        let result = commit_add_transaction_local(self, transaction, dest_name)?;
+        let dest_vault_path = VaultPath::from(dest_name);
+        let result = commit_add_transaction_local(self, transaction, &dest_vault_path)?;
         touch_vault_update_time(self)?;
         Ok(result)
     }

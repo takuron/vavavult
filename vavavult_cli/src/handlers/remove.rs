@@ -7,13 +7,13 @@ pub fn handle_remove(vault: &mut Vault, vault_name: Option<String>, sha256: Opti
 
     if !confirm_action(&format!(
         "Are you sure you want to PERMANENTLY DELETE '{}'?",
-        file_entry.name
+        file_entry.path
     ))? {
         println!("Operation cancelled.");
         return Ok(());
     }
 
-    println!("Deleting '{}' from vault...", file_entry.name);
+    println!("Deleting '{}' from vault...", file_entry.path);
     vault.remove_file(&file_entry.sha256sum)?;
     println!("File successfully deleted.");
     Ok(())

@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match vault.find_by_hash(&file_hash)? {
         QueryResult::Found(entry) => {
             println!("File found by hash!");
-            println!("  - Name in vault: {}", entry.name);
+            println!("  - Name in vault: {}", entry.path);
             println!("  - SHA256: {}", entry.sha256sum);
         }
         QueryResult::NotFound => {
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_name_in_vault = "/docs/greeting/hello.txt";
     match vault.find_by_name(file_name_in_vault)? {
         QueryResult::Found(entry) => {
-            println!("File found by name '{}'!", entry.name);
+            println!("File found by name '{}'!", entry.path);
         }
         QueryResult::NotFound => {
             panic!("File should have been found by name!");

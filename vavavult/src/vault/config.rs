@@ -1,80 +1,65 @@
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use crate::common::metadata::MetadataEntry;
-use crate::file::encrypt::{EncryptionCheck, EncryptionType};
 
-/// 代表 `master.json` 配置文件的顶层结构。
+/// 代表 `master.json` 配置文件的顶层结构 (V2)。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultConfig {
+    /// 保险库的名称
     pub name: String,
+    /// 保险库版本号，对于V2将固定为 2
     pub version: u32,
-    pub encrypt_type: EncryptionType,
-    pub encrypt_check: EncryptionCheck,
+    /// 数据库是否加密。
+    /// true 表示 master.db 使用 SQLCipher 加密。
+    pub encrypted: bool,
+    /// 用于验证保险库主密码的加密检查数据的字符串，格式为 "raw:encrypt(base64)"
+    pub encrypt_check: String,
+    /// 数据库文件的路径 (例如 "master.db")
     pub database: PathBuf,
-    pub metadata: Vec<MetadataEntry>,
 }
 
 #[cfg(test)]
-
 mod tests {
     use std::path::PathBuf;
-    use crate::common::metadata::MetadataEntry;
-    use crate::file::encrypt::{EncryptionCheck, EncryptionType};
     use crate::vault::config::VaultConfig;
 
     #[test]
-    fn test_deserialize_vault_config(){
-        let json1 = r#"
+    fn test_deserialize_v2_vault_config(){
+        let json_v2 = r#"
         {
-            "name": "test_vault",
-            "version": 1,
-            "encryptType": 0,
-            "encryptCheck": {
-                "raw": "",
-                "encrypted": ""
-            },
-            "database":"master.db",
-            "metadata":[
-                {
-                    "key":"author",
-                    "value":"takuron"
-                }
-            ]
+            "name": "v2_vault",
+            "version": 2,
+            "encrypted": true,
+            "encryptCheck": "v2_check:SGVsbG8=",
+            "database": "master.db"
         }
         "#;
-        let config: VaultConfig = serde_json::from_str(json1).unwrap();
+        let config: VaultConfig = serde_json::from_str(json_v2).unwrap();
 
-        assert_eq!(config.name, "test_vault");
-        assert_eq!(config.version, 1);
-        assert_eq!(config.encrypt_type, EncryptionType::None);
-        assert_eq!(config.encrypt_check.raw, "");
-        assert_eq!(config.metadata[0].value, "takuron");
+        assert_eq!(config.name, "v2_vault");
+        assert_eq!(config.version, 2);
+        assert_eq!(config.encrypted, true);
+        assert_eq!(config.encrypt_check, "v2_check:SGVsbG8=");
     }
+
     #[test]
-    fn test_serialize_vault_config() {
-        let config1 = VaultConfig {
-            name: "my_new_vault".to_string(),
-            version: 1,
-            encrypt_type: EncryptionType::None,
-            encrypt_check: EncryptionCheck {
-                raw: "".to_string(), // 对于不加密，可以为空字符串
-                encrypted: "".to_string(),
-            },
+    fn test_serialize_v2_vault_config() {
+        let config_v2 = VaultConfig {
+            name: "my_v2_vault".to_string(),
+            version: 2,
+            encrypted: false,
+            encrypt_check: "".to_string(),
             database: PathBuf::from("master.db"),
-            metadata: vec![
-                MetadataEntry {
-                    key: "author".to_string(),
-                    value: "takuron".to_string(),
-                }
-            ],
         };
 
-        let json_string = serde_json::to_string(&config1).unwrap();
+        let json_string = serde_json::to_string(&config_v2).unwrap();
         let json_value: serde_json::Value = serde_json::from_str(&json_string).unwrap();
-        assert_eq!(json_value["encryptType"].as_u64(), Some(0));
-        assert_eq!(json_value["name"].as_str(), Some("my_new_vault"));
-        assert_eq!(json_value["encryptCheck"]["raw"].as_str(), Some(""));
-    }
 
+        assert_eq!(json_value["version"].as_u64(), Some(2));
+        assert_eq!(json_value["name"].as_str(), Some("my_v2_vault"));
+        assert_eq!(json_value["encrypted"].as_bool(), Some(false));
+        assert_eq!(json_value["encryptCheck"].as_str(), Some(""));
+        assert!(json_value["metadata"].is_null()); // 确认 metadata 字段已不存在
+    }
 }

@@ -9,7 +9,7 @@ pub fn handle_open(vault: &Vault, vault_name: Option<String>, sha256: Option<Str
 
     // 1. 创建一个临时文件路径
     let temp_dir = env::temp_dir();
-    let file_name = Path::new(&file_entry.name).file_name().unwrap_or_default();
+    let file_name = Path::new(&file_entry.path).file_name().unwrap_or_default();
     let temp_path = temp_dir.join(file_name);
 
     // 2. 提取文件到临时路径
@@ -19,7 +19,7 @@ pub fn handle_open(vault: &Vault, vault_name: Option<String>, sha256: Option<Str
     // 3. 使用 opener 打开文件
     match opener::open(&temp_path) {
         Ok(_) => {
-            println!("Successfully opened '{}'.", file_entry.name);
+            println!("Successfully opened '{}'.", file_entry.path);
             println!("NOTE: You are viewing a temporary copy. Any changes will NOT be saved to the vault.");
             Ok(())
         }

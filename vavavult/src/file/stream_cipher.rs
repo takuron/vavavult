@@ -4,17 +4,17 @@ use openssl::symm::{Cipher, Crypter, Mode};
 use openssl::rand;
 use openssl::pkcs5::pbkdf2_hmac;
 use openssl::hash::MessageDigest;
-use crate::file::encrypt::EncryptionCheck;
+use crate::utils::hash::encode_hash_to_base64;
 
-// --- 常量定义 ---
+// --- 常量定义 (保持不变) ---
 const SALT_LEN: usize = 16;
-const IV_LEN: usize = 12; // AES-GCM 推荐 IV 长度
-const KEY_LEN: usize = 32; // 32 字节 = 256 位
-const TAG_LEN: usize = 16; // GCM 的认证标签长度
-const PBKDF2_ROUNDS: usize = 10000; // 密钥派生迭代次数
-const BUFFER_LEN: usize = 8192; // 8KB 缓冲区
+const IV_LEN: usize = 12;
+const KEY_LEN: usize = 32;
+const TAG_LEN: usize = 16;
+const PBKDF2_ROUNDS: usize = 10000;
+const BUFFER_LEN: usize = 8192;
 
-/// 定义我们的自定义错误类型，方便统一处理
+/// 定义我们的自定义错误类型 (保持不变)
 #[derive(Debug, thiserror::Error)]
 pub enum StreamCipherError {
     #[error("I/O error: {0}")]
@@ -23,30 +23,34 @@ pub enum StreamCipherError {
     OpenSsl(#[from] openssl::error::ErrorStack),
 }
 
-/// 流式处理文件加密和计算 SHA256 哈希值。
+/// 流式处理文件加密并计算 *两个* SHA256 哈希值。
 ///
-/// 一次性遍历源文件，同时完成两项任务：
-/// 1.  对加密后的完整文件流（包括 salt, iv, 密文, tag）计算 SHA256 哈希值。
-/// 2.  使用 AES-256-GCM 对文件内容进行加密。
+/// 一次性遍历源文件，同时完成三项任务：
+/// 1.  (原始哈希) 对 *原始* (未加密) 内容计算 SHA256 哈希值。
+/// 2.  (加密哈希) 对 *加密后* 的完整文件流（包括 salt, iv, 密文, tag）计算 SHA256 哈希值。
+/// 3.  使用 AES-256-GCM 对文件内容进行加密。
 ///
 /// # Arguments
-/// * `mut source` - 一个可读的源，比如一个文件 `std::fs::File`。
-/// * `mut destination` - 一个可写的目的地，用于保存加密后的数据。
+/// * `mut source` - 一个可读的源。
+/// * `mut destination` - 一个可写的目的地。
 /// * `password` - 用于加密的用户密码。
 ///
 /// # Returns
-/// 成功时返回一个元组 `(String, EncryptionCheck)`:
-/// * `String`: 加密文件的 SHA256 哈希值的十六进制字符串。
-/// * `EncryptionCheck`: 用于未来校验密码正确性的结构体。
+/// 成功时返回一个元组 `(String, String)`:
+/// * `String`: (encrypted_sha256) 加密文件流的哈希值 (Base64 编码, 43字节)。
+/// * `String`: (original_sha256) 原始文件内容的哈希值 (Base64 编码, 43字节)。
 ///
 /// 失败时返回 `StreamCipherError`。
 pub fn stream_encrypt_and_hash(
     mut source: impl Read,
     mut destination: impl Write,
     password: &str,
-) -> Result<(String, EncryptionCheck), StreamCipherError> {
+) -> Result<(String, String), StreamCipherError> { // [修改] 返回值
     // --- 1. 初始化 ---
-    let mut hasher = Sha256::new();
+    // [修改] 我们需要两个哈希器
+    let mut encrypted_hasher = Sha256::new(); // 用于加密后的流
+    let mut original_hasher = Sha256::new();  // 用于原始数据
+
     let mut buffer = [0u8; BUFFER_LEN];
 
     // --- 2. 密钥派生 (KDF) ---
@@ -70,11 +74,11 @@ pub fn stream_encrypt_and_hash(
     // --- 4. 写入头部信息，并同步更新哈希 ---
     // 写入 salt
     destination.write_all(&salt)?;
-    hasher.update(&salt);
+    encrypted_hasher.update(&salt); 
 
     // 写入 iv
     destination.write_all(&iv)?;
-    hasher.update(&iv);
+    encrypted_hasher.update(&iv); 
 
     // --- 5. 流式处理循环 ---
     loop {
@@ -84,6 +88,9 @@ pub fn stream_encrypt_and_hash(
         }
         let original_chunk = &buffer[..bytes_read];
 
+        // 更新原始哈希
+        original_hasher.update(original_chunk);
+
         // 加密数据块
         let mut encrypted_chunk_buf = vec![0; bytes_read + cipher.block_size()];
         let count = encrypter.update(original_chunk, &mut encrypted_chunk_buf)?;
@@ -91,7 +98,7 @@ pub fn stream_encrypt_and_hash(
 
         // 写入加密后的数据
         destination.write_all(encrypted_chunk)?;
-        hasher.update(encrypted_chunk);
+        encrypted_hasher.update(encrypted_chunk); 
     }
 
     // --- 6. 完成加密 ---
@@ -100,34 +107,34 @@ pub fn stream_encrypt_and_hash(
     let count = encrypter.finalize(&mut final_chunk_buf)?;
     let final_chunk = &final_chunk_buf[..count];
     destination.write_all(final_chunk)?;
-    hasher.update(final_chunk);
+    encrypted_hasher.update(final_chunk); 
 
     // b. 获取并写入 GCM 的认证标签
     let mut tag = [0u8; TAG_LEN];
     encrypter.get_tag(&mut tag)?;
     destination.write_all(&tag)?;
-    hasher.update(&tag);
+    encrypted_hasher.update(&tag); 
 
     // --- 7. 完成 SHA256 计算 ---
-    // 此刻，hasher 已经处理了与写入文件完全一致的字节流
-    let sha256sum_bytes = hasher.finalize();
-    let sha256sum = hex::encode(sha256sum_bytes);
+    let encrypted_sha256_bytes = encrypted_hasher.finalize();
+    let original_sha256_bytes = original_hasher.finalize();
 
-    // --- 8. 生成加密校验 ---
-    let check = EncryptionCheck {
-        raw: "vavavult_check".to_string(),
-        encrypted: "".to_string(),
-    };
+    // 使用新的 Base64 编码器
+    let encrypted_sha256_base64 = encode_hash_to_base64(&encrypted_sha256_bytes);
+    let original_sha256_base64 = encode_hash_to_base64(&original_sha256_bytes);
 
     // --- 9. 返回结果 ---
-    Ok((sha256sum, check))
+    Ok((encrypted_sha256_base64, original_sha256_base64)) 
 }
 
+
+/// 解密 (V2 中此函数保持不变)
 pub fn stream_decrypt(
     mut source: impl Read + Seek,
     mut destination: impl Write,
     password: &str,
 ) -> Result<(), StreamCipherError> {
+    // ... (此函数的实现与 V1 相同，无需更改) ...
     // --- 步骤 1-3 和之前一样：读取头部/尾部，派生密钥 ---
     let mut salt = [0u8; SALT_LEN];
     source.read_exact(&mut salt)?;
@@ -155,7 +162,7 @@ pub fn stream_decrypt(
     decrypter.set_tag(&tag)?;
 
     // --- 5. 安全的流式处理：先解密到临时缓冲区 ---
-    let mut plaintext_buffer: Vec<u8> = Vec::new(); // <--- 关键改动：创建临时内部缓冲区
+    let mut plaintext_buffer: Vec<u8> = Vec::new();
     let mut encrypted_stream = source.take(encrypted_content_len);
     let mut buffer = [0u8; BUFFER_LEN];
 
@@ -169,20 +176,16 @@ pub fn stream_decrypt(
         let mut decrypted_chunk = vec![0; bytes_read + cipher.block_size()];
         let count = decrypter.update(encrypted_chunk, &mut decrypted_chunk)?;
 
-        // 将解密块写入临时缓冲区，而不是最终目的地
         plaintext_buffer.write_all(&decrypted_chunk[..count])?;
     }
 
     // --- 6. 完成解密与验证 ---
     let mut final_chunk = vec![0; cipher.block_size()];
-    // 调用 finalize() 进行最终认证
-    let count = decrypter.finalize(&mut final_chunk)?; // <--- 如果失败，函数会在这里返回 Err
+    let count = decrypter.finalize(&mut final_chunk)?;
 
-    // finalize 也可能产生最后一点数据，追加到临时缓冲区
     plaintext_buffer.write_all(&final_chunk[..count])?;
 
     // --- 7. 认证成功后，才写入最终目的地 ---
-    // 只有当 finalize() 成功后，代码才会执行到这里
     destination.write_all(&plaintext_buffer)?;
 
     Ok(())
@@ -193,10 +196,12 @@ pub fn stream_decrypt(
 mod tests {
     use super::*;
     use std::io::Cursor;
+    // 导入新的编码器
+    use crate::utils::hash::encode_hash_to_base64;
     use sha2::{Digest, Sha256, Sha512};
     use tempfile::NamedTempFile;
 
-    /// 一个完整的加密到解密的往返测试 (验证密文哈希)
+    /// [V2 修改] 一个完整的加密到解密的往返测试 (验证两个哈希)
     #[test]
     fn test_encryption_decryption_roundtrip_success() {
         // --- 1. 准备阶段 (Arrange) ---
@@ -208,15 +213,16 @@ mod tests {
 
         // --- 2. 执行阶段 (Act) ---
 
-        // a. 执行加密，获取函数计算出的密文哈希
-        let (hash_from_function, _check) = stream_encrypt_and_hash(
+        // a. 执行加密，获取函数计算出的两个哈希
+        // [修改]
+        let (encrypted_hash_from_func, original_hash_from_func) = stream_encrypt_and_hash(
             source_stream,
             &mut encrypted_data_vec, // 传递可变借用
             password
         ).expect("Encryption failed");
 
         // b. 准备解密
-        let mut encrypted_stream = Cursor::new(&encrypted_data_vec); // 注意：这里我们借用 vec
+        let mut encrypted_stream = Cursor::new(&encrypted_data_vec);
         let mut decrypted_data_vec: Vec<u8> = Vec::new();
 
         // c. 执行解密
@@ -228,17 +234,29 @@ mod tests {
 
         // --- 3. 断言阶段 (Assert) ---
 
-        // a. 手动计算整个加密后字节流的哈希值，作为期望值
-        let expected_hash = hex::encode(Sha256::digest(&encrypted_data_vec));
+        // a. 手动计算 *加密后* 字节流的哈希，作为期望值
+        let expected_encrypted_hash_bytes = Sha256::digest(&encrypted_data_vec);
+        let expected_encrypted_hash = encode_hash_to_base64(&expected_encrypted_hash_bytes);
 
-        // b. 验证函数返回的哈希与我们手动计算的哈希是否一致
+        // b. 手动计算 *原始* 字节流的哈希，作为期望值
+        let expected_original_hash_bytes = Sha256::digest(original_data);
+        let expected_original_hash = encode_hash_to_base64(&expected_original_hash_bytes);
+
+        // c. 验证加密哈希
         assert_eq!(
-            hash_from_function,
-            expected_hash,
-            "Returned ciphertext hash does not match actual ciphertext hash"
+            encrypted_hash_from_func,
+            expected_encrypted_hash,
+            "Returned encrypted hash does not match actual encrypted hash"
         );
 
-        // c. 验证解密后的内容是否与原始数据完全一致
+        // d. 验证原始哈希
+        assert_eq!(
+            original_hash_from_func,
+            expected_original_hash,
+            "Returned original hash does not match actual original hash"
+        );
+
+        // e. 验证解密后的内容是否与原始数据完全一致
         assert_eq!(
             decrypted_data_vec,
             original_data,
@@ -246,6 +264,7 @@ mod tests {
         );
     }
 
+    // [V2 修改] 验证错误密码
     #[test]
     fn test_decrypt_with_wrong_password_fails() {
         let original_data = b"some data to be encrypted";
@@ -257,7 +276,7 @@ mod tests {
 
         // 加密
         stream_encrypt_and_hash(source_stream, &mut encrypted_data_vec, correct_password)
-            .unwrap();
+            .unwrap(); // [修改] 忽略 V2 返回的哈希值
 
         // 准备解密
         let mut encrypted_stream = Cursor::new(encrypted_data_vec);
@@ -268,11 +287,11 @@ mod tests {
 
         // 断言解密操作返回了一个错误
         assert!(result.is_err(), "Decryption should fail with wrong password");
-        // 并且断言接收缓冲区是空的，没有写入任何不完整的数据
+        // 并且断言接收缓冲区是空的
         assert!(decrypted_data_vec.is_empty(), "Decrypted buffer should be empty on failure");
     }
 
-    /// 使用真实的临时文件进行加密解密往返测试 (验证密文哈希)
+    // [V2 修改] 使用真实文件的往返测试
     #[test]
     fn test_file_encryption_decryption_roundtrip() {
         // --- 1. 准备阶段 (Arrange) ---
@@ -285,16 +304,17 @@ mod tests {
 
         // --- 2. 执行阶段 (Act) ---
 
-        // a. 执行加密，获取函数计算出的密文哈希
+        // a. 执行加密，获取函数计算出的哈希
         let mut source_handle = source_file.reopen().expect("Failed to reopen source file");
         let mut encrypted_handle = encrypted_file.reopen().expect("Failed to reopen encrypted file for writing");
-        let (hash_from_function, _) = stream_encrypt_and_hash(
+        // [修改]
+        let (encrypted_hash_from_func, original_hash_from_func) = stream_encrypt_and_hash(
             &mut source_handle,
             &mut encrypted_handle,
             "real-file-password"
         ).expect("Encryption with files failed");
 
-        // b. 执行解密 (保持不变，用于验证解密依然可用)
+        // b. 执行解密
         let mut encrypted_read_handle = encrypted_file.reopen().expect("Failed to reopen encrypted file for reading");
         let mut decrypted_handle = decrypted_file.reopen().expect("Failed to reopen decrypted file for writing");
         stream_decrypt(
@@ -305,27 +325,35 @@ mod tests {
 
         // --- 3. 断言阶段 (Assert) ---
 
-        // a. 手动计算整个加密文件的哈希值，作为期望值
+        // a. 手动计算加密文件的哈希
         let mut encrypted_file_content = Vec::new();
         let mut encrypted_read_handle_for_hash = encrypted_file.reopen().unwrap();
         encrypted_read_handle_for_hash.read_to_end(&mut encrypted_file_content).unwrap();
-        let expected_hash = hex::encode(Sha256::digest(&encrypted_file_content));
+        let expected_encrypted_hash_bytes = Sha256::digest(&encrypted_file_content);
+        let expected_encrypted_hash = encode_hash_to_base64(&expected_encrypted_hash_bytes);
 
-        // b. 验证函数返回的哈希与我们手动计算的哈希是否一致
-        assert_eq!(hash_from_function, expected_hash, "Returned ciphertext hash does not match actual ciphertext hash");
+        // b. 手动计算原始文件的哈希
+        let expected_original_hash_bytes = Sha256::digest(original_data);
+        let expected_original_hash = encode_hash_to_base64(&expected_original_hash_bytes);
 
-        // c. 验证解密后的数据是否与原始数据一致
+        // c. 验证加密哈希
+        assert_eq!(encrypted_hash_from_func, expected_encrypted_hash, "Returned encrypted hash does not match actual encrypted hash");
+
+        // d. 验证原始哈希
+        assert_eq!(original_hash_from_func, expected_original_hash, "Returned original hash does not match actual original hash");
+
+        // e. 验证解密后的数据
         let mut decrypted_data = Vec::new();
         let mut decrypted_read_handle = decrypted_file.reopen().unwrap();
         decrypted_read_handle.read_to_end(&mut decrypted_data).unwrap();
         assert_eq!(decrypted_data, original_data, "Decrypted file content does not match original");
     }
-    /// 对大型文件进行加密 -> 解密 -> 再加密的循环，并用 SHA512 验证一致性
+
+    // [V2 修改] 大文件测试 (此测试是黄金标准，验证 SHA512 一致性)
     #[test]
     fn test_large_media_file_cycle_consistency() {
-        // --- 1. 准备阶段 (Arrange) ---
+        // ... (准备阶段不变) ...
         let password = "a-password-for-a-large-file";
-        // 创建一个约 5MB 的大型随机文件
         let mut source_file = NamedTempFile::new().unwrap();
         let mut buffer = [0u8; BUFFER_LEN];
         for _ in 0..(5 * 1024 * 1024 / BUFFER_LEN) {
@@ -333,8 +361,6 @@ mod tests {
             source_file.write_all(&buffer).unwrap();
         }
         source_file.flush().unwrap();
-
-        // 准备用于存储中间结果的临时文件
         let mut encrypted_file = NamedTempFile::new().unwrap();
         let mut decrypted_file = NamedTempFile::new().unwrap();
 
@@ -349,12 +375,13 @@ mod tests {
             }
             original_hasher.update(&buffer[..bytes_read]);
         }
-        let original_hash = hex::encode(original_hasher.finalize());
+        let original_hash = hex::encode(original_hasher.finalize()); // 使用 Hex，因为这是独立验证
 
         // --- 2. 执行阶段 (Act) ---
 
         // b. 加密
         source_file.seek(SeekFrom::Start(0)).unwrap();
+        // [修改] 忽略 V2 返回的哈希值
         stream_encrypt_and_hash(
             source_file.reopen().unwrap(),
             encrypted_file.reopen().unwrap(),

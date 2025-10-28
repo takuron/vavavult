@@ -1,27 +1,29 @@
 use crate::common::metadata::MetadataEntry;
-use crate::file::encrypt::{EncryptionCheck, EncryptionType};
 
 pub mod encrypt;
 mod stream_cipher;
-pub mod path; // <-- [新增]
-pub use path::{PathError, VaultPath}; // <-- [新增]
+pub mod path;
+pub use path::{PathError, VaultPath};
 
 ///代表数据库中每个文件的记录
 #[derive(Debug,Clone)]
 pub struct FileEntry {
-    /// 文件名，采用对象存储的方式存储。
-    pub name: String,
-    /// 文件的 SHA256 哈希值。
-    /// 这个哈希值也是它在文件库中的存储名。
+    /// 文件在保险库中的唯一路径 (例如 "/docs/report.txt")
+    pub path: String,
+
+    /// 加密后* 的文件内容的 SHA256 哈希值。
+    /// 这是文件的主键，也是它在保险库数据目录中的存储名。
     pub sha256sum: String,
-    /// 加密类型。
-    pub encrypt_type: EncryptionType,
-    /// 用于加密该文件内容的密码，仅在全库加密的情况下被启用。
+
+    /// 原始* (未加密) 文件内容的 SHA256 哈希值。
+    pub original_sha256sum: String,
+
+    /// 用于加密该文件的（随机生成的）密码。
     pub encrypt_password: String,
-    /// 加密验证信息。
-    pub encrypt_check: EncryptionCheck,
-    /// 标签列表。
+
+    /// 与文件关联的标签列表。
     pub tags: Vec<String>,
-    /// 键值对元数据。
+
+    /// 与文件关联的元数据键值对。
     pub metadata: Vec<MetadataEntry>,
 }

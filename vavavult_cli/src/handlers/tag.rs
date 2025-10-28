@@ -30,7 +30,7 @@ fn handle_add_tag_single_file(
 ) -> Result<(), Box<dyn Error>> {
     let file_entry = find_file_entry(vault, vault_name, sha256)?;
 
-    println!("Adding tags [{}] to '{}'...", tags.join(", "), file_entry.name);
+    println!("Adding tags [{}] to '{}'...", tags.join(", "), file_entry.path);
     vault.add_tags(&file_entry.sha256sum, tags)?;
 
     println!("Tags added successfully.");
@@ -62,7 +62,7 @@ fn handle_add_tags_directory(vault: &mut Vault, dir_path: &str, tags: &[&str], r
     for entry in &files_to_tag {
         match vault.add_tags(&entry.sha256sum, tags) {
             Ok(_) => success_count += 1,
-            Err(e) => eprintln!("Failed to tag {}: {}", entry.name, e),
+            Err(e) => eprintln!("Failed to tag {}: {}", entry.path, e),
         }
     }
 
@@ -96,7 +96,7 @@ fn handle_remove_tags_single_file(
 ) -> Result<(), Box<dyn Error>> {
     let file_entry = find_file_entry(vault, vault_name, sha256)?;
 
-    println!("Removing tags [{}] from '{}'...", tags.join(", "), file_entry.name);
+    println!("Removing tags [{}] from '{}'...", tags.join(", "), file_entry.path);
     for tag in tags {
         vault.remove_tag(&file_entry.sha256sum, tag)?;
     }
@@ -131,7 +131,7 @@ fn handle_remove_tags_directory(vault: &mut Vault, dir_path: &str, tags: &[&str]
         let mut all_tags_removed = true;
         for tag in tags {
             if let Err(e) = vault.remove_tag(&entry.sha256sum, tag) {
-                eprintln!("Failed to remove tag '{}' from {}: {}", tag, entry.name, e);
+                eprintln!("Failed to remove tag '{}' from {}: {}", tag, entry.path, e);
                 all_tags_removed = false;
             }
         }
@@ -156,13 +156,13 @@ pub fn handle_tag_clear(
     // 在执行破坏性操作前，向用户请求确认
     if !confirm_action(&format!(
         "Are you sure you want to clear ALL tags from '{}'?",
-        file_entry.name
+        file_entry.path
     ))? {
         println!("Operation cancelled.");
         return Ok(());
     }
 
-    println!("Clearing all tags from '{}'...", file_entry.name);
+    println!("Clearing all tags from '{}'...", file_entry.path);
 
     // 调用核心库的 clear_tags 方法
     vault.clear_tags(&file_entry.sha256sum)?;
