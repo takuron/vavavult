@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
 use vavavult::common::metadata::MetadataEntry;
+use vavavult::file::VaultPath;
 use vavavult::vault::{Vault};
 
 fn create_dummy_file(dir: &Path, name: &str, content: &[u8]) -> std::io::Result<()> {
@@ -24,8 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     create_dummy_file(dir.path(), "report.txt", "这是年度报告。".as_ref())?;
     create_dummy_file(dir.path(), "logo.png", "伪PNG数据".as_ref())?;
 
-    let report_hash = vault.add_file(&dir.path().join("report.txt"), Some("work/2025/annual_report.txt"))?;
-    let logo_hash = vault.add_file(&dir.path().join("logo.png"), Some("assets/logo.png"))?;
+    let report_hash = vault.add_file(&dir.path().join("report.txt"), &VaultPath::from("work/2025/annual_report.txt"))?;
+    let logo_hash = vault.add_file(&dir.path().join("logo.png"), &VaultPath::from("assets/logo.png"))?;
 
     // 添加标签
     vault.add_tags(&report_hash, &["work", "finance", "report"])?;

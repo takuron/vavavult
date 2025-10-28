@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
+use vavavult::file::VaultPath;
 use vavavult::vault::{QueryResult, Vault};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut file = File::create(&source_file_path)?;
     file.write_all("来自 vavavult 示例的问候!".as_ref())?;
 
-    let file_hash = vault.add_file(&source_file_path, Some("docs/greeting/hello.txt"))?;
+    let file_hash = vault.add_file(&source_file_path, &VaultPath::from("docs/greeting/hello.txt"))?;
     println!("文件添加成功! SHA256 哈希值: {}", file_hash);
 
     // --- 通过哈希值查询文件 ---

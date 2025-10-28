@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
+use vavavult::file::VaultPath;
 use vavavult::vault::{QueryResult, Vault};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut file = File::create(&source_file_path)?;
     file.write_all(b"Hello from vavavult example!")?;
 
-    let file_hash = vault.add_file(&source_file_path, Some("docs/greeting/hello.txt"))?;
+    let file_hash = vault.add_file(&source_file_path, &VaultPath::from("docs/greeting/hello.txt"))?;
     println!("File added successfully! SHA256 Hash: {}", file_hash);
 
     // --- Query the file by its hash ---

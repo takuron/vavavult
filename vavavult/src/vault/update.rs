@@ -1,5 +1,3 @@
-// [vavavult/src/vault/update.rs]
-
 use std::fs;
 use rusqlite::params;
 use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_UPDATE_TIME};
@@ -19,7 +17,7 @@ pub enum UpdateError {
     #[error("File with SHA256 '{0}' not found.")]
     FileNotFound(String),
 
-    #[error("The new path '{0}' is already taken.")] // [修改] "name" -> "path"
+    #[error("The new path '{0}' is already taken.")]
     DuplicateFileName(String),
 
     #[error("Failed to write configuration file: {0}")]

@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
-use crate::common::metadata::MetadataEntry;
 
 /// 代表 `master.json` 配置文件的顶层结构 (V2)。
 #[derive(Debug, Serialize, Deserialize)]

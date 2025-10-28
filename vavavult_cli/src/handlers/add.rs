@@ -3,10 +3,50 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use indicatif::{ProgressBar, ProgressStyle};
-use walkdir::WalkDir;
 use rayon::prelude::*;
-use vavavult::vault::{Vault};
+use walkdir::WalkDir;
+use vavavult::vault::{AddFileError, Vault};
+use vavavult::file::VaultPath; // [新增] 确保导入
 use crate::utils::confirm_action;
+
+/// [新增] 辅助函数：根据 CLI 参数构建最终的 VaultPath
+///
+/// 逻辑:
+/// 1. `dest_dir` (e.g., "/docs/")
+/// 2. `file_name` (e.g., "report.txt")
+///
+/// - dir & name -> "/docs/report.txt"
+/// - dir only -> "/docs/" (库将附加源文件名)
+/// - name only -> "/report.txt" (库将其视为文件路径)
+/// - neither -> "/" (库将附加源文件名)
+fn build_vault_path_from_cli(
+    dest_dir: Option<String>,
+    file_name: Option<String>,
+) -> Result<VaultPath, Box<dyn Error>> {
+    let base_path = dest_dir.unwrap_or_else(|| "/".to_string());
+
+    // 规范化基础路径
+    let mut dir_path = VaultPath::from(base_path.as_str());
+
+    if let Some(name) = file_name {
+        // 如果提供了 -n，将其连接到路径
+        // 如果 dir_path 是 "/docs/" (目录), 结果是 "/docs/name.txt"
+        // 如果 dir_path 是 "/docs" (文件), join 会失败
+        if !dir_path.is_dir() {
+            // 用户可能输入了 -d /docs (被解析为文件)
+            // 我们将其强制转换为目录以便 join
+            dir_path = VaultPath::from(format!("{}/", dir_path.as_str()).as_str());
+        }
+        Ok(dir_path.join(&name)?)
+    } else {
+        // 如果只提供了 -d 或什么都没提供，返回路径本身
+        // -d /docs/ -> /docs/ (目录)
+        // -d /docs -> /docs (文件，库会报错，除非是单文件且local_path.is_dir()为false)
+        // (无参数) -> / (目录)
+        Ok(dir_path)
+    }
+}
+
 
 /// 主处理器，根据路径类型和并行标志分发任务
 pub fn handle_add(vault: Arc<Mutex<Vault>>, local_path: &Path, file_name: Option<String>, dest_dir: Option<String>, parallel: bool) -> Result<(), Box<dyn Error>> {
@@ -14,49 +54,42 @@ pub fn handle_add(vault: Arc<Mutex<Vault>>, local_path: &Path, file_name: Option
         return Err(format!("Path does not exist: {:?}", local_path).into());
     }
 
+    // [修改] 在这里构建 VaultPath
+    let dest_vault_path = build_vault_path_from_cli(dest_dir.clone(), file_name.clone())?;
+
     if local_path.is_dir() {
         if file_name.is_some() {
             return Err("The --name (-n) option can only be used when adding a single file, not a directory.".into());
         }
-        // 根据 parallel 标志调用不同的目录处理器
+        // `dest_vault_path` 此时必须是目录 (e.g., "/docs/" 或 "/")
+        if !dest_vault_path.is_dir() {
+            return Err(format!("When adding a directory, the destination path ('{}') must be a directory (end with '/').", dest_vault_path.as_str()).into());
+        }
+
         if parallel {
-            handle_add_directory_parallel(vault, local_path, dest_dir)
+            handle_add_directory_parallel(vault, local_path, dest_vault_path) // [修改] 传递 VaultPath
         } else {
-            handle_add_directory_single_threaded(vault, local_path, dest_dir)
+            handle_add_directory_single_threaded(vault, local_path, dest_vault_path) // [修改] 传递 VaultPath
         }
     } else {
-        // 单文件添加总是单线程
-        handle_add_file(vault, local_path, file_name, dest_dir)
+        // `dest_vault_path` 此时可以是文件 (e.g., "/report.txt") 或目录 (e.g., "/docs/")
+        // 库的 resolve_final_path 会处理这两种情况
+        handle_add_file(vault, local_path, dest_vault_path) // [修改] 传递 VaultPath
     }
-}
-
-/// 辅助函数：根据目标目录和文件名构建最终的、标准化的 vault 路径
-fn build_vault_path(dest_dir: Option<String>, file_name: String) -> String {
-    let mut path = PathBuf::new();
-    if let Some(dir) = dest_dir {
-        path.push(dir);
-    }
-    path.push(file_name);
-    // 确保最终路径使用正斜杠
-    path.to_string_lossy().replace('\\', "/")
 }
 
 /// 处理添加单个文件的逻辑
-fn handle_add_file(vault: Arc<Mutex<Vault>>, local_path: &Path, file_name: Option<String>, dest_dir: Option<String>) -> Result<(), Box<dyn Error>> {
-    // 确定最终文件名：如果 -n 提供了，就用它；否则，从源路径提取。
-    let final_file_name = file_name.unwrap_or_else(|| {
-        local_path.file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown_file")
-            .to_string()
-    });
+fn handle_add_file(
+    vault: Arc<Mutex<Vault>>,
+    local_path: &Path,
+    dest_vault_path: VaultPath // [修改] 接收 VaultPath
+) -> Result<(), Box<dyn Error>> {
 
-    // 构建在 vault 中的完整路径
-    let vault_path = build_vault_path(dest_dir, final_file_name);
-
-    println!("Adding file {:?} as '{}'...", local_path, vault_path);
+    println!("Adding file {:?} as '{}'...", local_path, dest_vault_path.as_str());
     let mut vault_guard = vault.lock().unwrap();
-    match vault_guard.add_file(local_path, Some(&vault_path)) {
+
+    // [修改] 调用新的 add_file API
+    match vault_guard.add_file(local_path, &dest_vault_path) {
         Ok(hash) => println!("Successfully added file. Hash: {}", hash),
         Err(e) => eprintln!("Error adding file: {}", e),
     }
@@ -64,18 +97,23 @@ fn handle_add_file(vault: Arc<Mutex<Vault>>, local_path: &Path, file_name: Optio
 }
 
 /// (单线程) 处理批量添加目录的逻辑
-fn handle_add_directory_single_threaded(vault: Arc<Mutex<Vault>>, local_path: &Path, dest_dir: Option<String>) -> Result<(), Box<dyn Error>> {
+fn handle_add_directory_single_threaded(
+    vault: Arc<Mutex<Vault>>,
+    local_path: &Path,
+    dest_dir_path: VaultPath // [修改] 接收 VaultPath (保证是目录)
+) -> Result<(), Box<dyn Error>> {
     println!("Scanning directory {:?}...", local_path);
 
-    // 1. 收集所有待添加的文件 (与之前逻辑相同)
+    // 1. 收集所有待添加的文件
     let files_to_add: Vec<_> = WalkDir::new(local_path)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .map(|entry| {
             let source_path = entry.into_path();
-            let relative_path = source_path.strip_prefix(local_path).unwrap().to_path_buf();
-            let vault_path = build_vault_path(dest_dir.clone(), relative_path.to_string_lossy().to_string());
+            // [修改] 使用 VaultPath::join
+            let relative_path = source_path.strip_prefix(local_path).unwrap();
+            let vault_path = dest_dir_path.join(relative_path.to_string_lossy().replace('\\', "/").as_ref()).unwrap();
             (source_path, vault_path)
         })
         .collect();
@@ -85,12 +123,11 @@ fn handle_add_directory_single_threaded(vault: Arc<Mutex<Vault>>, local_path: &P
         return Ok(());
     }
 
-    // 2. 恢复打印文件列表的逻辑
+    // 2. 打印文件列表
     println!("The following {} files will be added:", files_to_add.len());
-    // --- 修改: 在打印前统一路径分隔符 ---
     for (source, target) in &files_to_add {
         let source_display = source.to_string_lossy().replace('\\', "/");
-        println!("  - \"{}\" -> {}", source_display, target);
+        println!("  - \"{}\" -> {}", source_display, target.as_str()); // [修改]
     }
 
     if !confirm_action("Do you want to proceed with adding these files?")? {
@@ -109,7 +146,8 @@ fn handle_add_directory_single_threaded(vault: Arc<Mutex<Vault>>, local_path: &P
 
     for (source, target) in files_to_add {
         let mut vault_guard = vault.lock().unwrap();
-        match vault_guard.add_file(&source, Some(&target)) {
+        // [修改] 调用新的 add_file API
+        match vault_guard.add_file(&source, &target) {
             Ok(_) => {
                 success_count += 1;
             }
@@ -126,8 +164,13 @@ fn handle_add_directory_single_threaded(vault: Arc<Mutex<Vault>>, local_path: &P
     Ok(())
 }
 
-fn handle_add_directory_parallel(vault: Arc<Mutex<Vault>>, local_path: &Path, dest_dir: Option<String>) -> Result<(), Box<dyn Error>> {
-    println!("Scanning directory {:?}...", local_path);
+// (多线程) 处理批量添加目录的逻辑
+fn handle_add_directory_parallel(
+    vault: Arc<Mutex<Vault>>,
+    local_path: &Path,
+    dest_dir_path: VaultPath // 接收 VaultPath (保证是目录)
+) -> Result<(), Box<dyn Error>> {
+    println!("Scanning directory {:?} (parallel mode)...", local_path);
 
     let files_to_add: Vec<_> = WalkDir::new(local_path)
         .into_iter()
@@ -135,9 +178,9 @@ fn handle_add_directory_parallel(vault: Arc<Mutex<Vault>>, local_path: &Path, de
         .filter(|e| e.file_type().is_file())
         .map(|entry| {
             let source_path = entry.into_path();
-            let relative_path = source_path.strip_prefix(local_path).unwrap().to_path_buf();
-            let vault_path_str = build_vault_path(dest_dir.clone(), relative_path.to_string_lossy().to_string());
-            (source_path, vault_path_str)
+            let relative_path = source_path.strip_prefix(local_path).unwrap();
+            let vault_path = dest_dir_path.join(relative_path.to_string_lossy().replace('\\', "/").as_ref()).unwrap();
+            (source_path, vault_path) // (PathBuf, VaultPath)
         })
         .collect();
 
@@ -147,62 +190,84 @@ fn handle_add_directory_parallel(vault: Arc<Mutex<Vault>>, local_path: &Path, de
     }
 
     println!("The following {} files will be added:", files_to_add.len());
-    // --- 修改: 在打印前统一路径分隔符 ---
     for (source, target) in &files_to_add {
         let source_display = source.to_string_lossy().replace('\\', "/");
-        println!("  - \"{}\" -> {}", source_display, target);
+        println!("  - \"{}\" -> {}", source_display, target.as_str());
     }
-    
+
     if !confirm_action("Do you want to proceed with adding these files?")? {
         println!("Operation cancelled.");
         return Ok(());
     }
 
-    // --- 修改: 统一的进度条和原子计数器 ---
-    let pb = ProgressBar::new(files_to_add.len() as u64);
+    // 在 files_to_add 被移动之前，保存总数
+    let total_files_count = files_to_add.len();
+
+    // 进度条和原子计数器
+    let pb = ProgressBar::new(total_files_count as u64); // [修改] 使用 total_files_count
     pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
+        .template("{spinner:.green} [Encrypting] [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
         .progress_chars("#>-"));
+    let fail_count = Arc::new(AtomicUsize::new(0));
 
-    let success_count = AtomicUsize::new(0);
-    let fail_count = AtomicUsize::new(0);
-
-    files_to_add
+    // --- 阶段 1: 并行加密 ---
+    let encryption_results: Vec<_> = files_to_add // files_to_add 在这里被 move
         .into_par_iter()
-        .for_each(|(source, target_name)| {
-            // 1. 准备阶段 (只读锁)
-            let transaction_result = {
-                let vault_guard = vault.lock().unwrap();
-                vault_guard.prepare_add_transaction(&source)
-            };
+        .map(|(source, target_path)| {
+            let vault_guard = vault.lock().unwrap();
+            let pb_clone = pb.clone();
+            let fail_count_clone = Arc::clone(&fail_count);
 
-            // 2. 提交阶段 (写锁)
-            match transaction_result {
-                Ok(transaction) => {
-                    let mut vault_guard = vault.lock().unwrap();
-                    match vault_guard.commit_add_transaction(transaction, &target_name) {
-                        Ok(_) => {
-                            success_count.fetch_add(1, Ordering::SeqCst);
-                        }
-                        Err(e) => {
-                            fail_count.fetch_add(1, Ordering::SeqCst);
-                            pb.println(format!("FAILED to commit {}: {}", target_name, e));
-                        }
-                    }
+            match vault_guard.encrypt_file_for_add(&source, &target_path) {
+                Ok(encrypted_file) => {
+                    pb_clone.inc(1);
+                    Some(encrypted_file)
                 }
                 Err(e) => {
-                    fail_count.fetch_add(1, Ordering::SeqCst);
-                    pb.println(format!("FAILED to prepare {:?}: {}", source, e));
+                    fail_count_clone.fetch_add(1, Ordering::SeqCst);
+                    pb_clone.println(format!("FAILED to encrypt {}: {}", target_path.as_str(), e));
+                    pb_clone.inc(1);
+                    None
                 }
             }
-            pb.inc(1);
-        });
+        })
+        .collect();
 
-    pb.finish_with_message("Batch add complete.");
+    pb.finish_with_message("Encryption complete.");
+
+    // 过滤掉加密失败的文件
+    let files_to_commit: Vec<_> = encryption_results.into_iter().filter_map(|r| r).collect();
+    let encrypted_success_count = files_to_commit.len();
+
+    if files_to_commit.is_empty() {
+        println!("\nNo files to commit.");
+        // [修正] 确保即使没有文件提交，也打印正确的最终计数
+        let failures = fail_count.load(Ordering::SeqCst);
+        let successes = total_files_count - failures;
+        println!("\nBatch add complete. {} succeeded, {} failed.", successes, failures);
+        return Ok(());
+    }
+
+    // --- 阶段 2: 批量提交 (单线程) ---
+    println!("Committing {} files to database...", files_to_commit.len());
+    {
+        let mut vault_guard = vault.lock().unwrap();
+        match vault_guard.commit_add_files(files_to_commit) {
+            Ok(_) => {
+                println!("Batch commit successful.");
+            }
+            Err(e) => {
+                // 如果批量提交失败，将所有尝试提交的文件计为失败
+                fail_count.fetch_add(encrypted_success_count, Ordering::SeqCst);
+                eprintln!("FATAL: Batch commit failed: {}", e);
+            }
+        }
+    }
 
     // 从原子计数器加载最终结果
-    let successes = success_count.load(Ordering::SeqCst);
     let failures = fail_count.load(Ordering::SeqCst);
+    // 使用 total_files_count
+    let successes = total_files_count - failures;
 
     println!("\nBatch add complete. {} succeeded, {} failed.", successes, failures);
     Ok(())

@@ -9,7 +9,7 @@ use crate::vault::config::VaultConfig;
 use crate::vault::create::CreateError::VaultAlreadyExists;
 use crate::vault::Vault;
 
-#[derive(Debug, thiserror::Error)] 
+#[derive(Debug, thiserror::Error)]
 pub enum CreateError {
     #[error("Vault directory already exists at {0}")]
     VaultAlreadyExists(PathBuf),
@@ -37,7 +37,6 @@ pub fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>)
 
     let encrypted = password.is_some();
     let encrypt_check = if let Some(p) = password {
-        // [修改] (请求 1) 直接调用，函数内部会生成随机 raw
         create_v2_encrypt_check(p)?
     } else {
         "".to_string()
@@ -63,7 +62,6 @@ pub fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>)
         }
     }
 
-    // [V2 修改] (请求 2) 更新数据库表结构，使用 CHAR(43)
     conn.execute_batch(
         "PRAGMA foreign_keys = ON;
 
@@ -73,10 +71,10 @@ pub fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>)
          );
 
          CREATE TABLE IF NOT EXISTS files (
-            sha256sum           CHAR(43) PRIMARY KEY NOT NULL,  
+            sha256sum           CHAR(43) PRIMARY KEY NOT NULL,
             path                TEXT NOT NULL UNIQUE,
-            original_sha256sum  CHAR(43) NOT NULL,              
-            encrypt_password    TEXT NOT NULL                  
+            original_sha256sum  CHAR(43) NOT NULL UNIQUE,
+            encrypt_password    TEXT NOT NULL
          );
 
          CREATE TABLE IF NOT EXISTS tags (
@@ -86,7 +84,7 @@ pub fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>)
             FOREIGN KEY (file_sha256sum) REFERENCES files(sha256sum) ON DELETE CASCADE
          );
          CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_link ON tags(file_sha256sum, tag);
-         
+
          CREATE TABLE IF NOT EXISTS metadata (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             file_sha256sum      CHAR(43) NOT NULL,
@@ -97,7 +95,7 @@ pub fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>)
          CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_link ON metadata(file_sha256sum, meta_key);"
     )?;
 
-    // [V2 新增] 将保险库元数据插入到新表中
+    // 将保险库元数据插入到新表中
     let now = now_as_rfc3339_string();
     conn.execute(
         "INSERT INTO vault_metadata (meta_key, meta_value) VALUES (?1, ?2), (?3, ?4)",

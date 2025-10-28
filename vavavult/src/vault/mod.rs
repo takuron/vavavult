@@ -11,7 +11,7 @@ mod update;
 
 use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
-use crate::vault::add::{add_file, commit_add_transaction_local, prepare_add_transaction};
+use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add, EncryptedAddingFile};
 use crate::vault::create::{create_vault, open_vault};
 use crate::vault::extract::{ExtractError, extract_file};
 use crate::vault::query::{
@@ -243,156 +243,62 @@ impl Vault {
         find_by_name_or_tag_fuzzy(self, keyword)
     }
 
-    /// Adds a new file to the vault from a source path.
-    ///
-    /// The file's content is copied into the vault and a new database record is created.
+    /// [修改] 添加一个新文件到保险库 (便捷包装函数)。
     ///
     /// # Arguments
-    /// * `source_path` - The path to the file on the local filesystem.
-    /// * `dest_name` - An optional destination name/path for the file inside the vault.
-    ///   If `None`, the original filename is used.
+    /// * `source_path` - 本地文件系统上的文件路径。
+    /// * `dest_path` - 在保险库中的目标路径。
+    ///   - 如果 `dest_path` 是一个文件路径 (e.g., `/docs/report.txt`), 文件将被保存到该路径。
+    ///   - 如果 `dest_path` 是一个目录路径 (e.g., `/docs/`), 源文件的名称将被自动附加 (e.g., `/docs/source_file.txt`)。
     ///
     /// # Returns
-    /// The SHA256 hash of the added file on success.
+    /// 成功时返回添加文件的 SHA256 哈希。
     ///
     /// # Errors
-    /// Returns `AddFileError` if the source file doesn't exist, or if a file with
-    /// the same name or content already exists in the vault.
+    /// 如果源文件不存在，或者与保险库中已有的文件路径或内容重复，则返回 `AddFileError`。
     pub fn add_file(
         &mut self,
         source_path: &Path,
-        dest_name: Option<&str>,
+        dest_path: &VaultPath,
     ) -> Result<String, AddFileError> {
-        // --- 桥接逻辑 ---
-        // 1. 确定最终的路径字符串 (V1 行为)
-        let final_path_str = dest_name.map(|s| s.to_string()).unwrap_or_else(|| {
-            source_path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default() // V1 add_file 内部有空检查，这里也需要
-                .to_string()
-        });
-
-        // V1 add_file 在这里会检查 raw_name 是否为空，我们也加上
-        if final_path_str.is_empty() {
-            // V1 返回 InvalidFileName，V2 我们映射到 InvalidFilePath
-            return Err(AddFileError::InvalidFilePath("".to_string()));
-        }
-
-        // 2. 将字符串转换为 VaultPath
-        let dest_vault_path = VaultPath::from(final_path_str.as_str());
-
-        // 3. 调用 V2 内部的 add_file (它现在接受 &VaultPath)
-        // 注意：add::add_file 是我们在 add.rs 中定义的便捷函数
-        let result = add_file(self, source_path, &dest_vault_path)?;
-        // --- 桥接结束 ---
+        let result = add_file(self, source_path, dest_path)?;
 
         touch_vault_update_time(self)?;
         Ok(result)
     }
-
-    /// [EXPERIMENTAL] Adds a new file to the vault at a specific VaultPath.
-    ///
-    /// This method requires the `experimental_paths` feature to be enabled.
-    /// `dest_path` must represent a file path (not ending in '/').
+    /// 阶段 1: 加密一个文件并准备用于批量提交 (线程安全)。
     ///
     /// # Arguments
-    /// * `source_path` - The path to the file on the local filesystem.
-    /// * `dest_path` - The [`VaultPath`] where the file should be stored in the vault.
-    ///   Must be a file path (e.g., `/a/b.txt`).
+    /// * `source_path` - 本地文件系统上的文件路径。
+    /// * `dest_path` - 在保险库中的最终目标路径。
+    ///   - 如果 `dest_path` 是一个文件路径 (e.g., `/docs/report.txt`), 文件将被加密为该路径。
+    ///   - 如果 `dest_path` 是一个目录路径 (e.g., `/docs/`), 源文件的名称将被自动附加 (e.g., `/docs/source_file.txt`)。
     ///
     /// # Returns
-    /// The SHA256 hash of the added file on success.
+    /// 一个 `EncryptedAddingFile` 对象，准备好传递给 `commit_add_files`。
     ///
     /// # Errors
-    /// Returns `AddFileError` if the source file doesn't exist, if `dest_path` is
-    /// a directory path (`InvalidFilePath`), or if a file with the same name or
-    /// content already exists.
-    #[cfg(feature = "experimental_paths")]
-    pub fn add_file_at_path(
-        &mut self,
-        source_path: &Path,
-        dest_path: &VaultPath,
-    ) -> Result<String, AddFileError> {
-        // 桥接：调用现有的 &str API
-        self.add_file(source_path, Some(dest_path.as_str()))
-    }
-
-    /// Stage 1: Prepares a file addition transaction (thread-safe).
-    ///
-    /// Performs potentially time-consuming operations like reading the source file,
-    /// calculating its hash, and encrypting it (if applicable) into a temporary file.
-    /// This operation does not modify the vault's state.
-    ///
-    /// # Arguments
-    /// * `source_path` - The path to the file on the local filesystem.
-    ///
-    /// # Returns
-    /// An [`AddTransaction`] containing the necessary information (hash, temp path, etc.)
-    /// to commit the addition later using `commit_add_transaction` or `commit_add_transaction_at_path`.
-    ///
-    /// # Errors
-    /// Returns `AddFileError` if the source file cannot be read or encryption fails.
-    pub fn prepare_add_transaction(
+    /// 如果源文件无法读取或最终路径无效，则返回 `AddFileError`。
+    pub fn encrypt_file_for_add(
         &self,
         source_path: &Path,
-    ) -> Result<AddTransaction, AddFileError> {
-        prepare_add_transaction(self, source_path)
-    }
-
-    /// Stage 2: Commits a prepared file addition transaction (requires exclusive access).
-    ///
-    /// Performs quick operations requiring write access: checks for duplicates in the
-    /// database, renames the temporary file to its final hash-based name, and inserts
-    /// the file record into the database. Enforces file name rules.
-    ///
-    /// # Arguments
-    /// * `transaction` - The [`AddTransaction`] returned by `prepare_add_transaction`.
-    /// * `dest_name` - The desired name/path for the file inside the vault. Must adhere
-    ///   to file name rules. Relative names are placed under the root.
-    ///
-    /// # Returns
-    /// The SHA256 hash of the added file on success.
-    ///
-    /// # Errors
-    /// Returns `AddFileError` if `dest_name` violates naming rules (`InvalidFilePath`),
-    /// or if a file with the same name or content already exists. Also returns errors
-    /// on database or filesystem issues during the commit phase.
-    pub fn commit_add_transaction(
-        &mut self,
-        transaction: AddTransaction,
-        dest_name: &str,
-    ) -> Result<String, AddFileError> {
-        let dest_vault_path = VaultPath::from(dest_name);
-        let result = commit_add_transaction_local(self, transaction, &dest_vault_path)?;
-        touch_vault_update_time(self)?;
-        Ok(result)
-    }
-
-    /// [EXPERIMENTAL] Stage 2: Commits a prepared file addition transaction using a VaultPath (requires exclusive access).
-    ///
-    /// This method requires the `experimental_paths` feature to be enabled.
-    /// `dest_path` must represent a file path.
-    ///
-    /// # Arguments
-    /// * `transaction` - The [`AddTransaction`] returned by `prepare_add_transaction`.
-    /// * `dest_path` - The [`VaultPath`] where the file should be stored in the vault. Must be a file path.
-    ///
-    /// # Returns
-    /// The SHA256 hash of the added file on success.
-    ///
-    /// # Errors
-    /// Returns `AddFileError` if `dest_path` is a directory path (`InvalidFilePath`),
-    /// or if a file with the same name or content already exists. Also returns errors
-    /// on database or filesystem issues during the commit phase.
-    #[cfg(feature = "experimental_paths")]
-    pub fn commit_add_transaction_at_path(
-        &mut self,
-        transaction: AddTransaction,
         dest_path: &VaultPath,
-    ) -> Result<String, AddFileError> {
-        // 桥接：调用现有的 &str API
-        self.commit_add_transaction(transaction, dest_path.as_str())
+    ) -> Result<EncryptedAddingFile, AddFileError> {
+        encrypt_file_for_add(self, source_path, dest_path)
+    }
+
+    /// 阶段 2: 提交一个或多个已加密的文件到保险库 (需要独占访问)。
+    /// ... (签名不变, 内部已使用 EncryptedAddingFile) ...
+    pub fn commit_add_files(
+        &mut self,
+        files: Vec<EncryptedAddingFile>,
+    ) -> Result<(), AddFileError> {
+        if files.is_empty() {
+            return Ok(());
+        }
+        commit_add_files(self, files)?;
+        touch_vault_update_time(self)?;
+        Ok(())
     }
 
     /// Renames a file identified by its SHA256 hash.

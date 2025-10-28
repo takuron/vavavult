@@ -98,7 +98,7 @@ pub fn check_by_name(vault: &Vault, name: &str) -> Result<QueryResult, QueryErro
     }
 }
 
-/// [V2 修改] 根据文件的加密后 SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。
+/// 根据文件的加密后 SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。
 pub fn check_by_hash(vault: &Vault, sha256sum: &str) -> Result<QueryResult, QueryError> {
     // [V2 修改] 查询 V2 files 表
     let mut stmt = vault.database_connection.prepare(
@@ -127,6 +127,40 @@ pub fn check_by_hash(vault: &Vault, sha256sum: &str) -> Result<QueryResult, Quer
 
         // [V2 修改] 使用 V2 字段调用 fetch_full_entry
         let entry = fetch_full_entry(&vault.database_connection, sha256sum, &path, &original_sha256sum, &encrypt_password)?;
+        Ok(QueryResult::Found(entry))
+    } else {
+        Ok(QueryResult::NotFound)
+    }
+}
+
+/// 根据文件的 *原始* SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。
+pub fn check_by_original_hash(vault: &Vault, original_sha256sum: &str) -> Result<QueryResult, QueryError> {
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE original_sha256sum = ?1"
+    )?;
+
+    // [修改] 参数现在是 *原始* 哈希
+    if let Some(res) = stmt.query_row(params![original_sha256sum], |row| {
+        Ok((
+            row.get::<_, String>(0)?, // sha256sum (加密后)
+            row.get::<_, String>(1)?, // path
+            row.get::<_, String>(2)?, // original_sha256sum
+            row.get::<_, String>(3)?, // encrypt_password
+        ))
+    }).optional()? {
+        // 解构 V2 字段
+        let (sha256sum, path, ret_original_sha256sum, encrypt_password) = res;
+        // 确认返回的哈希与查询的哈希一致
+        assert_eq!(ret_original_sha256sum, original_sha256sum);
+
+        // 检查 data 子目录中的文件
+        let expected_path = vault.root_path.join(crate::common::constants::DATA_SUBDIR).join(&sha256sum);
+        if !expected_path.exists() {
+            return Err(QueryError::FileMissing(sha256sum.to_string()));
+        }
+
+        // 使用 V2 字段调用 fetch_full_entry
+        let entry = fetch_full_entry(&vault.database_connection, &sha256sum, &path, original_sha256sum, &encrypt_password)?;
         Ok(QueryResult::Found(entry))
     } else {
         Ok(QueryResult::NotFound)
