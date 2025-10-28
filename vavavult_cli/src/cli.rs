@@ -65,16 +65,16 @@ pub enum ReplCommand {
         #[arg(short = 'p', long = "path", group = "list_mode")]
         path: Option<String>,
 
-        /// Fuzzy search for files by keyword
-        // 根据关键词模糊搜索文件名
-        #[arg(short = 's', long = "search", group = "list_mode")]
+        /// Fuzzy search for files by keyword (searches names and tags)
+        // 根据关键词模糊搜索 (搜索文件名和标签)
+        #[arg(short = 's', long = "search", group = "list_mode")] 
         search: Option<String>,
 
-        /// Search for files by tag
-        //  根据标签搜索文件
-        #[arg(short = 't', long = "tag", group = "list_mode")]
-        tag: Option<String>,
-
+        // --- [移除] 以下字段已被合并到 --search ---
+        // /// Search for files by tag
+        // //  根据标签搜索文件
+        // #[arg(short = 't', long = "tag", group = "list_mode")]
+        // tag: Option<String>,
         /// Show detailed information for each file
         //  显示每个文件的详细信息
         #[arg(short = 'd', long = "detail")]

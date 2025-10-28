@@ -141,9 +141,9 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
         ReplCommand::Add { local_path, file_name, dest_dir, parallel } => {
             handlers::add::handle_add(Arc::clone(vault_arc), &local_path, file_name, dest_dir, parallel)?;
         }
-        ReplCommand::List { path, search, tag, detail } => {
+        ReplCommand::List { path, search, detail } => {
             let vault = vault_arc.lock().unwrap();
-            handlers::list::handle_list(&vault, path, search, tag, detail)?; // <-- 传递 tag
+            handlers::list::handle_list(&vault, path, search, detail)?;
         }
         ReplCommand::Open { vault_name, sha256 } => {
             let vault = vault_arc.lock().unwrap();

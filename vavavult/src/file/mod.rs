@@ -3,6 +3,7 @@ use crate::file::encrypt::{EncryptionCheck, EncryptionType};
 
 pub mod encrypt;
 mod stream_cipher;
+mod path;
 
 ///代表数据库中每个文件的记录
 #[derive(Debug,Clone)]

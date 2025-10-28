@@ -294,3 +294,33 @@ pub fn find_by_name_and_tag_fuzzy(
 
     process_rows_to_entries(vault, rows)
 }
+
+/// Finds all files whose name OR tags contain a given pattern.
+// 查找所有名称或标签包含给定模式的文件。
+pub fn find_by_name_or_tag_fuzzy(
+    vault: &Vault,
+    keyword: &str,
+) -> Result<Vec<FileEntry>, QueryError> {
+    let mut stmt = vault.database_connection.prepare(
+        // [核心修改] 使用 LEFT JOIN 和 OR 来同时匹配 f.name 和 t.tag
+        // 使用 DISTINCT 确保即使一个文件有多个标签匹配，也只返回一次
+        "SELECT DISTINCT f.sha256sum, f.name, f.encrypt_type, f.encrypt_password, f.encrypt_check
+         FROM files f LEFT JOIN tags t ON f.sha256sum = t.file_sha256sum
+         WHERE f.name LIKE ?1 OR t.tag LIKE ?1",
+    )?;
+    let like_pattern = format!("%{}%", keyword);
+
+    let rows = stmt
+        .query_map(params![like_pattern], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, EncryptionType>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    process_rows_to_entries(vault, rows)
+}

@@ -21,7 +21,7 @@ pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, commit_add_transaction_local, prepare_add_transaction};
 use crate::vault::create::{create_vault, open_vault};
 use crate::vault::extract::{extract_file, ExtractError};
-use crate::vault::query::{check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy, find_by_tag, list_all_files, list_by_path};
+use crate::vault::query::{check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy,find_by_name_or_tag_fuzzy, find_by_tag, list_all_files, list_by_path};
 use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file, set_file_metadata, set_name, set_vault_metadata,touch_vault_update_time};
 
@@ -178,6 +178,23 @@ impl Vault {
         tag: &str,
     ) -> Result<Vec<FileEntry>, QueryError> {
         find_by_name_and_tag_fuzzy(self, name_pattern, tag)
+    }
+
+    /// Finds all files whose name or tags contain a given pattern (case-insensitive).
+    ///
+    /// # Arguments
+    /// * `keyword` - The substring to search for within file names OR tags.
+    ///
+    /// # Returns
+    /// A `Vec<FileEntry>` containing all matching files.
+    ///
+    /// # Errors
+    /// Returns `QueryError` if there is a database issue.
+    pub fn find_by_name_or_tag_fuzzy(
+        &self,
+        keyword: &str,
+    ) -> Result<Vec<FileEntry>, QueryError> {
+        find_by_name_or_tag_fuzzy(self, keyword)
     }
 
     /// Adds a new file to the vault from a source path.
