@@ -4,7 +4,19 @@ use vavavult::vault::Vault;
 use vavavult::common::constants::{META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
 use vavavult::utils::time as time_utils;
 
+/// 处理 vault 重命名命令
+pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), Box<dyn Error>> {
+    let old_name = vault.config.name.clone();
+
+    // 调用核心库的 set_name 方法
+    vault.set_name(new_name)?;
+
+    println!("Vault successfully renamed from '{}' to '{}'.", old_name, new_name);
+    Ok(())
+}
+
 pub fn handle_status(vault: &Vault) -> Result<(), Box<dyn Error>> {
+    // 核心库现在直接提供 list_all_files 方法
     let file_count = vault.list_all()?.len();
 
     // 一个辅助函数，用于查找、解析、并格式化时间

@@ -6,6 +6,12 @@ license = "LGPL-2.1"
 authors = ["takuron <takuron@163.com>"] # 请替换为您的邮箱
 repository = "https://github.com/takuron/vavavult" # 请替换为您的仓库地址
 
+[features]
+# 默认不启用任何额外功能
+default = []
+# 启用实验性的、基于 VaultPath 的 API
+experimental_paths = []
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

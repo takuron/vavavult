@@ -152,8 +152,17 @@ pub enum ReplCommand {
     /// Rename the current vault
     //  重命名当前保险库
     Rename {
-        /// The new name for the vault
-        //  保险库的新名称
+        /// The current name of the file to rename
+        //  要重命名的文件的当前名称
+        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
+        vault_name: Option<String>,
+        /// The SHA256 hash of the file to rename
+        //  要重命名的文件的 SHA256 哈希值
+        #[arg(short = 's', long = "sha256", group = "identifier")]
+        sha256: Option<String>,
+
+        /// The new name for the file
+        //  文件的新名称
         #[arg(required = true)]
         new_name: String,
     },
@@ -161,15 +170,31 @@ pub enum ReplCommand {
     //  管理文件标签
     #[command(subcommand)]
     Tag(TagCommand),
-    /// Show the status of the current vault
-    //  显示当前保险库的状态
-    Status,
+    /// Manage the vault itself
+    //  管理保险库本身
+    #[command(subcommand)]
+    Vault(VaultCommand), // 将之前的 Rename 移到这里
     /// Close the current vault
     //  关闭当前保险库
     Close,
     /// Exit the interactive session
     //  退出交互式会话
     Exit,
+}
+
+// --- Vault 级别的子命令 ---
+#[derive(Parser, Debug)]
+pub enum VaultCommand {
+    /// Rename the current vault
+    //  重命名当前保险库
+    Rename {
+        /// The new name for the vault
+        //  保险库的新名称
+        #[arg(required = true)]
+        new_name: String,
+    },
+    Status,
+    // 未来可以添加其他 vault 级别的命令, 例如修改密码等
 }
 
 // --- Subcommands for `tag` ---

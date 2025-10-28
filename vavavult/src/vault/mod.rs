@@ -1,29 +1,35 @@
-use std::path::{Path, PathBuf};
 use rusqlite::Connection;
+use std::path::{Path, PathBuf};
 
+mod add;
 mod config;
 mod create;
-mod add;
-mod query;
-mod update;
-mod remove;
 mod extract;
+mod query;
+mod remove;
+mod update;
 
-pub use config::{VaultConfig};
-pub use create::{CreateError,OpenError};
-pub use add::{AddTransaction,AddFileError};
-pub use query::{QueryError, QueryResult};
-pub use update::{UpdateError};
-pub use remove::{RemoveError};
-pub use query::{ListResult};
 use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, commit_add_transaction_local, prepare_add_transaction};
 use crate::vault::create::{create_vault, open_vault};
-use crate::vault::extract::{extract_file, ExtractError};
-use crate::vault::query::{check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy,find_by_name_or_tag_fuzzy, find_by_tag, list_all_files, list_by_path};
+use crate::vault::extract::{ExtractError, extract_file};
+use crate::vault::query::{
+    check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy,
+    find_by_name_or_tag_fuzzy, find_by_tag, list_all_files, list_by_path,
+};
 use crate::vault::remove::remove_file;
-use crate::vault::update::{add_tag, add_tags, clear_tags, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file, set_file_metadata, set_name, set_vault_metadata,touch_vault_update_time};
+use crate::vault::update::{
+    add_tag, add_tags, clear_tags, remove_file_metadata, remove_tag, remove_vault_metadata,
+    rename_file, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time,
+};
+pub use add::{AddFileError, AddTransaction};
+pub use config::VaultConfig;
+pub use create::{CreateError, OpenError};
+pub use query::ListResult;
+pub use query::{QueryError, QueryResult};
+pub use remove::RemoveError;
+pub use update::UpdateError;
 
 /// Represents a vault loaded into memory.
 ///
@@ -53,7 +59,11 @@ impl Vault {
     /// # Errors
     /// Returns `CreateError` if the directory already exists and is not empty,
     /// or if there are I/O or database initialization errors.
-    pub fn create_vault(root_path: &Path, vault_name: &str, password: Option<&str>) -> Result<Vault, CreateError> {
+    pub fn create_vault(
+        root_path: &Path,
+        vault_name: &str,
+        password: Option<&str>,
+    ) -> Result<Vault, CreateError> {
         create_vault(root_path, vault_name, password)
     }
 
@@ -85,6 +95,13 @@ impl Vault {
     /// Returns `QueryError` if there is a database issue or data inconsistency.
     pub fn find_by_name(&self, name: &str) -> Result<QueryResult, QueryError> {
         check_by_name(self, name)
+    }
+
+    #[cfg(feature = "experimental_paths")]
+    pub fn find_by_vault_path(&self, path: &VaultPath) -> Result<QueryResult, QueryError> {
+        // 桥接：调用现有的 &str API
+        // 注意：这依赖于 `VaultPath` 的 `as_str()` 实现
+        check_by_name(self, path.as_str())
     }
 
     /// Finds a file entry by its SHA256 hash.
@@ -130,6 +147,13 @@ impl Vault {
         list_by_path(self, path)
     }
 
+    #[cfg(feature = "experimental_paths")]
+    pub fn list_by_vault_path(&self, path: &VaultPath) -> Result<ListResult, QueryError> {
+        // 桥接：调用现有的 &str API
+        // 注意：这依赖于 `VaultPath` 的 `as_str()` 实现
+        list_by_path(self, path.as_str())
+    }
+
     /// Finds all files associated with a specific tag.
     ///
     /// # Arguments
@@ -154,10 +178,7 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `QueryError` if there is a database issue.
-    pub fn find_by_name_fuzzy(
-        &self,
-        name_pattern: &str,
-    ) -> Result<Vec<FileEntry>, QueryError> {
+    pub fn find_by_name_fuzzy(&self, name_pattern: &str) -> Result<Vec<FileEntry>, QueryError> {
         find_by_name_fuzzy(self, name_pattern)
     }
 
@@ -190,10 +211,7 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `QueryError` if there is a database issue.
-    pub fn find_by_name_or_tag_fuzzy(
-        &self,
-        keyword: &str,
-    ) -> Result<Vec<FileEntry>, QueryError> {
+    pub fn find_by_name_or_tag_fuzzy(&self, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
         find_by_name_or_tag_fuzzy(self, keyword)
     }
 
@@ -221,21 +239,48 @@ impl Vault {
         touch_vault_update_time(self)?;
         Ok(result)
     }
+
+    #[cfg(feature = "experimental_paths")]
+    pub fn add_file_at_path(
+        &mut self,
+        source_path: &Path,
+        dest_path: &VaultPath,
+    ) -> Result<String, AddFileError> {
+        // 桥接：调用现有的 &str API
+        self.add_file(source_path, Some(dest_path.as_str()))
+    }
+
     /// 阶段 1: 准备一个文件添加事务 (线程安全)。
     ///
     /// 这个方法执行所有耗时的操作：读取文件、计算哈希、加密。
     /// 它不修改 vault 状态，因此是线程安全的。
-    pub fn prepare_add_transaction(&self, source_path: &Path) -> Result<AddTransaction, AddFileError> {
+    pub fn prepare_add_transaction(
+        &self,
+        source_path: &Path,
+    ) -> Result<AddTransaction, AddFileError> {
         prepare_add_transaction(self, source_path)
     }
 
     /// 阶段 2: 提交一个文件添加事务 (需要独占访问)。
     ///
     /// 这个方法执行所有快速的、需要写入权限的操作。
-    pub fn commit_add_transaction(&mut self, transaction: AddTransaction, dest_name: &str) -> Result<String, AddFileError> {
+    pub fn commit_add_transaction(
+        &mut self,
+        transaction: AddTransaction,
+        dest_name: &str,
+    ) -> Result<String, AddFileError> {
         let result = commit_add_transaction_local(self, transaction, dest_name)?;
         touch_vault_update_time(self)?;
         Ok(result)
+    }
+    #[cfg(feature = "experimental_paths")]
+    pub fn commit_add_transaction_at_path(
+        &mut self,
+        transaction: AddTransaction,
+        dest_path: &VaultPath,
+    ) -> Result<String, AddFileError> {
+        // 桥接：调用现有的 &str API
+        self.commit_add_transaction(transaction, dest_path.as_str())
     }
 
     /// Renames a file identified by its SHA256 hash.
@@ -252,6 +297,15 @@ impl Vault {
     pub fn rename_file(&mut self, sha256sum: &str, new_name: &str) -> Result<(), UpdateError> {
         rename_file(self, sha256sum, new_name)?;
         touch_vault_update_time(self)
+    }
+    #[cfg(feature = "experimental_paths")]
+    pub fn rename_file_to_path(
+        &mut self,
+        sha256sum: &str,
+        new_path: &VaultPath,
+    ) -> Result<(), UpdateError> {
+        // 桥接：调用现有的 &str API
+        self.rename_file(sha256sum, new_path.as_str())
     }
 
     /// Adds a single tag to a file.
@@ -323,7 +377,11 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
-    pub fn set_file_metadata(&mut self, sha256sum: &str, metadata:MetadataEntry) -> Result<(), UpdateError> {
+    pub fn set_file_metadata(
+        &mut self,
+        sha256sum: &str,
+        metadata: MetadataEntry,
+    ) -> Result<(), UpdateError> {
         set_file_metadata(self, sha256sum, metadata)?;
         touch_vault_update_time(self)
     }
@@ -355,7 +413,11 @@ impl Vault {
     /// # Errors
     /// Returns `ExtractError` if the file is not found in the vault or if there
     /// is a filesystem error during the copy.
-    pub fn extract_file(&self, sha256sum: &str, destination_path: &Path) -> Result<(), ExtractError> {
+    pub fn extract_file(
+        &self,
+        sha256sum: &str,
+        destination_path: &Path,
+    ) -> Result<(), ExtractError> {
         extract_file(self, sha256sum, destination_path)
     }
 

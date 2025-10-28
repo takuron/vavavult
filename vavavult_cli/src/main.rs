@@ -10,7 +10,7 @@ use std::error::Error;
 use std::{env};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
-use crate::cli::{Cli, ReplCommand, TagCommand, TopLevelCommands};
+use crate::cli::{Cli, ReplCommand, TagCommand, TopLevelCommands, VaultCommand};
 
 struct AppState {
     // --- 修改: 将 Vault 包装在 Arc<Mutex<>> 中 ---
@@ -156,13 +156,24 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             let mut vault = vault_arc.lock().unwrap();
             handlers::remove::handle_remove(&mut vault, vault_name, sha256)?;
         }
-        ReplCommand::Status => {
-            let vault = vault_arc.lock().unwrap();
-            handlers::status::handle_status(&vault)?;
-        }
-        ReplCommand::Rename { new_name } => {
+        ReplCommand::Rename { vault_name, sha256, new_name } => {
             let mut vault = vault_arc.lock().unwrap();
-            handlers::rename::handle_rename(&mut vault, &new_name)?;
+            handlers::rename::handle_file_rename(&mut vault, vault_name, sha256, &new_name)?;
+        }
+        // [修改] 更新 Vault 子命令的处理路径
+        ReplCommand::Vault(vault_command) => {
+            match vault_command {
+                VaultCommand::Rename { new_name } => {
+                    let mut vault = vault_arc.lock().unwrap();
+                    // [修改] 调用新模块中的函数
+                    handlers::vault::handle_vault_rename(&mut vault, &new_name)?;
+                }
+                VaultCommand::Status => {
+                    let vault = vault_arc.lock().unwrap();
+                    handlers::vault::handle_status(&vault)?;
+                }
+                // 未来可以处理 VaultCommand 的其他变体
+            }
         }
         // --- 修改 Tag 命令的处理逻辑 ---
         ReplCommand::Tag(tag_command) => {
