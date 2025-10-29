@@ -2,8 +2,10 @@ use std::error::Error;
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use chrono::Local;
-use vavavult::file::FileEntry;
+use vavavult::common::hash::VaultHash;
+use vavavult::file::{FileEntry, VaultPath};
 use vavavult::vault::{ListResult, QueryResult, Vault};
 use vavavult::utils::time as time_utils;
 
@@ -12,7 +14,6 @@ pub fn print_file_entries(files: &[FileEntry]) {
     if files.is_empty() {
         return;
     }
-    // 彻底移除表头
     for entry in files {
         let short_hash = &entry.sha256sum.to_string()[..12];
         println!("{:<14} {}", short_hash, entry.path);
@@ -73,9 +74,12 @@ pub fn print_file_details(entry: &FileEntry) {
 /// 根据 name 或 sha256 查找文件，返回找到的 FileEntry
 pub fn find_file_entry(vault: &Vault, name: Option<String>, sha: Option<String>) -> Result<FileEntry, Box<dyn Error>> {
     let query_result = if let Some(n) = name {
-        vault.find_by_name(&n)?
+        // [修改] 使用 find_by_path 和 VaultPath
+        vault.find_by_path(&VaultPath::from(n.as_str()))?
     } else if let Some(s) = sha {
-        vault.find_by_hash(&s)?
+        // [修改] 使用 find_by_hash 和 VaultHash
+        let hash = VaultHash::from_str(&s)?;
+        vault.find_by_hash(&hash)?
     } else {
         unreachable!(); // Clap 应该已经阻止了这种情况
     };
@@ -108,30 +112,63 @@ pub fn confirm_action(prompt: &str) -> Result<bool, io::Error> {
 }
 
 /// 打印 `ListResult` 的辅助函数
-pub fn print_list_result(result: &ListResult) {
-    if result.subdirectories.is_empty() && result.files.is_empty() {
+pub fn print_list_result(paths: &[VaultPath]) {
+    if paths.is_empty() {
         println!("(empty)");
         return;
     }
-    // 先打印目录
-    for dir in &result.subdirectories {
-        println!("[{}/]", dir);
+
+    // 1. 分离文件和目录
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            dirs.push(path);
+        } else {
+            files.push(path);
+        }
     }
-    // 再打印文件
-    print_file_entries(&result.files);
+
+    // 2. 先打印目录
+    for dir_path in dirs {
+        // 从 "/a/b/c/" 中提取 "c"
+        let dir_name = dir_path.dir_name().unwrap_or("?");
+        println!("[{}/]", dir_name);
+    }
+
+    // 3. 再打印文件 (仅路径)
+    for file_path in files {
+        // 从 "/a/b/c.txt" 中提取 "c.txt"
+        let file_name = file_path.file_name().unwrap_or("?");
+        // 打印简化的输出，不带哈希
+        println!("  {}", file_name);
+    }
 }
 
 /// 递归地获取一个 vault 目录下的所有文件
 pub(crate) fn get_all_files_recursively(vault: &Vault, dir_path: &str) -> Result<Vec<FileEntry>, Box<dyn Error>> {
-    let mut all_files = Vec::new();
-    let mut dirs_to_scan = vec![dir_path.to_string()];
 
-    while let Some(current_dir) = dirs_to_scan.pop() {
-        let result = vault.list_by_path(&current_dir)?;
-        all_files.extend(result.files);
-        for subdir in result.subdirectories {
-            let full_subdir_path = Path::new(&current_dir).join(subdir).to_string_lossy().into_owned();
-            dirs_to_scan.push(full_subdir_path);
+    // 1. [修改] 将字符串路径转换为 VaultPath
+    let dir_vault_path = VaultPath::from(dir_path);
+    if !dir_vault_path.is_dir() {
+        // 如果用户传入了文件路径，则只返回该文件
+        return match vault.find_by_path(&dir_vault_path)? {
+            QueryResult::Found(entry) => Ok(vec![entry]),
+            QueryResult::NotFound => Ok(Vec::new()),
+        };
+    }
+
+    // 2. [修改] 调用新的 `list_all_recursive` API 获取哈希列表
+    let hashes = vault.list_all_recursive(&dir_vault_path)?;
+
+    // 3. [修改] 遍历哈希，查找完整的 FileEntry
+    let mut all_files = Vec::new();
+    for hash in hashes {
+        match vault.find_by_hash(&hash)? {
+            QueryResult::Found(entry) => all_files.push(entry),
+            QueryResult::NotFound => {
+                // 数据库不一致，但我们暂时忽略
+            }
         }
     }
     Ok(all_files)

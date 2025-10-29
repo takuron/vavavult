@@ -204,7 +204,8 @@ fn test_v2_add_file_and_extract_file_cycle() {
     let encrypted_hash = add_result.unwrap();
 
     // 3. 查询验证 (Assert Add)
-    let query_res = vault.find_by_name("/docs/hello.txt").unwrap();
+    // [修改] 使用 find_by_path 和 &VaultPath
+    let query_res = vault.find_by_path(&dest_path).unwrap();
     let entry = match query_res {
         QueryResult::Found(entry) => entry,
         QueryResult::NotFound => panic!("File not found by name after adding"),
@@ -216,6 +217,7 @@ fn test_v2_add_file_and_extract_file_cycle() {
 
     // 4. 提取 (Act)
     let extract_path = dir.path().join("extracted_hello.txt");
+    // [修改] extract_file 接受 &VaultHash, `encrypted_hash` 已经是该类型
     let extract_result = vault.extract_file(&encrypted_hash, &extract_path);
     assert!(extract_result.is_ok(), "extract_file should succeed");
 
@@ -228,6 +230,7 @@ fn test_v2_add_file_and_extract_file_cycle() {
     let internal_path = vault.root_path.join(DATA_SUBDIR).join(encrypted_hash.to_string());
     fs::write(internal_path, "corrupted data").unwrap(); // 故意损坏保险库中的文件
 
+    // [修改] extract_file 接受 &VaultHash
     let extract_fail_result = vault.extract_file(&encrypted_hash, &extract_path);
     assert!(extract_fail_result.is_err(), "Extract should fail on corrupted data");
 }
@@ -259,7 +262,8 @@ fn test_v2_add_file_paths_and_errors() {
     vault.add_file(&file2_path, &dir_path).unwrap();
 
     // 验证：文件应在 /docs/file2.txt
-    let query_res = vault.find_by_name("/docs/file2.txt").unwrap();
+    // [修改] 使用 find_by_path
+    let query_res = vault.find_by_path(&VaultPath::from("/docs/file2.txt")).unwrap();
     assert!(matches!(query_res, QueryResult::Found(_)));
 
     // 6. 错误：尝试将文件添加到无效的文件路径 (e.g. 包含 '..')
@@ -273,7 +277,8 @@ fn test_v2_add_file_paths_and_errors() {
     // add_file 内部调用 resolve_final_path，它会附加文件名
     let add_res = vault.add_file(&file3_path, &path_as_dir);
     assert!(add_res.is_ok());
-    assert!(matches!(vault.find_by_name("/looks/like/dir/file3.txt").unwrap(), QueryResult::Found(_)));
+    // [修改] 使用 find_by_path
+    assert!(matches!(vault.find_by_path(&VaultPath::from("/looks/like/dir/file3.txt")).unwrap(), QueryResult::Found(_)));
 }
 
 /// 测试 `move_file` 和 `rename_file_inplace`
@@ -290,35 +295,44 @@ fn test_v2_move_and_rename_file() {
     assert_ne!(hash, blocker_hash);
 
     // 2. 测试 `rename_file_inplace` (成功)
+    // [修改] 接受 &VaultHash
     let rename_res = vault.rename_file_inplace(&hash, "renamed.txt");
     assert!(rename_res.is_ok());
-    assert!(matches!(vault.find_by_name("/dir1/move_me.txt").unwrap(), QueryResult::NotFound));
-    assert!(matches!(vault.find_by_name("/dir1/renamed.txt").unwrap(), QueryResult::Found(_)));
+    // [修改] 使用 find_by_path
+    assert!(matches!(vault.find_by_path(&VaultPath::from("/dir1/move_me.txt")).unwrap(), QueryResult::NotFound));
+    assert!(matches!(vault.find_by_path(&VaultPath::from("/dir1/renamed.txt")).unwrap(), QueryResult::Found(_)));
 
     // 3. 测试 `rename_file_inplace` (错误：无效名称)
+    // [修改] 接受 &VaultHash
     let rename_err = vault.rename_file_inplace(&hash, "invalid/name.txt");
     assert!(matches!(rename_err.unwrap_err(), UpdateError::InvalidFilename(_)));
 
     // 4. 测试 `move_file` (成功：移动到目录)
+    // [修改] 接受 &VaultHash
     let move_to_dir_res = vault.move_file(&hash, &VaultPath::from("/dir2/"));
     assert!(move_to_dir_res.is_ok());
-    assert!(matches!(vault.find_by_name("/dir1/renamed.txt").unwrap(), QueryResult::NotFound));
+    // [修改] 使用 find_by_path
+    assert!(matches!(vault.find_by_path(&VaultPath::from("/dir1/renamed.txt")).unwrap(), QueryResult::NotFound));
     // 文件应保留其名称 "renamed.txt" 并移动到 /dir2/
-    let query_res = vault.find_by_name("/dir2/renamed.txt").unwrap();
+    // [修改] 使用 find_by_path
+    let query_res = vault.find_by_path(&VaultPath::from("/dir2/renamed.txt")).unwrap();
     match query_res {
         QueryResult::Found(entry) => assert_eq!(entry.sha256sum, hash),
         _ => panic!("File not found in new directory /dir2/"),
     }
 
     // 5. 测试 `move_file` (错误：路径冲突)
+    // [修改] 接受 &VaultHash
     let move_conflict_res = vault.move_file(&hash, &VaultPath::from("/dir2/blocker.txt"));
     assert!(matches!(move_conflict_res.unwrap_err(), UpdateError::DuplicateTargetPath(_)));
 
     // 6. 测试 `move_file` (成功：移动并重命名)
+    // [修改] 接受 &VaultHash
     let move_rename_res = vault.move_file(&hash, &VaultPath::from("/final_spot.txt"));
     assert!(move_rename_res.is_ok());
-    assert!(matches!(vault.find_by_name("/dir2/renamed.txt").unwrap(), QueryResult::NotFound));
-    assert!(matches!(vault.find_by_name("/final_spot.txt").unwrap(), QueryResult::Found(_)));
+    // [修改] 使用 find_by_path
+    assert!(matches!(vault.find_by_path(&VaultPath::from("/dir2/renamed.txt")).unwrap(), QueryResult::NotFound));
+    assert!(matches!(vault.find_by_path(&VaultPath::from("/final_spot.txt")).unwrap(), QueryResult::Found(_)));
 }
 
 /// 测试 `remove_file`
@@ -330,14 +344,16 @@ fn test_v2_remove_file() {
     let file_path = create_dummy_file(&dir, "delete_me.txt", "delete content");
 
     let hash = vault.add_file(&file_path, &VaultPath::from("/delete_me.txt")).unwrap();
-    let original_hash = match vault.find_by_hash(&hash.to_string()) {
+    // [修改] 使用 &VaultHash
+    let original_hash = match vault.find_by_hash(&hash) {
         Ok(QueryResult::Found(e)) => e.original_sha256sum,
         _ => panic!("File not found right after add"),
     };
 
     // 添加一些关联数据
-    vault.add_tag(&hash.to_string(), "temp").unwrap();
-    vault.set_file_metadata(&hash.to_string(), vavavult::common::metadata::MetadataEntry {
+    // [修改] 使用 &VaultHash
+    vault.add_tag(&hash, "temp").unwrap();
+    vault.set_file_metadata(&hash, vavavult::common::metadata::MetadataEntry {
         key: "custom_key".to_string(),
         value: "custom_value".to_string(),
     }).unwrap();
@@ -347,15 +363,18 @@ fn test_v2_remove_file() {
     assert!(internal_path.exists(), "Internal data file should exist");
 
     // 2. 删除 (Act)
+    // [修改] 接受 &VaultHash
     let remove_res = vault.remove_file(&hash);
     assert!(remove_res.is_ok());
 
     // 3. 验证 (Assert)
     // a. 数据库查询失败
-    assert!(matches!(vault.find_by_name("/delete_me.txt").unwrap(), QueryResult::NotFound));
-    assert!(matches!(vault.find_by_hash(&hash.to_string()).unwrap(), QueryResult::NotFound));
-    // 原始哈希也应该找不到了
-    //assert!(matches!(query::check_by_original_hash(&vault, &original_hash).unwrap(), QueryResult::NotFound));
+    // [修改] 使用 find_by_path
+    assert!(matches!(vault.find_by_path(&VaultPath::from("/delete_me.txt")).unwrap(), QueryResult::NotFound));
+    // [修改] 使用 &VaultHash
+    assert!(matches!(vault.find_by_hash(&hash).unwrap(), QueryResult::NotFound));
+    // [修改] 使用 find_by_original_hash
+    assert!(matches!(vault.find_by_original_hash(&original_hash).unwrap(), QueryResult::NotFound));
 
     // b. 物理文件被删除
     assert!(!internal_path.exists(), "Internal data file should be deleted");

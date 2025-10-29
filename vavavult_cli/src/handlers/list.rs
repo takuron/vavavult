@@ -1,6 +1,5 @@
-// [vavavult_cli/src/handlers/list.rs]
-
 use std::error::Error;
+use vavavult::file::VaultPath;
 use vavavult::vault::Vault;
 use crate::utils::{print_file_details, print_file_entries, print_list_result};
 
@@ -15,7 +14,7 @@ pub fn handle_list(
         // 按名称和标签模糊搜索
         (None, Some(keyword)) => {
             // [修改] 调用新的统一搜索函数
-            let found = vault.find_by_name_or_tag_fuzzy(&keyword)?;
+            let found = vault.find_by_keyword(&keyword)?;
             println!(
                 "Found {} file(s) matching '{}' (in name or tags):",
                 found.len(),
@@ -25,9 +24,11 @@ pub fn handle_list(
         }
         // 按路径列出
         (Some(p), None) => {
-            let result = vault.list_by_path(&p)?;
+            // [修改] 调用新的 list_by_path
+            let list_paths = vault.list_by_path(&VaultPath::from(p.as_str()))?;
             println!("Contents of '{}':", p);
-            print_list_result(&result);
+            // [修改] 调用新的 print_list_result
+            print_list_result(&list_paths);
             return Ok(());
         }
 
@@ -40,7 +41,8 @@ pub fn handle_list(
         _ => unreachable!(), // (Some, Some) 组合被 clap 的 "list_mode" group 阻止
     };
 
-    // 根据 `detail` 标志决定调用哪个打印函数 (此部分逻辑不变)
+    // (此部分不变)
+    // 根据 `detail` 标志决定调用哪个打印函数
     if detail {
         for file in &files {
             print_file_details(file);

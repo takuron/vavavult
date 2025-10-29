@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use rusqlite::{params, OptionalExtension, Connection};
 use crate::common::metadata::MetadataEntry;
-use crate::file::FileEntry;
+use crate::file::{FileEntry, PathError, VaultPath};
 use crate::utils::path::normalize_path_name;
 use crate::vault::Vault;
 use crate::common::hash::{VaultHash, HashParseError}; // 导入
@@ -26,12 +26,17 @@ pub enum QueryError {
     #[error("Failed to deserialize data: {0}")]
     DeserializationError(#[from] serde_json::Error),
 
-    // [新增] 添加一个错误变体来处理哈希解析失败
     #[error("Hash parsing error: {0}")]
     HashParse(#[from] HashParseError),
+
+    #[error("Path is not a directory: {0}")]
+    NotADirectory(String),
+
+    #[error("Path construction error: {0}")]
+    PathError(#[from] PathError),
 }
 
-/// [V2 修改] 一个内部辅助函数，用于从数据库中获取一个 V2 文件的完整信息。
+/// 一个内部辅助函数，用于从数据库中获取一个 V2 文件的完整信息。
 fn fetch_full_entry(
     conn: &Connection,
     sha256sum: &VaultHash,          // [修改]
@@ -40,13 +45,13 @@ fn fetch_full_entry(
     encrypt_password: &str    // 文件密码
 ) -> Result<FileEntry, QueryError> {
 
-    // [V2 修改] 查询标签 (外键现在是加密后哈希)
+    // 查询标签 (外键现在是加密后哈希)
     // `params![sha256sum]` 将自动工作 (ToSql)
     let mut tags_stmt = conn.prepare("SELECT tag FROM tags WHERE file_sha256sum = ?1")?;
     let tags = tags_stmt.query_map(params![sha256sum], |row| row.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
 
-    // [V2 修改] 查询元数据 (外键现在是加密后哈希)
+    // 查询元数据 (外键现在是加密后哈希)
     // `params![sha256sum]` 将自动工作 (ToSql)
     let mut meta_stmt = conn.prepare("SELECT meta_key, meta_value FROM metadata WHERE file_sha256sum = ?1")?;
     let metadata = meta_stmt.query_map(params![sha256sum], |row| {
@@ -56,11 +61,11 @@ fn fetch_full_entry(
         })
     })?.collect::<Result<Vec<MetadataEntry>, _>>()?;
 
-    // [V2 修改] 构建 V2 FileEntry
+    // 构建 V2 FileEntry
     Ok(FileEntry {
-        sha256sum: sha256sum.clone(), // [修改]
-        path: path.to_string(), // V2 使用 'path'
-        original_sha256sum: original_sha256sum.clone(), // [修改]
+        sha256sum: sha256sum.clone(),
+        path: path.to_string(),
+        original_sha256sum: original_sha256sum.clone(),
         encrypt_password: encrypt_password.to_string(),
         tags,
         metadata,
@@ -70,35 +75,29 @@ fn fetch_full_entry(
 
 
 /// 根据文件路径 (`&str`) 在保险库中查找文件。
-pub fn check_by_path(vault: &Vault, path: &str) -> Result<QueryResult, QueryError> {
-    // 在查询前规范化路径字符串
-    let normalized_path = normalize_path_name(path);
+pub fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResult, QueryError> {
+    // VaultPath 已经是规范化的
+    let normalized_path = path.as_str();
 
-    // 查询 V2 files 表
     let mut stmt = vault.database_connection.prepare(
         "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE path = ?1"
     )?;
 
-    // 使用规范化路径查询
     if let Some(res) = stmt.query_row(params![normalized_path], |row| {
         Ok((
-            row.get::<_, VaultHash>(0)?, 
+            row.get::<_, VaultHash>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, VaultHash>(2)?, 
+            row.get::<_, VaultHash>(2)?,
             row.get::<_, String>(3)?,
         ))
     }).optional()? {
-        // 解构 V2 字段
         let (sha256sum, path, original_sha256sum, encrypt_password) = res;
 
-        // 文件存储在 data 子目录中，文件名是其加密后哈希
         let expected_path = vault.root_path.join(crate::common::constants::DATA_SUBDIR).join(sha256sum.to_string());
         if !expected_path.exists() {
-            // 文件缺失错误仍然基于加密后哈希
             return Err(QueryError::FileMissing(sha256sum.to_string()));
         }
 
-        //  使用 V2 字段调用 fetch_full_entry
         let entry = fetch_full_entry(&vault.database_connection, &sha256sum, &path, &original_sha256sum, &encrypt_password)?;
         Ok(QueryResult::Found(entry))
     } else {
@@ -116,9 +115,9 @@ pub fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, Que
     // 参数现在是加密后哈希 (ToSql)
     if let Some(res) = stmt.query_row(params![hash], |row| {
         Ok((
-            row.get::<_, VaultHash>(0)?, 
+            row.get::<_, VaultHash>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, VaultHash>(2)?, 
+            row.get::<_, VaultHash>(2)?,
             row.get::<_, String>(3)?,
         ))
     }).optional()? {
@@ -194,7 +193,7 @@ fn normalize_query_path(path: &str) -> String {
     normalized
 }
 
-/// [V2 修改] A helper function to process a list of raw DB rows into a Vec of V2 FileEntry.
+/// 一个内部辅助函数，用于将原始 DB 行处理为 `FileEntry` 列表。
 fn process_rows_to_entries(
     vault: &Vault,
     // [修改] 行元组现在包含 V2 字段
@@ -215,7 +214,7 @@ fn process_rows_to_entries(
     Ok(entries)
 }
 
-/// [V2 修改] Lists all files in the vault.
+/// 列出保险库中的所有文件 (返回 FileEntry)。
 pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
     // [修改] 查询 V2 files 表
     let mut stmt = vault.database_connection.prepare(
@@ -238,62 +237,76 @@ pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
     process_rows_to_entries(vault, rows)
 }
 
-/// [V2 修改] Lists files and subdirectories directly under a given path string.
-pub fn list_by_path(vault: &Vault, path: &str) -> Result<ListResult, QueryError> {
-    let normalized_path = normalize_query_path(path);
-    let mut result = ListResult::default();
+/// 仅列出给定目录路径下的文件和子目录 (非递归)。
+pub(super) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultPath>, QueryError> {
+    // 1. 验证输入是否为目录
+    if !path.is_dir() {
+        return Err(QueryError::NotADirectory(path.as_str().to_string()));
+    }
+
+    let mut entries = Vec::new();
     let mut seen_subdirs = HashSet::new();
+    let base_path_str = path.as_str();
 
-    // [修改] 查询 V2 files 表的 'path' 字段
+    // 2. 查询所有以该路径为前缀的条目
     let mut stmt = vault.database_connection.prepare(
-        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE path LIKE ?1",
+        "SELECT path FROM files WHERE path LIKE ?1",
     )?;
-    let like_pattern = format!("{}%", normalized_path);
+    let like_pattern = format!("{}%", base_path_str);
+    let paths_iter = stmt.query_map(params![like_pattern], |row| row.get::<_, String>(0))?;
 
-    // [修改] 映射 V2 字段
-    let rows = stmt
-        .query_map(params![like_pattern], |row| {
-            Ok((
-                row.get::<_, VaultHash>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, VaultHash>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // 解构 V2 字段
-    for (sha256sum, file_path, original_sha256sum, encrypt_password) in rows {
-        // 使用 'file_path' 进行逻辑判断
-        let remainder = file_path.strip_prefix(&normalized_path).unwrap_or("");
+    for path_result in paths_iter {
+        let file_path_str = path_result?; // file_path_str is String
+        // 3. 计算相对路径
+        let remainder = file_path_str.strip_prefix(base_path_str).unwrap_or("");
 
         if remainder.contains('/') {
-            if let Some(subdir) = remainder.split('/').next() {
-                if !subdir.is_empty() && seen_subdirs.insert(subdir.to_string()) {
-                    result.subdirectories.push(subdir.to_string());
+            // 4. 这是一个子目录或更深层的文件
+            if let Some(subdir_name) = remainder.split('/').next() {
+                if !subdir_name.is_empty() {
+                    let dir_path = path.join(subdir_name)?;
+                    if seen_subdirs.insert(dir_path.clone()) {
+                        entries.push(dir_path);
+                    }
                 }
             }
-        } else {
-            // 使用 V2 字段调用 fetch_full_entry
-            let full_entry = fetch_full_entry(
-                &vault.database_connection,
-                &sha256sum,
-                &file_path,
-                &original_sha256sum,
-                &encrypt_password,
-            )?;
-            result.files.push(full_entry);
+        } else if !remainder.is_empty() {
+            // 5. 这是一个直属文件
+            // 将 String 转换为 &str 再调用 from
+            entries.push(VaultPath::from(file_path_str.as_str()));
         }
     }
 
-    //  按 V2 FileEntry.path 排序
-    result.files.sort_by(|a, b| a.path.cmp(&b.path));
-    result.subdirectories.sort();
-
-    Ok(result)
+    // 6. 排序
+    entries.sort();
+    Ok(entries)
 }
 
-/// Finds all files associated with a specific tag.
+/// 递归列出一个目录下的所有文件 (返回哈希)。
+/// (满足您的请求 2)
+pub(super) fn list_all_recursive(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultHash>, QueryError> {
+    // 1. 验证输入是否为目录
+    if !path.is_dir() {
+        return Err(QueryError::NotADirectory(path.as_str().to_string()));
+    }
+
+    // 2. [修正] 查询 sha256sum 字段
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT sha256sum FROM files WHERE path LIKE ?1",
+    )?;
+    let like_pattern = format!("{}%", path.as_str());
+
+    // 3. [修正] 映射结果为 VaultHash
+    let hashes = stmt
+        .query_map(params![like_pattern], |row| {
+            row.get::<_, VaultHash>(0) // 直接从 DB 读取 VaultHash
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(hashes)
+}
+
+/// 按特定标签查找文件。
 pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FileEntry>, QueryError> {
     // JOIN files f ... 选择 V2 字段
     let mut stmt = vault.database_connection.prepare(
@@ -317,16 +330,19 @@ pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FileEntry>, QueryErro
     process_rows_to_entries(vault, rows)
 }
 
-/// [V2 修改] Finds all files whose path contains a given pattern.
-pub fn find_by_name_fuzzy(vault: &Vault, name_pattern: &str) -> Result<Vec<FileEntry>, QueryError> {
-    // [修改] 查询 V2 files 表，按 'path' 字段进行 LIKE 匹配
-    let mut stmt = vault.database_connection.prepare(
-        "SELECT sha256sum, path, original_sha256sum, encrypt_password
-         FROM files WHERE path LIKE ?1",
-    )?;
-    let like_pattern = format!("%{}%", name_pattern);
+/// [新增] 统一的关键字模糊搜索 (不区分大小写)。
+pub(super) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
+    // 1. 准备不区分大小写的 LIKE 模式
+    let like_pattern = format!("%{}%", keyword.to_lowercase());
 
-    // [修改] 映射 V2 字段
+    // 2. 使用 LOWER() 函数进行不区分大小写的匹配
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT DISTINCT f.sha256sum, f.path, f.original_sha256sum, f.encrypt_password
+         FROM files f LEFT JOIN tags t ON f.sha256sum = t.file_sha256sum
+         WHERE LOWER(f.path) LIKE ?1 OR LOWER(t.tag) LIKE ?1",
+    )?;
+
+    // 3. 映射 V2 字段
     let rows = stmt
         .query_map(params![like_pattern], |row| {
             Ok((
@@ -338,6 +354,7 @@ pub fn find_by_name_fuzzy(vault: &Vault, name_pattern: &str) -> Result<Vec<FileE
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
+    // 4. 处理行
     process_rows_to_entries(vault, rows)
 }
 

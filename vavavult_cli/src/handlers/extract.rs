@@ -1,13 +1,16 @@
+// vavavult_cli/src/handlers/extract.rs
+
 use std::error::Error;
 use std::{fs};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use indicatif::{ProgressBar, ProgressStyle};
-use vavavult::vault::{FileEntry, Vault};
+use vavavult::file::{FileEntry, VaultPath}; // [新增] 导入 VaultPath
+use vavavult::vault::{QueryResult, Vault}; // [修改] 导入 QueryResult
 use rayon::prelude::*;
 use crate::utils::{confirm_action, determine_output_path, find_file_entry, get_all_files_recursively};
 
-// 更新主处理函数签名
+// 更新主处理函数签名 (不变)
 pub fn handle_extract(vault: Arc<Mutex<Vault>>, vault_name:Option<String>, sha256:Option<String>, dir_path:Option<String>, destination:PathBuf, output_name:Option<String>, delete:bool, recursive: bool, parallel: bool) -> Result<(), Box<dyn Error>> {
     if let Some(dir) = dir_path {
         if parallel {
@@ -20,7 +23,7 @@ pub fn handle_extract(vault: Arc<Mutex<Vault>>, vault_name:Option<String>, sha25
     }
 }
 
-/// 处理提取单个文件的逻辑
+/// 处理提取单个文件的逻辑 (不变)
 fn handle_extract_single_file(vault: Arc<Mutex<Vault>>, vault_name: Option<String>, sha256: Option<String>, destination: &Path, output_name: Option<String>, delete: bool) -> Result<(), Box<dyn Error>> {
     let mut vault_guard = vault.lock().unwrap();
     let file_entry = find_file_entry(&vault_guard, vault_name, sha256)?;
@@ -55,14 +58,20 @@ fn handle_extract_single_file(vault: Arc<Mutex<Vault>>, vault_name: Option<Strin
 fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: &str, destination: &Path, delete: bool, recursive: bool) -> Result<(), Box<dyn Error>> {
     println!("Scanning vault directory '{}' for extraction...", dir_path);
 
-    // 文件收集逻辑与之前相同
+    // [修改] 文件收集逻辑
     let files_to_extract = {
         let vault_guard = vault.lock().unwrap();
         if recursive {
             println!("(Recursive mode enabled)");
             get_all_files_recursively(&vault_guard, dir_path)?
         } else {
-            vault_guard.list_by_path(dir_path)?.files
+            // [修改] list_by_path 现在返回 Vec<VaultPath>
+            let paths = vault_guard.list_by_path(&VaultPath::from(dir_path))?;
+            paths.into_iter()
+                .filter(|p| p.is_file()) // 只保留文件
+                .filter_map(|p| vault_guard.find_by_path(&p).ok()) // 查找 FileEntry
+                .filter_map(|qr| match qr { QueryResult::Found(fe) => Some(fe), _ => None }) // 解包 Result
+                .collect()
         }
     };
 
@@ -73,7 +82,7 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
 
     println!("The following {} files will be extracted to {:?}", files_to_extract.len(), destination);
 
-    // --- 修改: 在打印前统一路径分隔符 ---
+    // (后续逻辑不变)
     for entry in &files_to_extract {
         let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
         let final_path = destination.join(relative_path);
@@ -89,7 +98,6 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
         return Ok(());
     }
 
-    // 带进度条的单线程执行
     let pb = ProgressBar::new(files_to_extract.len() as u64);
     pb.set_style(ProgressStyle::default_bar()
         .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
@@ -148,13 +156,20 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
 fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, destination: &Path, delete: bool, recursive: bool) -> Result<(), Box<dyn Error>> {
     println!("Scanning vault directory '{}' for extraction (parallel mode)...", dir_path);
 
+    // [修改] 文件收集逻辑
     let files_to_extract = {
         let vault_guard = vault.lock().unwrap();
         if recursive {
             println!("(Recursive mode enabled)");
             get_all_files_recursively(&vault_guard, dir_path)?
         } else {
-            vault_guard.list_by_path(dir_path)?.files
+            // [修改] 逻辑同 handle_extract_directory_single_threaded
+            let paths = vault_guard.list_by_path(&VaultPath::from(dir_path))?;
+            paths.into_iter()
+                .filter(|p| p.is_file())
+                .filter_map(|p| vault_guard.find_by_path(&p).ok())
+                .filter_map(|qr| match qr { QueryResult::Found(fe) => Some(fe), _ => None })
+                .collect()
         }
     };
 
@@ -165,7 +180,7 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
 
     println!("The following {} files will be extracted to {:?}", files_to_extract.len(), destination);
 
-    // --- 修改: 在打印前统一路径分隔符 ---
+    // (后续逻辑不变)
     for entry in &files_to_extract {
         let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
         let final_path = destination.join(relative_path);

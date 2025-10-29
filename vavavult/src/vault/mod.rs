@@ -1,6 +1,5 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 mod add;
 mod config;
@@ -15,10 +14,7 @@ pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add, EncryptedAddingFile};
 use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError, extract_file};
-use crate::vault::query::{
-    check_by_hash, check_by_path, find_by_name_and_tag_fuzzy, find_by_name_fuzzy,
-    find_by_name_or_tag_fuzzy, find_by_tag, list_all_files, list_by_path,
-};
+use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, list_all_files, list_all_recursive, list_by_path};
 use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
 pub use add::{AddFileError, AddTransaction};
@@ -78,168 +74,64 @@ impl Vault {
     /// is missing or corrupt, or if an incorrect password is provided for an
     /// encrypted vault.
     pub fn open_vault(root_path: &Path, password: Option<&str>) -> Result<Vault, OpenError> {
-        // [修改] 将 password 参数传递给后端的 open_vault 函数
         open_vault(root_path, password)
     }
 
-    /// Finds a file entry by its normalized path name.
-    ///
-    /// # Arguments
-    /// * `name` - The normalized path name of the file (e.g., "/documents/report.txt").
-    ///
-    /// # Returns
-    /// A `QueryResult` which is `Found(FileEntry)` if the file exists,
-    /// or `NotFound` otherwise.
-    ///
-    /// # Errors
-    /// Returns `QueryError` if there is a database issue or data inconsistency.
-    pub fn find_by_name(&self, name: &str) -> Result<QueryResult, QueryError> {
-        check_by_path(self, name)
+    // --- 查找 API (已清理) ---
+
+    /// 按 `VaultPath` 查找文件条目。
+    pub fn find_by_path(&self, path: &VaultPath) -> Result<QueryResult, QueryError> {
+        check_by_path(self, path)
     }
 
-    /// [EXPERIMENTAL] Finds a file entry using a VaultPath.
-    ///
-    /// This method requires the `experimental_paths` feature to be enabled.
-    ///
-    /// # Arguments
-    /// * `path` - A [`VaultPath`] representing the normalized path of the file.
-    ///
-    /// # Returns
-    /// A `QueryResult` which is `Found(FileEntry)` if the file exists,
-    /// or `NotFound` otherwise.
-    ///
-    /// # Errors
-    /// Returns `QueryError` if there is a database issue or data inconsistency.
-    #[cfg(feature = "experimental_paths")]
-    pub fn find_by_vault_path(&self, path: &VaultPath) -> Result<QueryResult, QueryError> {
-        // 桥接：调用现有的 &str API
-        // 注意：这依赖于 `VaultPath` 的 `as_str()` 实现
-        check_by_path(self, path.as_str())
+    /// [重构] (请求 1)
+    /// 按加密后内容的 `VaultHash` 查找文件条目。
+    pub fn find_by_hash(&self, hash: &VaultHash) -> Result<QueryResult, QueryError> {
+        check_by_hash(self, hash)
     }
 
-    /// Finds a file entry by its SHA256 hash.
-    ///
-    /// # Arguments
-    /// * `sha256sum` - The SHA256 hash of the file content.
-    ///
-    /// # Returns
-    /// A `QueryResult` which is `Found(FileEntry)` if the file exists,
-    /// or `NotFound` otherwise.
-    ///
-    /// # Errors
-    /// Returns `QueryError` if there is a database issue or data inconsistency.
-    pub fn find_by_hash(&self, sha256sum: &str) -> Result<QueryResult, QueryError> {
-        check_by_hash(self, &VaultHash::from_nopad_base64(sha256sum)?)
+    /// [新增] (请求 2)
+    /// 按原始 (未加密) 内容的 `VaultHash` 查找文件条目。
+    pub fn find_by_original_hash(&self, original_hash: &VaultHash) -> Result<QueryResult, QueryError> {
+        check_by_original_hash(self, original_hash)
     }
 
-    /// Lists all files currently stored in the vault.
-    ///
-    /// # Returns
-    /// A `Vec<FileEntry>` containing all files.
-    ///
-    /// # Errors
-    /// Returns `QueryError` if there is a database issue.
-    pub fn list_all(&self) -> Result<Vec<FileEntry>, QueryError> {
-        list_all_files(self)
-    }
-
-    /// Lists files and subdirectories directly under a given path.
-    ///
-    /// For example, querying for `/` might return files like `/a.txt` and `/b.txt`,
-    /// and subdirectories like `c`.
-    ///
-    /// # Arguments
-    /// * `path` - The path to list (e.g., "/", "/documents/").
-    ///
-    /// # Returns
-    /// A `ListResult` containing separate vectors for files and subdirectory names.
-    ///
-    /// # Errors
-    /// Returns `QueryError` if there is a database issue.
-    pub fn list_by_path(&self, path: &str) -> Result<ListResult, QueryError> {
-        list_by_path(self, path)
-    }
-
-    /// [EXPERIMENTAL] Lists files and subdirectories directly under a given VaultPath.
-    ///
-    /// This method requires the `experimental_paths` feature to be enabled.
-    ///
-    /// # Arguments
-    /// * `path` - The [`VaultPath`] to list. It must represent a directory (e.g., `/a/b/` or `/`).
-    ///   If a file path is provided, the contents of its parent directory will be listed.
-    ///
-    /// # Returns
-    /// A `ListResult` containing separate vectors for files and subdirectory names.
-    ///
-    /// # Errors
-    /// Returns `QueryError` if there is a database issue.
-    #[cfg(feature = "experimental_paths")]
-    pub fn list_by_vault_path(&self, path: &VaultPath) -> Result<ListResult, QueryError> {
-        // 桥接：调用现有的 &str API
-        // 注意：这依赖于 `VaultPath` 的 `as_str()` 实现
-        list_by_path(self, path.as_str())
-    }
-
-    /// Finds all files associated with a specific tag.
-    ///
-    /// # Arguments
-    /// * `tag` - The tag to search for.
-    ///
-    /// # Returns
-    /// A `Vec<FileEntry>` containing all matching files.
-    ///
-    /// # Errors
-    /// Returns `QueryError` if there is a database issue.
+    /// 查找与特定标签关联的所有文件。
     pub fn find_by_tag(&self, tag: &str) -> Result<Vec<FileEntry>, QueryError> {
         find_by_tag(self, tag)
     }
 
-    /// Finds all files whose name contains a given pattern (case-insensitive).
-    ///
-    /// # Arguments
-    /// * `name_pattern` - The substring to search for within file names.
-    ///
-    /// # Returns
-    /// A `Vec<FileEntry>` containing all matching files.
-    ///
-    /// # Errors
-    /// Returns `QueryError` if there is a database issue.
-    pub fn find_by_name_fuzzy(&self, name_pattern: &str) -> Result<Vec<FileEntry>, QueryError> {
-        find_by_name_fuzzy(self, name_pattern)
+    /// 按关键字模糊搜索 (不区分大小写)。
+    /// 搜索匹配 `keyword` 的文件路径或标签。
+    pub fn find_by_keyword(&self, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
+        find_by_keyword(self, keyword)
     }
 
-    /// Finds all files that have a specific tag and whose name contains a given pattern.
-    ///
-    /// # Arguments
-    /// * `name_pattern` - The substring to search for within file names.
-    /// * `tag` - The tag that files must be associated with.
-    ///
-    /// # Returns
-    /// A `Vec<FileEntry>` containing all matching files.
-    ///
-    /// # Errors
-    /// Returns `QueryError` if there is a database issue.
-    #[deprecated(since = "0.2.2", note = "Please use `find_by_name_or_tag_fuzzy` instead for combined searching")]
-    pub fn find_by_name_and_tag_fuzzy(
-        &self,
-        name_pattern: &str,
-        tag: &str,
-    ) -> Result<Vec<FileEntry>, QueryError> {
-        find_by_name_and_tag_fuzzy(self, name_pattern, tag)
+    // --- 列表 API (根据您的新请求重构) ---
+
+    /// 列出保险库中当前存储的所有文件 (返回完整条目)。
+    pub fn list_all(&self) -> Result<Vec<FileEntry>, QueryError> {
+        list_all_files(self)
     }
 
-    /// Finds all files whose name or tags contain a given pattern (case-insensitive).
+    /// 仅列出给定目录路径下的文件和子目录 (非递归)。
     ///
-    /// # Arguments
-    /// * `keyword` - The substring to search for within file names OR tags.
-    ///
-    /// # Returns
-    /// A `Vec<FileEntry>` containing all matching files.
+    /// 返回的 `Vec` 包含：
+    /// - 文件: `VaultPath` (例如 "/docs/file.txt")
+    /// - 子目录: `VaultPath` (例如 "/docs/images/")
     ///
     /// # Errors
-    /// Returns `QueryError` if there is a database issue.
-    pub fn find_by_name_or_tag_fuzzy(&self, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
-        find_by_name_or_tag_fuzzy(self, keyword)
+    /// 如果 `path` 不是目录 (例如 "/a.txt")，则返回 `QueryError::NotADirectory`。
+    pub fn list_by_path(&self, path: &VaultPath) -> Result<Vec<VaultPath>, QueryError> {
+        list_by_path(self, path)
+    }
+
+    /// 递归列出一个目录下的所有文件，并返回它们的 `VaultHash`。
+    ///
+    /// # Errors
+    /// 如果 `path` 不是目录 (例如 "/a.txt")，则返回 `QueryError::NotADirectory`。
+    pub fn list_all_recursive(&self, path: &VaultPath) -> Result<Vec<VaultHash>, QueryError> {
+        list_all_recursive(self, path)
     }
 
     /// [修改] 添加一个新文件到保险库 (便捷包装函数)。
@@ -332,14 +224,6 @@ impl Vault {
         touch_vault_update_time(self)
     }
 
-    /// Use `move_file` or `rename_file_inplace` instead.
-    #[deprecated(since="0.3.0", note="Use `move_file` or `rename_file_inplace` instead")]
-    pub fn rename_file(&mut self, sha256sum: &str, new_path: &VaultPath) -> Result<(), UpdateError> {
-        let hash = VaultHash::from_str(sha256sum)?;
-        rename_file(self, &hash, new_path)?;
-        touch_vault_update_time(self)
-    }
-
     /// Adds a single tag to a file.
     ///
     /// If the tag already exists on the file, the operation succeeds with no change.
@@ -350,8 +234,8 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
-    pub fn add_tag(&mut self, sha256sum: &str, tag: &str) -> Result<(), UpdateError> {
-        add_tag(self, &VaultHash::from_nopad_base64(sha256sum)?, tag)?;
+    pub fn add_tag(&mut self, hash:&VaultHash, tag: &str) -> Result<(), UpdateError> {
+        add_tag(self, hash, tag)?;
         touch_vault_update_time(self)
     }
 
@@ -365,8 +249,8 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
-    pub fn add_tags(&mut self, sha256sum: &str, tags: &[&str]) -> Result<(), UpdateError> {
-        add_tags(self, &VaultHash::from_nopad_base64(sha256sum)?, tags)?;
+    pub fn add_tags(&mut self, hash:&VaultHash, tags: &[&str]) -> Result<(), UpdateError> {
+        add_tags(self, hash, tags)?;
         touch_vault_update_time(self)
     }
 
@@ -380,8 +264,8 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
-    pub fn remove_tag(&mut self, sha256sum: &str, tag: &str) -> Result<(), UpdateError> {
-        remove_tag(self, &VaultHash::from_nopad_base64(sha256sum)?, tag)?;
+    pub fn remove_tag(&mut self, hash:&VaultHash, tag: &str) -> Result<(), UpdateError> {
+        remove_tag(self, hash, tag)?;
         touch_vault_update_time(self)
     }
 
@@ -392,8 +276,8 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
-    pub fn clear_tags(&mut self, sha256sum: &str) -> Result<(), UpdateError> {
-        clear_tags(self, &VaultHash::from_nopad_base64(sha256sum)?)?;
+    pub fn clear_tags(&mut self, hash:&VaultHash) -> Result<(), UpdateError> {
+        clear_tags(self, hash)?;
         touch_vault_update_time(self)
     }
 
@@ -411,10 +295,10 @@ impl Vault {
     /// Returns `UpdateError` if the file is not found.
     pub fn set_file_metadata(
         &mut self,
-        sha256sum: &str,
+        hash:&VaultHash,
         metadata: MetadataEntry,
     ) -> Result<(), UpdateError> {
-        set_file_metadata(self, &VaultHash::from_nopad_base64(sha256sum)?, metadata)?;
+        set_file_metadata(self, hash, metadata)?;
         touch_vault_update_time(self)
     }
 
@@ -428,8 +312,8 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
-    pub fn remove_file_metadata(&mut self, sha256sum: &str, key: &str) -> Result<(), UpdateError> {
-        remove_file_metadata(self, &VaultHash::from_nopad_base64(sha256sum)?, key)?;
+    pub fn remove_file_metadata(&mut self, hash:&VaultHash, key: &str) -> Result<(), UpdateError> {
+        remove_file_metadata(self, hash, key)?;
         touch_vault_update_time(self)
     }
 
