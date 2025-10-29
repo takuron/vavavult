@@ -40,12 +40,12 @@ fn handle_extract_single_file(vault: Arc<Mutex<Vault>>, vault_name: Option<Strin
     if let Some(parent) = final_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    vault_guard.extract_file(&file_entry.sha256sum, &final_path)?;
+    vault_guard.extract_file(&file_entry.sha256sum.to_string(), &final_path)?;
     println!("File extracted successfully.");
 
     if delete {
         println!("Deleting '{}' from vault...", file_entry.path);
-        vault_guard.remove_file(&file_entry.sha256sum)?;
+        vault_guard.remove_file(&file_entry.sha256sum.to_string())?;
         println!("File successfully deleted from vault.");
     }
     Ok(())
@@ -111,7 +111,7 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
         }
 
         let vault_guard = vault.lock().unwrap();
-        match vault_guard.extract_file(&entry.sha256sum, &final_path) {
+        match vault_guard.extract_file(&entry.sha256sum.to_string(), &final_path) {
             Ok(_) => {
                 success_count += 1;
             }
@@ -134,7 +134,7 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
         }
         for entry in files_to_extract.iter().filter(|_| fail_count == 0) { // Simple filter for now
             let mut vault_guard = vault.lock().unwrap();
-            match vault_guard.remove_file(&entry.sha256sum) {
+            match vault_guard.remove_file(&entry.sha256sum.to_string()) {
                 Ok(_) => println!("Deleted {}.", entry.path),
                 Err(e) => eprintln!("Failed to delete {}: {}", entry.path, e),
             }
@@ -206,7 +206,7 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
 
             let result = {
                 let vault_guard = vault_clone.lock().unwrap();
-                vault_guard.extract_file(&entry.sha256sum, &final_path)
+                vault_guard.extract_file(&entry.sha256sum.to_string(), &final_path)
             };
 
             if let Err(e) = &result {
@@ -246,7 +246,7 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
 
         for entry in successfully_extracted {
             let mut vault_guard = vault.lock().unwrap();
-            if let Err(e) = vault_guard.remove_file(&entry.sha256sum) {
+            if let Err(e) = vault_guard.remove_file(&entry.sha256sum.to_string()) {
                 pb_delete.println(format!("FAILED to delete {}: {}", entry.path, e));
             }
             pb_delete.inc(1);

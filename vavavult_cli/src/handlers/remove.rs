@@ -14,7 +14,7 @@ pub fn handle_remove(vault: &mut Vault, vault_name: Option<String>, sha256: Opti
     }
 
     println!("Deleting '{}' from vault...", file_entry.path);
-    vault.remove_file(&file_entry.sha256sum)?;
+    vault.remove_file(&file_entry.sha256sum.to_string())?;
     println!("File successfully deleted.");
     Ok(())
 }

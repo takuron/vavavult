@@ -30,6 +30,7 @@ pub use query::ListResult;
 pub use query::{QueryError, QueryResult};
 pub use remove::RemoveError;
 pub use update::UpdateError;
+use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
 
 /// Represents a vault loaded into memory.
@@ -130,7 +131,7 @@ impl Vault {
     /// # Errors
     /// Returns `QueryError` if there is a database issue or data inconsistency.
     pub fn find_by_hash(&self, sha256sum: &str) -> Result<QueryResult, QueryError> {
-        check_by_hash(self, sha256sum)
+        check_by_hash(self, &VaultHash::from_nopad_base64(sha256sum)?)
     }
 
     /// Lists all files currently stored in the vault.
@@ -260,7 +261,7 @@ impl Vault {
         &mut self,
         source_path: &Path,
         dest_path: &VaultPath,
-    ) -> Result<String, AddFileError> {
+    ) -> Result<VaultHash, AddFileError> {
         let result = add_file(self, source_path, dest_path)?;
 
         touch_vault_update_time(self)?;
@@ -313,7 +314,7 @@ impl Vault {
     /// 如果文件未找到，`new_path` 是一个目录路径 (`InvalidNewFilePath`)，
     /// 或者新路径已被占用，则返回 `UpdateError`。
     pub fn rename_file(&mut self, sha256sum: &str, new_path: &VaultPath) -> Result<(), UpdateError> {
-        rename_file(self, sha256sum, new_path)?;
+        rename_file(self, &VaultHash::from_nopad_base64(sha256sum)?, new_path)?;
         touch_vault_update_time(self)
     }
 
@@ -328,7 +329,7 @@ impl Vault {
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
     pub fn add_tag(&mut self, sha256sum: &str, tag: &str) -> Result<(), UpdateError> {
-        add_tag(self, sha256sum, tag)?;
+        add_tag(self, &VaultHash::from_nopad_base64(sha256sum)?, tag)?;
         touch_vault_update_time(self)
     }
 
@@ -343,7 +344,7 @@ impl Vault {
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
     pub fn add_tags(&mut self, sha256sum: &str, tags: &[&str]) -> Result<(), UpdateError> {
-        add_tags(self, sha256sum, tags)?;
+        add_tags(self, &VaultHash::from_nopad_base64(sha256sum)?, tags)?;
         touch_vault_update_time(self)
     }
 
@@ -358,7 +359,7 @@ impl Vault {
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
     pub fn remove_tag(&mut self, sha256sum: &str, tag: &str) -> Result<(), UpdateError> {
-        remove_tag(self, sha256sum, tag)?;
+        remove_tag(self, &VaultHash::from_nopad_base64(sha256sum)?, tag)?;
         touch_vault_update_time(self)
     }
 
@@ -370,7 +371,7 @@ impl Vault {
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
     pub fn clear_tags(&mut self, sha256sum: &str) -> Result<(), UpdateError> {
-        clear_tags(self, sha256sum)?;
+        clear_tags(self, &VaultHash::from_nopad_base64(sha256sum)?)?;
         touch_vault_update_time(self)
     }
 
@@ -391,7 +392,7 @@ impl Vault {
         sha256sum: &str,
         metadata: MetadataEntry,
     ) -> Result<(), UpdateError> {
-        set_file_metadata(self, sha256sum, metadata)?;
+        set_file_metadata(self, &VaultHash::from_nopad_base64(sha256sum)?, metadata)?;
         touch_vault_update_time(self)
     }
 
@@ -406,7 +407,7 @@ impl Vault {
     /// # Errors
     /// Returns `UpdateError` if the file is not found.
     pub fn remove_file_metadata(&mut self, sha256sum: &str, key: &str) -> Result<(), UpdateError> {
-        remove_file_metadata(self, sha256sum, key)?;
+        remove_file_metadata(self, &VaultHash::from_nopad_base64(sha256sum)?, key)?;
         touch_vault_update_time(self)
     }
 
@@ -427,7 +428,7 @@ impl Vault {
         sha256sum: &str,
         destination_path: &Path,
     ) -> Result<(), ExtractError> {
-        extract_file(self, sha256sum, destination_path)
+        extract_file(self, &VaultHash::from_nopad_base64(sha256sum)?, destination_path)
     }
 
     /// Removes a file from the vault.
@@ -441,7 +442,7 @@ impl Vault {
     /// # Errors
     /// Returns `RemoveError` if the file is not found or if there is a filesystem error.
     pub fn remove_file(&mut self, sha256sum: &str) -> Result<(), RemoveError> {
-        remove_file(self, sha256sum)?;
+        remove_file(self, &VaultHash::from_nopad_base64(sha256sum)?)?;
         touch_vault_update_time(self)?;
         Ok(())
     }

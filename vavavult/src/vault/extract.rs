@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::fs;
 use crate::common::constants::DATA_SUBDIR;
+use crate::common::hash::{HashParseError, VaultHash};
 use crate::file::encrypt::EncryptError;
 use crate::vault::{query, QueryResult, Vault};
 
@@ -17,12 +18,15 @@ pub enum ExtractError {
 
     #[error("File decryption failed: {0}")]
     DecryptionError(#[from] EncryptError),
+
+    #[error("Wrong hash error: {0}")]
+    HashPauseError(#[from] HashParseError),
 }
 
-/// [V2 修改] 从保险库中提取一个文件到目标路径。
+/// 从保险库中提取一个文件到目标路径。
 pub fn extract_file(
     vault: &Vault,
-    sha256sum: &str, // 这是加密后内容的 Base64 哈希
+    sha256sum: &VaultHash, // 这是加密后内容的 Base64 哈希
     destination_path: &Path,
 ) -> Result<(), ExtractError> {
     // 1. 在数据库中查找文件的完整信息 (query::check_by_hash 已更新为 V2)
@@ -34,7 +38,7 @@ pub fn extract_file(
     };
 
     // 2. [V2 修改] 确定源文件路径 (在 data/ 子目录下，文件名是哈希)
-    let internal_path = vault.root_path.join(DATA_SUBDIR).join(sha256sum);
+    let internal_path = vault.root_path.join(DATA_SUBDIR).join(sha256sum.to_string());
     if !internal_path.exists() {
         // 如果数据库记录存在但物理文件丢失，这是一个错误
         return Err(ExtractError::FileNotFound(sha256sum.to_string()));

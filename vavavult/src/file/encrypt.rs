@@ -3,6 +3,7 @@ use std::io::Cursor;
 use std::path::Path;
 use crate::file::stream_cipher;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use crate::common::hash::VaultHash;
 use crate::utils::random::generate_random_string;
 
 #[derive(Debug, thiserror::Error)]
@@ -70,7 +71,7 @@ pub fn encrypt_file(
     source_path: &Path,
     dest_path: &Path,
     password: &str,
-) -> Result<(String, String), EncryptError> { // [修改] 返回值
+) -> Result<(VaultHash, VaultHash), EncryptError> { // [修改] 返回值
     let mut source_file = File::open(source_path)?;
     let mut dest_file = File::create(dest_path)?;
 

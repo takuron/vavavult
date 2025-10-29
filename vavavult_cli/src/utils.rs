@@ -14,7 +14,7 @@ pub fn print_file_entries(files: &[FileEntry]) {
     }
     // 彻底移除表头
     for entry in files {
-        let short_hash = &entry.sha256sum[..12];
+        let short_hash = &entry.sha256sum.to_string()[..12];
         println!("{:<14} {}", short_hash, entry.path);
     }
 }

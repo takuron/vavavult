@@ -1,6 +1,6 @@
 use std::fmt;
 use std::str::FromStr;
-use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
+use base64::{Engine as _, engine::general_purpose::{STANDARD, STANDARD_NO_PAD}};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use rusqlite::{ToSql, types::{ValueRef, FromSqlResult, FromSqlError, Value}};
 use rusqlite::types::{FromSql, ToSqlOutput};
@@ -21,6 +21,8 @@ pub enum HashParseError {
     Base64(#[from] base64::DecodeError),
     #[error("Decoded data has invalid byte length: expected 32, got {0}")]
     InvalidByteLength(usize),
+    #[error("Hex decoding error: {0}")]
+    Hex(#[from] hex::FromHexError),
 }
 
 impl VaultHash {
@@ -71,6 +73,34 @@ impl VaultHash {
         let byte_array = bytes.clone().try_into()
             .map_err(|_| HashParseError::InvalidByteLength(bytes.len()))?;
 
+        Ok(Self(byte_array))
+    }
+
+    /// 将 32 字节的哈希编码为标准的、带填充的 Base64 字符串。
+    ///
+    /// 长度通常为 44 字节 (包括 `=` 填充)。
+    pub fn to_standard_base64(&self) -> String {
+        STANDARD.encode(self.0)
+    }
+
+    /// 从标准的、可能带填充的 Base64 字符串解码回 `VaultHash`。
+    pub fn from_standard_base64(s: &str) -> Result<Self, HashParseError> {
+        let bytes = STANDARD.decode(s)?;
+        let byte_array = bytes.clone().try_into()
+            .map_err(|_| HashParseError::InvalidByteLength(bytes.len()))?;
+        Ok(Self(byte_array))
+    }
+
+    /// 将 32 字节的哈希编码为小写的 Hex 字符串 (64 字节)。
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.0)
+    }
+
+    /// 从 Hex 字符串 (大小写不敏感) 解码回 `VaultHash`。
+    pub fn from_hex(s: &str) -> Result<Self, HashParseError> {
+        let bytes = hex::decode(s)?;
+        let byte_array = bytes.clone().try_into()
+            .map_err(|_| HashParseError::InvalidByteLength(bytes.len()))?;
         Ok(Self(byte_array))
     }
 }

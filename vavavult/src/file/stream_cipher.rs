@@ -4,7 +4,7 @@ use openssl::symm::{Cipher, Crypter, Mode};
 use openssl::rand;
 use openssl::pkcs5::pbkdf2_hmac;
 use openssl::hash::MessageDigest;
-use crate::utils::hash::encode_hash_to_base64;
+use crate::common::hash::VaultHash;
 
 // --- 常量定义 (保持不变) ---
 const SALT_LEN: usize = 16;
@@ -36,16 +36,16 @@ pub enum StreamCipherError {
 /// * `password` - 用于加密的用户密码。
 ///
 /// # Returns
-/// 成功时返回一个元组 `(String, String)`:
-/// * `String`: (encrypted_sha256) 加密文件流的哈希值 (Base64 编码, 43字节)。
-/// * `String`: (original_sha256) 原始文件内容的哈希值 (Base64 编码, 43字节)。
+/// 成功时返回一个元组 `(VaultHash, VaultHash)`:
+/// * `VaultHash`: (encrypted_sha256) 加密文件流的哈希值。
+/// * `VaultHash`: (original_sha256) 原始文件内容的哈希值。
 ///
 /// 失败时返回 `StreamCipherError`。
 pub fn stream_encrypt_and_hash(
     mut source: impl Read,
     mut destination: impl Write,
     password: &str,
-) -> Result<(String, String), StreamCipherError> { // [修改] 返回值
+) -> Result<(VaultHash, VaultHash), StreamCipherError> { // [修改] 返回值
     // --- 1. 初始化 ---
     // [修改] 我们需要两个哈希器
     let mut encrypted_hasher = Sha256::new(); // 用于加密后的流
@@ -116,15 +116,14 @@ pub fn stream_encrypt_and_hash(
     encrypted_hasher.update(&tag); 
 
     // --- 7. 完成 SHA256 计算 ---
-    let encrypted_sha256_bytes = encrypted_hasher.finalize();
-    let original_sha256_bytes = original_hasher.finalize();
+    let encrypted_sha256_bytes: [u8; 32] = encrypted_hasher.finalize().into();
+    let original_sha256_bytes: [u8; 32] = original_hasher.finalize().into();
 
-    // 使用新的 Base64 编码器
-    let encrypted_sha256_base64 = encode_hash_to_base64(&encrypted_sha256_bytes);
-    let original_sha256_base64 = encode_hash_to_base64(&original_sha256_bytes);
+    let encrypted_hash = VaultHash::new(<[u8; 32]>::from(encrypted_sha256_bytes));
+    let original_hash = VaultHash::new(original_sha256_bytes);
 
     // --- 9. 返回结果 ---
-    Ok((encrypted_sha256_base64, original_sha256_base64)) 
+    Ok((encrypted_hash, original_hash))
 }
 
 
@@ -201,7 +200,7 @@ mod tests {
     use sha2::{Digest, Sha256, Sha512};
     use tempfile::NamedTempFile;
 
-    /// [V2 修改] 一个完整的加密到解密的往返测试 (验证两个哈希)
+    /// 一个完整的加密到解密的往返测试 (验证两个哈希)
     #[test]
     fn test_encryption_decryption_roundtrip_success() {
         // --- 1. 准备阶段 (Arrange) ---
@@ -235,12 +234,12 @@ mod tests {
         // --- 3. 断言阶段 (Assert) ---
 
         // a. 手动计算 *加密后* 字节流的哈希，作为期望值
-        let expected_encrypted_hash_bytes = Sha256::digest(&encrypted_data_vec);
-        let expected_encrypted_hash = encode_hash_to_base64(&expected_encrypted_hash_bytes);
+        let expected_encrypted_hash_bytes: [u8; 32] = Sha256::digest(&encrypted_data_vec).into();
+        let expected_encrypted_hash = VaultHash::new(expected_encrypted_hash_bytes);
 
         // b. 手动计算 *原始* 字节流的哈希，作为期望值
-        let expected_original_hash_bytes = Sha256::digest(original_data);
-        let expected_original_hash = encode_hash_to_base64(&expected_original_hash_bytes);
+        let expected_original_hash_bytes: [u8; 32] = Sha256::digest(original_data).into();
+        let expected_original_hash = VaultHash::new(expected_original_hash_bytes);
 
         // c. 验证加密哈希
         assert_eq!(
@@ -291,7 +290,7 @@ mod tests {
         assert!(decrypted_data_vec.is_empty(), "Decrypted buffer should be empty on failure");
     }
 
-    // [V2 修改] 使用真实文件的往返测试
+    // 使用真实文件的往返测试
     #[test]
     fn test_file_encryption_decryption_roundtrip() {
         // --- 1. 准备阶段 (Arrange) ---
@@ -329,12 +328,12 @@ mod tests {
         let mut encrypted_file_content = Vec::new();
         let mut encrypted_read_handle_for_hash = encrypted_file.reopen().unwrap();
         encrypted_read_handle_for_hash.read_to_end(&mut encrypted_file_content).unwrap();
-        let expected_encrypted_hash_bytes = Sha256::digest(&encrypted_file_content);
-        let expected_encrypted_hash = encode_hash_to_base64(&expected_encrypted_hash_bytes);
+        let expected_encrypted_hash_bytes: [u8; 32] = Sha256::digest(&encrypted_file_content).into();
+        let expected_encrypted_hash = VaultHash::new(expected_encrypted_hash_bytes);
 
         // b. 手动计算原始文件的哈希
-        let expected_original_hash_bytes = Sha256::digest(original_data);
-        let expected_original_hash = encode_hash_to_base64(&expected_original_hash_bytes);
+        let expected_original_hash_bytes: [u8; 32] = Sha256::digest(original_data).into();
+        let expected_original_hash = VaultHash::new(expected_original_hash_bytes);
 
         // c. 验证加密哈希
         assert_eq!(encrypted_hash_from_func, expected_encrypted_hash, "Returned encrypted hash does not match actual encrypted hash");
@@ -349,7 +348,7 @@ mod tests {
         assert_eq!(decrypted_data, original_data, "Decrypted file content does not match original");
     }
 
-    // [V2 修改] 大文件测试 (此测试是黄金标准，验证 SHA512 一致性)
+    // 大文件测试 (此测试是黄金标准，验证 SHA512 一致性)
     #[test]
     fn test_large_media_file_cycle_consistency() {
         // ... (准备阶段不变) ...

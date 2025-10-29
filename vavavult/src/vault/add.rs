@@ -7,6 +7,7 @@ use crate::common::constants::{
     META_FILE_ADD_TIME, META_FILE_SIZE, META_FILE_UPDATE_TIME,
     META_SOURCE_MODIFIED_TIME, DATA_SUBDIR, TEMP_SUBDIR
 };
+use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
 use crate::file::encrypt::{EncryptError};
 use crate::file::path::VaultPath;
@@ -61,9 +62,9 @@ pub enum AddFileError {
 #[derive(Debug)]
 pub struct AddTransaction {
     /// 加密后内容的 Base64(unpadded) 哈希 (43 字节)
-    pub encrypted_sha256sum: String,
+    pub encrypted_sha256sum: VaultHash,
     /// 原始文件内容的 Base64(unpadded) 哈希 (43 字节)
-    pub original_sha256sum: String,
+    pub original_sha256sum: VaultHash,
     /// 指向临时加密文件的路径 (在 `temp/` 目录下)
     pub temp_path: PathBuf,
     /// 用于此文件加密的随机密码
@@ -171,18 +172,18 @@ pub fn commit_add_files(
         // 检查数据库中原始哈希是否重复
         if let QueryResult::Found(existing) = query::check_by_original_hash(vault, &entry.original_sha256sum)? {
             cleanup_temp_files(&files);
-            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.clone(),existing.path));
+            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing.path));
         }
         // 检查批内原始哈希是否重复
         if let Some(existing_path) = originals_in_batch.insert(&entry.original_sha256sum, &entry.path) {
             cleanup_temp_files(&files);
-            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.clone(),existing_path.clone()));
+            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing_path.clone()));
         }
 
         // 检查加密后哈希是否重复 (主键，理论上概率极低，但保险起见)
         if let QueryResult::Found(_) = query::check_by_hash(vault, &entry.sha256sum)? {
             cleanup_temp_files(&files);
-            return Err(AddFileError::DuplicateContent(entry.sha256sum.clone()));
+            return Err(AddFileError::DuplicateContent(entry.sha256sum.to_string()));
         }
     }
 
@@ -228,7 +229,7 @@ pub fn commit_add_files(
 }
 
 /// 快捷函数：添加一个新文件
-pub fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<String, AddFileError> {
+pub fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<VaultHash, AddFileError> {
     // 阶段 1: 加密 (此函数现在内部处理路径解析)
     let file_to_add = encrypt_file_for_add(vault, source_path, dest_path)?;
     let hash = file_to_add.file_entry.sha256sum.clone();
@@ -255,7 +256,7 @@ fn move_temp_files_to_data(
     _tx: &Transaction, // 接收事务引用以确保它在事务中被调用
 ) -> Result<(), AddFileError> {
     for file_to_add in files {
-        let final_path = data_dir_path.join(&file_to_add.file_entry.sha256sum);
+        let final_path = data_dir_path.join(&file_to_add.file_entry.sha256sum.to_string());
         // 如果重命名失败，显式返回 ReadError（std::io::Error）
         // 这将导致 tx.commit() 失败并触发回滚
         fs::rename(&file_to_add.temp_path, final_path)

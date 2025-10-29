@@ -14,7 +14,7 @@ pub fn handle_open(vault: &Vault, vault_name: Option<String>, sha256: Option<Str
 
     // 2. 提取文件到临时路径
     println!("Extracting a temporary copy to {:?}...", temp_path);
-    vault.extract_file(&file_entry.sha256sum, &temp_path)?;
+    vault.extract_file(&file_entry.sha256sum.to_string(), &temp_path)?;
 
     // 3. 使用 opener 打开文件
     match opener::open(&temp_path) {

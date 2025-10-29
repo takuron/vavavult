@@ -21,7 +21,7 @@ pub fn handle_file_rename(
 
     // 3. 调用核心库的 rename_file 方法
     //传递 &VaultPath 对象
-    match vault.rename_file(&file_entry.sha256sum, &new_vault_path) {
+    match vault.rename_file(&file_entry.sha256sum.to_string(), &new_vault_path) {
         Ok(_) => {
             println!("File successfully renamed.");
             Ok(())

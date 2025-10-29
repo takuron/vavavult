@@ -1,6 +1,7 @@
 use std::fs;
 use rusqlite::params;
 use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_UPDATE_TIME};
+use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
 use crate::file::VaultPath;
 use crate::utils::time::now_as_rfc3339_string;
@@ -31,22 +32,25 @@ pub enum UpdateError {
 
     #[error("Metadata key '{0}' not found.")]
     MetadataKeyNotFound(String),
+
+    #[error("Wrong hash error: {0}")]
+    HashPauseError(#[from] HashParseError),
 }
 
 /// 重命名保险库中的一个文件 (更新其路径)。
-pub fn rename_file(vault: &Vault, sha256sum: &str, new_path: &VaultPath) -> Result<(), UpdateError> {
+pub fn rename_file(vault: &Vault, sha256sum: &VaultHash, new_path: &VaultPath) -> Result<(), UpdateError> {
 
-    // [新增] 1. 验证 new_path 必须是一个文件路径
+    // 1. 验证 new_path 必须是一个文件路径
     if !new_path.is_file() {
         return Err(UpdateError::InvalidNewFilePath(new_path.as_str().to_string()));
     }
 
-    // [修改] 2. 规范化步骤被移除, 直接使用 as_str()
+    //  2. 规范化步骤被移除, 直接使用 as_str()
     let normalized_new_path = new_path.as_str();
 
-    // [修改] 3. 检查新路径是否已被占用 (逻辑不变，变量名更新)
+    // 3. 检查新路径是否已被占用 (逻辑不变，变量名更新)
     if let QueryResult::Found(entry) = query::check_by_name(vault, normalized_new_path)? {
-        return if entry.sha256sum != sha256sum {
+        return if &entry.sha256sum != sha256sum {
             Err(UpdateError::DuplicateFileName(normalized_new_path.to_string()))
         } else {
             Ok(()) // 路径未改变
@@ -60,7 +64,6 @@ pub fn rename_file(vault: &Vault, sha256sum: &str, new_path: &VaultPath) -> Resu
 
     // 5. 执行更新 (不变)
     let rows_affected = vault.database_connection.execute(
-        // [修改] "name" -> "path"
         "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
         params![normalized_new_path, sha256sum],
     )?;
@@ -77,7 +80,7 @@ pub fn rename_file(vault: &Vault, sha256sum: &str, new_path: &VaultPath) -> Resu
 // --- 文件标签操作 (不变) ---
 
 /// 为文件添加一个标签。
-pub fn add_tag(vault: &Vault, sha256sum: &str, tag: &str) -> Result<(), UpdateError> {
+pub fn add_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -90,7 +93,7 @@ pub fn add_tag(vault: &Vault, sha256sum: &str, tag: &str) -> Result<(), UpdateEr
 }
 
 /// 为文件批量添加多个标签。
-pub fn add_tags(vault: &mut Vault, sha256sum: &str, tags: &[&str]) -> Result<(), UpdateError> {
+pub fn add_tags(vault: &mut Vault, sha256sum: &VaultHash, tags: &[&str]) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -106,7 +109,7 @@ pub fn add_tags(vault: &mut Vault, sha256sum: &str, tags: &[&str]) -> Result<(),
 }
 
 /// 从文件中删除一个标签。
-pub fn remove_tag(vault: &Vault, sha256sum: &str, tag: &str) -> Result<(), UpdateError> {
+pub fn remove_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -119,7 +122,7 @@ pub fn remove_tag(vault: &Vault, sha256sum: &str, tag: &str) -> Result<(), Updat
 }
 
 /// 删除一个文件的所有标签。
-pub fn clear_tags(vault: &Vault, sha256sum: &str) -> Result<(), UpdateError> {
+pub fn clear_tags(vault: &Vault, sha256sum: &VaultHash) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -134,7 +137,7 @@ pub fn clear_tags(vault: &Vault, sha256sum: &str) -> Result<(), UpdateError> {
 // --- 文件元数据操作 (不变) ---
 
 /// Sets a metadata key-value pair for a file (upsert operation).
-pub fn set_file_metadata(vault: &Vault, sha256sum: &str, metadata:MetadataEntry) -> Result<(), UpdateError> {
+pub fn set_file_metadata(vault: &Vault, sha256sum: &VaultHash, metadata:MetadataEntry) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -149,7 +152,7 @@ pub fn set_file_metadata(vault: &Vault, sha256sum: &str, metadata:MetadataEntry)
 }
 
 /// Removes a metadata key-value pair from a file.
-pub fn remove_file_metadata(vault: &Vault, sha256sum: &str, key: &str) -> Result<(), UpdateError> {
+pub fn remove_file_metadata(vault: &Vault, sha256sum: &VaultHash, key: &str) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -231,7 +234,7 @@ pub(super) fn touch_vault_update_time(vault: &mut Vault) -> Result<(), UpdateErr
 }
 
 /// 更新文件的 `_vavavult_update_time` 元数据。 (不变)
-pub(super) fn touch_file_update_time(vault: &Vault, sha256sum: &str) -> Result<(), UpdateError> {
+pub(super) fn touch_file_update_time(vault: &Vault, sha256sum: &VaultHash) -> Result<(), UpdateError> {
     let now = now_as_rfc3339_string();
     let metadata_entry = MetadataEntry {
         key: META_FILE_UPDATE_TIME.to_string(),
