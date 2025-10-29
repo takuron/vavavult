@@ -14,7 +14,7 @@ use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add, EncryptedAddingFile};
 use crate::vault::create::{create_vault, open_vault};
-use crate::vault::extract::{ExtractError, extract_file};
+pub use crate::vault::extract::{ExtractError, extract_file};
 use crate::vault::query::{
     check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy,
     find_by_name_or_tag_fuzzy, find_by_tag, list_all_files, list_by_path,

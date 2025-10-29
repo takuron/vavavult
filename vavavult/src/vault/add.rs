@@ -127,7 +127,7 @@ pub fn encrypt_file_for_add(vault: &Vault, source_path: &Path,dest_path: &VaultP
     ];
 
     let file_entry = FileEntry {
-        path: dest_path.as_str().to_string(),
+        path: final_dest_path.as_str().to_string(),
         sha256sum: encrypted_sha256sum,
         original_sha256sum,
         encrypt_password: per_file_password,

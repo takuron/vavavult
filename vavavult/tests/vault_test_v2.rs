@@ -1,8 +1,13 @@
 use std::fs;
-use tempfile::tempdir;
-use vavavult::common::constants::{CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
+use std::io::Write;
+use std::path::PathBuf;
+use tempfile::{tempdir, TempDir};
+use vavavult::common::constants::{CURRENT_VAULT_VERSION, DATA_SUBDIR, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
 use vavavult::file::encrypt::verify_v2_encrypt_check;
-use vavavult::vault::{CreateError, OpenError, Vault};
+use vavavult::file::VaultPath;
+use vavavult::vault::{AddFileError, CreateError, OpenError, QueryResult, UpdateError, Vault};
+
+// ---  V2 文件库测试 ---
 
 /// 测试成功创建一个新的、非加密的 V2 保险库
 #[test]
@@ -165,4 +170,204 @@ fn test_v2_open_nonexistent_vault() {
 
     let result = Vault::open_vault(&non_existent_path, None);
     assert!(matches!(result.unwrap_err(), OpenError::PathNotFound(_)), "Should fail with PathNotFound"); //
+}
+
+// ---  V2 文件操作测试 (add, extract, move, remove) ---
+
+/// 辅助：创建一个带密码的 V2 保险库
+fn setup_encrypted_vault(dir: &TempDir) -> (PathBuf, Vault) {
+    let vault_path = dir.path().join("test-vault");
+    let vault = Vault::create_vault(&vault_path, "test-vault", Some("v2-password")).unwrap();
+    (vault_path, vault)
+}
+
+/// 辅助：在临时目录中创建一个虚拟文件
+fn create_dummy_file(dir: &TempDir, name: &str, content: &str) -> PathBuf {
+    let file_path = dir.path().join(name);
+    let mut file = fs::File::create(&file_path).unwrap();
+    file.write_all(content.as_bytes()).unwrap();
+    file_path
+}
+
+/// 测试核心的 添加-查询-提取 循环
+#[test]
+fn test_v2_add_file_and_extract_file_cycle() {
+    // 1. 准备
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let dummy_file_path = create_dummy_file(&dir, "hello.txt", "Hello V2 Integrity Check");
+
+    // 2. 添加 (Act)
+    let dest_path = VaultPath::from("/docs/hello.txt");
+    let add_result = vault.add_file(&dummy_file_path, &dest_path);
+    assert!(add_result.is_ok(), "add_file should succeed");
+    let encrypted_hash = add_result.unwrap();
+
+    // 3. 查询验证 (Assert Add)
+    let query_res = vault.find_by_name("/docs/hello.txt").unwrap();
+    let entry = match query_res {
+        QueryResult::Found(entry) => entry,
+        QueryResult::NotFound => panic!("File not found by name after adding"),
+    };
+    assert_eq!(entry.path, "/docs/hello.txt");
+    assert_eq!(entry.sha256sum, encrypted_hash);
+    assert!(!entry.original_sha256sum.to_string().is_empty()); // 确保原始哈希存在
+    assert_eq!(entry.metadata.len(), 4); // 4 个系统元数据
+
+    // 4. 提取 (Act)
+    let extract_path = dir.path().join("extracted_hello.txt");
+    let extract_result = vault.extract_file(&encrypted_hash, &extract_path);
+    assert!(extract_result.is_ok(), "extract_file should succeed");
+
+    // 5. 验证提取 (Assert Extract)
+    assert!(extract_path.exists(), "Extracted file should exist");
+    let extracted_content = fs::read_to_string(&extract_path).unwrap();
+    assert_eq!(extracted_content, "Hello V2 Integrity Check", "Extracted content must match original");
+
+    // 6. 测试提取完整性检查失败 (损坏文件)
+    let internal_path = vault.root_path.join(DATA_SUBDIR).join(encrypted_hash.to_string());
+    fs::write(internal_path, "corrupted data").unwrap(); // 故意损坏保险库中的文件
+
+    let extract_fail_result = vault.extract_file(&encrypted_hash, &extract_path);
+    assert!(extract_fail_result.is_err(), "Extract should fail on corrupted data");
+}
+
+/// 测试 `add_file` 的路径解析和错误处理
+#[test]
+fn test_v2_add_file_paths_and_errors() {
+    // 1. 准备
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file1_path = create_dummy_file(&dir, "file1.txt", "content1");
+    let file2_path = create_dummy_file(&dir, "file2.txt", "content2");
+
+    // 2. 添加 file1
+    let path1 = VaultPath::from("/file1.txt");
+    vault.add_file(&file1_path, &path1).unwrap();
+
+    // 3. 错误：添加 file2 到相同的路径
+    let res_dup_path = vault.add_file(&file2_path, &path1);
+    assert!(matches!(res_dup_path.unwrap_err(), AddFileError::DuplicateFileName(_)));
+
+    // 4. 错误：使用相同内容 (file1) 添加到不同路径
+    let path2 = VaultPath::from("/file1_copy.txt");
+    let res_dup_content = vault.add_file(&file1_path, &path2);
+    assert!(matches!(res_dup_content.unwrap_err(), AddFileError::DuplicateOriginalContent(_, _)));
+
+    // 5. 成功：添加 file2 到一个目录
+    let dir_path = VaultPath::from("/docs/");
+    vault.add_file(&file2_path, &dir_path).unwrap();
+
+    // 验证：文件应在 /docs/file2.txt
+    let query_res = vault.find_by_name("/docs/file2.txt").unwrap();
+    assert!(matches!(query_res, QueryResult::Found(_)));
+
+    // 6. 错误：尝试将文件添加到无效的文件路径 (e.g. 包含 '..')
+    // VaultPath::new 应该已经处理了规范化，但我们测试 add_file 的目标路径检查
+    let invalid_path = VaultPath::from("/a/b/../c.txt"); // 规范化为 /a/c.txt
+    assert!(vault.add_file(&file1_path, &invalid_path).is_err(), "Should fail, duplicate original content");
+
+    // 7. 错误：尝试添加一个文件，其目标路径不是文件
+    let path_as_dir = VaultPath::from("/looks/like/dir/");
+    let file3_path = create_dummy_file(&dir, "file3.txt", "content3");
+    // add_file 内部调用 resolve_final_path，它会附加文件名
+    let add_res = vault.add_file(&file3_path, &path_as_dir);
+    assert!(add_res.is_ok());
+    assert!(matches!(vault.find_by_name("/looks/like/dir/file3.txt").unwrap(), QueryResult::Found(_)));
+}
+
+/// 测试 `move_file` 和 `rename_file_inplace`
+#[test]
+fn test_v2_move_and_rename_file() {
+    // 1. 准备
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "move_me.txt", "move content");
+    let blocker_path = create_dummy_file(&dir, "blocker.txt", "blocker content");
+
+    let hash = vault.add_file(&file_path, &VaultPath::from("/dir1/move_me.txt")).unwrap();
+    let blocker_hash = vault.add_file(&blocker_path, &VaultPath::from("/dir2/blocker.txt")).unwrap();
+    assert_ne!(hash, blocker_hash);
+
+    // 2. 测试 `rename_file_inplace` (成功)
+    let rename_res = vault.rename_file_inplace(&hash, "renamed.txt");
+    assert!(rename_res.is_ok());
+    assert!(matches!(vault.find_by_name("/dir1/move_me.txt").unwrap(), QueryResult::NotFound));
+    assert!(matches!(vault.find_by_name("/dir1/renamed.txt").unwrap(), QueryResult::Found(_)));
+
+    // 3. 测试 `rename_file_inplace` (错误：无效名称)
+    let rename_err = vault.rename_file_inplace(&hash, "invalid/name.txt");
+    assert!(matches!(rename_err.unwrap_err(), UpdateError::InvalidFilename(_)));
+
+    // 4. 测试 `move_file` (成功：移动到目录)
+    let move_to_dir_res = vault.move_file(&hash, &VaultPath::from("/dir2/"));
+    assert!(move_to_dir_res.is_ok());
+    assert!(matches!(vault.find_by_name("/dir1/renamed.txt").unwrap(), QueryResult::NotFound));
+    // 文件应保留其名称 "renamed.txt" 并移动到 /dir2/
+    let query_res = vault.find_by_name("/dir2/renamed.txt").unwrap();
+    match query_res {
+        QueryResult::Found(entry) => assert_eq!(entry.sha256sum, hash),
+        _ => panic!("File not found in new directory /dir2/"),
+    }
+
+    // 5. 测试 `move_file` (错误：路径冲突)
+    let move_conflict_res = vault.move_file(&hash, &VaultPath::from("/dir2/blocker.txt"));
+    assert!(matches!(move_conflict_res.unwrap_err(), UpdateError::DuplicateTargetPath(_)));
+
+    // 6. 测试 `move_file` (成功：移动并重命名)
+    let move_rename_res = vault.move_file(&hash, &VaultPath::from("/final_spot.txt"));
+    assert!(move_rename_res.is_ok());
+    assert!(matches!(vault.find_by_name("/dir2/renamed.txt").unwrap(), QueryResult::NotFound));
+    assert!(matches!(vault.find_by_name("/final_spot.txt").unwrap(), QueryResult::Found(_)));
+}
+
+/// 测试 `remove_file`
+#[test]
+fn test_v2_remove_file() {
+    // 1. 准备
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "delete_me.txt", "delete content");
+
+    let hash = vault.add_file(&file_path, &VaultPath::from("/delete_me.txt")).unwrap();
+    let original_hash = match vault.find_by_hash(&hash.to_string()) {
+        Ok(QueryResult::Found(e)) => e.original_sha256sum,
+        _ => panic!("File not found right after add"),
+    };
+
+    // 添加一些关联数据
+    vault.add_tag(&hash.to_string(), "temp").unwrap();
+    vault.set_file_metadata(&hash.to_string(), vavavult::common::metadata::MetadataEntry {
+        key: "custom_key".to_string(),
+        value: "custom_value".to_string(),
+    }).unwrap();
+
+    // 验证物理文件存在
+    let internal_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
+    assert!(internal_path.exists(), "Internal data file should exist");
+
+    // 2. 删除 (Act)
+    let remove_res = vault.remove_file(&hash);
+    assert!(remove_res.is_ok());
+
+    // 3. 验证 (Assert)
+    // a. 数据库查询失败
+    assert!(matches!(vault.find_by_name("/delete_me.txt").unwrap(), QueryResult::NotFound));
+    assert!(matches!(vault.find_by_hash(&hash.to_string()).unwrap(), QueryResult::NotFound));
+    // 原始哈希也应该找不到了
+    //assert!(matches!(query::check_by_original_hash(&vault, &original_hash).unwrap(), QueryResult::NotFound));
+
+    // b. 物理文件被删除
+    assert!(!internal_path.exists(), "Internal data file should be deleted");
+
+    // c. 验证标签和元数据是否被级联删除 (通过查询空表)
+    let tag_count: i64 = vault.database_connection.query_row(
+        "SELECT COUNT(*) FROM tags WHERE file_sha256sum = ?1",
+        [&hash], |row| row.get(0)).unwrap();
+    assert_eq!(tag_count, 0, "Tags should be cascade deleted");
+
+    let meta_count: i64 = vault.database_connection.query_row(
+        "SELECT COUNT(*) FROM metadata WHERE file_sha256sum = ?1",
+        [&hash], |row| row.get(0)).unwrap();
+    assert_eq!(meta_count, 0, "Metadata should be cascade deleted");
 }
