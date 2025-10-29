@@ -441,8 +441,8 @@ impl Vault {
     ///
     /// # Errors
     /// Returns `RemoveError` if the file is not found or if there is a filesystem error.
-    pub fn remove_file(&mut self, sha256sum: &str) -> Result<(), RemoveError> {
-        remove_file(self, &VaultHash::from_nopad_base64(sha256sum)?)?;
+    pub fn remove_file(&mut self, hash: &VaultHash) -> Result<(), RemoveError> {
+        remove_file(self, hash)?;
         touch_vault_update_time(self)?;
         Ok(())
     }
