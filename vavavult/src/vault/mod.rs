@@ -301,42 +301,20 @@ impl Vault {
         Ok(())
     }
 
-    /// Renames a file identified by its SHA256 hash.
+    /// 重命名文件，使其指向一个新的 VaultPath。
     ///
-    /// This only changes the `name` property in the database. The physical file,
-    /// named by its hash, is not affected.
+    /// 这只改变数据库中的 `path` 属性。
     ///
     /// # Arguments
-    /// * `sha256sum` - The hash of the file to rename.
-    /// * `new_name` - The new name for the file.
+    /// * `sha256sum` - 要重命名的文件的哈希值。
+    /// * `new_path` - 文件的新 [`VaultPath`]。必须是一个文件路径 (e.g., `/a/b.txt`)。
     ///
     /// # Errors
-    /// Returns `UpdateError` if the file is not found or if the new name is already taken.
-    pub fn rename_file(&mut self, sha256sum: &str, new_name: &str) -> Result<(), UpdateError> {
-        rename_file(self, sha256sum, new_name)?;
+    /// 如果文件未找到，`new_path` 是一个目录路径 (`InvalidNewFilePath`)，
+    /// 或者新路径已被占用，则返回 `UpdateError`。
+    pub fn rename_file(&mut self, sha256sum: &str, new_path: &VaultPath) -> Result<(), UpdateError> {
+        rename_file(self, sha256sum, new_path)?;
         touch_vault_update_time(self)
-    }
-
-    /// [EXPERIMENTAL] Renames a file identified by its SHA256 hash to a new VaultPath.
-    ///
-    /// This method requires the `experimental_paths` feature to be enabled.
-    /// `new_path` must represent a file path.
-    ///
-    /// # Arguments
-    /// * `sha256sum` - The hash of the file to rename.
-    /// * `new_path` - The new [`VaultPath`] for the file. Must be a file path.
-    ///
-    /// # Errors
-    /// Returns `UpdateError` if the file is not found, if `new_path` is a directory
-    /// path (`InvalidNewFilePath`), or if the new name is already taken.
-    #[cfg(feature = "experimental_paths")]
-    pub fn rename_file_to_path(
-        &mut self,
-        sha256sum: &str,
-        new_path: &VaultPath,
-    ) -> Result<(), UpdateError> {
-        // 桥接：调用现有的 &str API
-        self.rename_file(sha256sum, new_path.as_str())
     }
 
     /// Adds a single tag to a file.

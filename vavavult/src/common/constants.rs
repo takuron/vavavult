@@ -5,7 +5,7 @@ pub const CURRENT_VAULT_VERSION: u32 = 2;
 /// 存储加密数据文件的子目录。
 pub const DATA_SUBDIR: &str = "data";
 /// 存储文件添加/提取期间的临时文件的子目录。
-pub const TEMP_SUBDIR: &str = "temp";
+pub const TEMP_SUBDIR: &str = ".temp";
 
 // --- 系统元数据的前缀 ---
 /// The prefix for all system-generated, reserved metadata keys.

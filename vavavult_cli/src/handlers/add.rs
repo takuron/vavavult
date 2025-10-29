@@ -1,11 +1,11 @@
 use std::error::Error;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use walkdir::WalkDir;
-use vavavult::vault::{AddFileError, Vault};
+use vavavult::vault::{Vault};
 use vavavult::file::VaultPath; // [新增] 确保导入
 use crate::utils::confirm_action;
 
