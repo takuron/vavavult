@@ -16,7 +16,7 @@ use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError, extract_file};
 use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, list_all_files, list_all_recursive, list_by_path};
 use crate::vault::remove::remove_file;
-use crate::vault::update::{add_tag, add_tags, clear_tags, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
+use crate::vault::update::{add_tag, add_tags, clear_tags, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
 pub use add::{AddFileError, AddTransaction};
 pub use config::VaultConfig;
 pub use create::{CreateError, OpenError};
@@ -366,6 +366,16 @@ impl Vault {
     pub fn set_name(&mut self, new_name: &str) -> Result<(), UpdateError> {
         set_name(self, new_name)?;
         touch_vault_update_time(self)
+    }
+    /// 从数据库获取保险库元数据。
+    ///
+    /// # Arguments
+    /// * `key` - The key of the metadata entry to retrieve.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` if the key is not found or on database issues.
+    pub fn get_vault_metadata(&self, key: &str) -> Result<String, UpdateError> {
+        get_vault_metadata(self, key)
     }
     /// Sets a metadata key-value pair for the vault itself.
     ///

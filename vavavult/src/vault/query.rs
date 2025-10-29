@@ -2,10 +2,8 @@ use std::collections::HashSet;
 use rusqlite::{params, OptionalExtension, Connection};
 use crate::common::metadata::MetadataEntry;
 use crate::file::{FileEntry, PathError, VaultPath};
-use crate::utils::path::normalize_path_name;
 use crate::vault::Vault;
-use crate::common::hash::{VaultHash, HashParseError}; // 导入
-use std::str::FromStr; // 导入 FromStr
+use crate::common::hash::{VaultHash, HashParseError};
 
 /// 查询操作的返回结果。(保持不变)
 #[derive(Debug)]
@@ -181,17 +179,17 @@ pub struct ListResult {
     pub subdirectories: Vec<String>,
 }
 
-/// A helper function to normalize a path string for querying. (保持不变)
+/// A helper function to normalize a path string for querying.
 /// Ensures it starts with "/" and, if not the root, ends with "/".
-fn normalize_query_path(path: &str) -> String {
-    let mut normalized = String::from("/");
-    let trimmed = path.trim_matches('/');
-    if !trimmed.is_empty() {
-        normalized.push_str(trimmed);
-        normalized.push('/');
-    }
-    normalized
-}
+// fn normalize_query_path(path: &str) -> String {
+//     let mut normalized = String::from("/");
+//     let trimmed = path.trim_matches('/');
+//     if !trimmed.is_empty() {
+//         normalized.push_str(trimmed);
+//         normalized.push('/');
+//     }
+//     normalized
+// }
 
 /// 一个内部辅助函数，用于将原始 DB 行处理为 `FileEntry` 列表。
 fn process_rows_to_entries(
@@ -361,60 +359,60 @@ pub(super) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEn
     process_rows_to_entries(vault, rows)
 }
 
-/// [V2 修改] Finds all files matching a path pattern and a specific tag.
-#[deprecated(since = "0.2.2", note = "Please use `find_by_name_or_tag_fuzzy` instead for combined searching")]
-pub fn find_by_name_and_tag_fuzzy(
-    vault: &Vault,
-    name_pattern: &str,
-    tag: &str,
-) -> Result<Vec<FileEntry>, QueryError> {
-    // [修改] JOIN files f ... 选择 V2 字段，按 'f.path' 匹配
-    let mut stmt = vault.database_connection.prepare(
-        "SELECT f.sha256sum, f.path, f.original_sha256sum, f.encrypt_password
-         FROM files f JOIN tags t ON f.sha256sum = t.file_sha256sum
-         WHERE f.path LIKE ?1 AND t.tag = ?2",
-    )?;
-    let like_pattern = format!("%{}%", name_pattern);
+// Finds all files matching a path pattern and a specific tag.
+// #[deprecated(since = "0.2.2", note = "Please use `find_by_name_or_tag_fuzzy` instead for combined searching")]
+// pub fn find_by_name_and_tag_fuzzy(
+//     vault: &Vault,
+//     name_pattern: &str,
+//     tag: &str,
+// ) -> Result<Vec<FileEntry>, QueryError> {
+//     // [修改] JOIN files f ... 选择 V2 字段，按 'f.path' 匹配
+//     let mut stmt = vault.database_connection.prepare(
+//         "SELECT f.sha256sum, f.path, f.original_sha256sum, f.encrypt_password
+//          FROM files f JOIN tags t ON f.sha256sum = t.file_sha256sum
+//          WHERE f.path LIKE ?1 AND t.tag = ?2",
+//     )?;
+//     let like_pattern = format!("%{}%", name_pattern);
+//
+//     // [修改] 映射 V2 字段
+//     let rows = stmt
+//         .query_map(params![like_pattern, tag], |row| {
+//             Ok((
+//                 row.get::<_, VaultHash>(0)?,
+//                 row.get::<_, String>(1)?,
+//                 row.get::<_, VaultHash>(2)?,
+//                 row.get::<_, String>(3)?,
+//             ))
+//         })?
+//         .collect::<Result<Vec<_>, _>>()?;
+//
+//     process_rows_to_entries(vault, rows)
+// }
 
-    // [修改] 映射 V2 字段
-    let rows = stmt
-        .query_map(params![like_pattern, tag], |row| {
-            Ok((
-                row.get::<_, VaultHash>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, VaultHash>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    process_rows_to_entries(vault, rows)
-}
-
-/// [V2 修改] Finds all files whose path OR tags contain a given pattern.
-pub fn find_by_name_or_tag_fuzzy(
-    vault: &Vault,
-    keyword: &str,
-) -> Result<Vec<FileEntry>, QueryError> {
-    // [修改] 使用 LEFT JOIN，匹配 f.path 或 t.tag
-    let mut stmt = vault.database_connection.prepare(
-        "SELECT DISTINCT f.sha256sum, f.path, f.original_sha256sum, f.encrypt_password
-         FROM files f LEFT JOIN tags t ON f.sha256sum = t.file_sha256sum
-         WHERE f.path LIKE ?1 OR t.tag LIKE ?1", // 匹配 f.path
-    )?;
-    let like_pattern = format!("%{}%", keyword);
-
-    // [修改] 映射 V2 字段
-    let rows = stmt
-        .query_map(params![like_pattern], |row| {
-            Ok((
-                row.get::<_, VaultHash>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, VaultHash>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    process_rows_to_entries(vault, rows)
-}
+// Finds all files whose path OR tags contain a given pattern.
+// pub fn find_by_name_or_tag_fuzzy(
+//     vault: &Vault,
+//     keyword: &str,
+// ) -> Result<Vec<FileEntry>, QueryError> {
+//     // [修改] 使用 LEFT JOIN，匹配 f.path 或 t.tag
+//     let mut stmt = vault.database_connection.prepare(
+//         "SELECT DISTINCT f.sha256sum, f.path, f.original_sha256sum, f.encrypt_password
+//          FROM files f LEFT JOIN tags t ON f.sha256sum = t.file_sha256sum
+//          WHERE f.path LIKE ?1 OR t.tag LIKE ?1", // 匹配 f.path
+//     )?;
+//     let like_pattern = format!("%{}%", keyword);
+//
+//     // [修改] 映射 V2 字段
+//     let rows = stmt
+//         .query_map(params![like_pattern], |row| {
+//             Ok((
+//                 row.get::<_, VaultHash>(0)?,
+//                 row.get::<_, String>(1)?,
+//                 row.get::<_, VaultHash>(2)?,
+//                 row.get::<_, String>(3)?,
+//             ))
+//         })?
+//         .collect::<Result<Vec<_>, _>>()?;
+//
+//     process_rows_to_entries(vault, rows)
+// }

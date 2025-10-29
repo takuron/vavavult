@@ -1,8 +1,5 @@
 use std::error::Error;
-use chrono::{Local};
 use vavavult::vault::Vault;
-use vavavult::common::constants::{META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
-use vavavult::utils::time as time_utils;
 
 /// 处理 vault 重命名命令
 pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), Box<dyn Error>> {

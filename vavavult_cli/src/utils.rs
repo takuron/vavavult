@@ -6,7 +6,7 @@ use std::str::FromStr;
 use chrono::Local;
 use vavavult::common::hash::VaultHash;
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{ListResult, QueryResult, Vault};
+use vavavult::vault::{QueryResult, Vault};
 use vavavult::utils::time as time_utils;
 
 /// 打印 `FileEntry` 列表的辅助函数 (简化版)

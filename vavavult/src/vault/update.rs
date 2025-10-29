@@ -146,34 +146,34 @@ pub fn rename_file_inplace(
     Ok(())
 }
 
-/// [废弃] 重命名保险库中的一个文件 (更新其路径)。
-#[deprecated(since="0.3.0", note="Use `move_file` or `rename_file_inplace` instead")]
-pub fn rename_file(vault: &Vault, sha256sum: &VaultHash, new_path: &VaultPath) -> Result<(), UpdateError> {
-    // 保留旧实现，但标记为废弃
-    if !new_path.is_file() {
-        return Err(UpdateError::InvalidTargetFilePath(new_path.as_str().to_string()));
-    }
-    let normalized_new_path = new_path.as_str();
-    if let QueryResult::Found(entry) = query::check_by_path(vault, new_path)? {
-        return if &entry.sha256sum != sha256sum {
-            Err(UpdateError::DuplicateTargetPath(normalized_new_path.to_string()))
-        } else {
-            Ok(())
-        }
-    }
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-    }
-    let rows_affected = vault.database_connection.execute(
-        "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
-        params![normalized_new_path, sha256sum],
-    )?;
-    if rows_affected == 0 {
-        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-    }
-    touch_file_update_time(vault, sha256sum)?;
-    Ok(())
-}
+// [废弃] 重命名保险库中的一个文件 (更新其路径)。
+// #[deprecated(since="0.3.0", note="Use `move_file` or `rename_file_inplace` instead")]
+// pub fn rename_file(vault: &Vault, sha256sum: &VaultHash, new_path: &VaultPath) -> Result<(), UpdateError> {
+//     // 保留旧实现，但标记为废弃
+//     if !new_path.is_file() {
+//         return Err(UpdateError::InvalidTargetFilePath(new_path.as_str().to_string()));
+//     }
+//     let normalized_new_path = new_path.as_str();
+//     if let QueryResult::Found(entry) = query::check_by_path(vault, new_path)? {
+//         return if &entry.sha256sum != sha256sum {
+//             Err(UpdateError::DuplicateTargetPath(normalized_new_path.to_string()))
+//         } else {
+//             Ok(())
+//         }
+//     }
+//     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
+//         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
+//     }
+//     let rows_affected = vault.database_connection.execute(
+//         "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
+//         params![normalized_new_path, sha256sum],
+//     )?;
+//     if rows_affected == 0 {
+//         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
+//     }
+//     touch_file_update_time(vault, sha256sum)?;
+//     Ok(())
+// }
 
 
 // --- 文件标签操作 (不变) ---

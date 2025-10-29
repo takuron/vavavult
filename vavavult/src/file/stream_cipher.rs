@@ -202,7 +202,6 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     // 导入新的编码器
-    use crate::utils::hash::encode_hash_to_base64;
     use sha2::{Digest, Sha256, Sha512};
     use tempfile::NamedTempFile;
 

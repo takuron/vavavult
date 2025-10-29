@@ -45,7 +45,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       # 第四步：构建项目
+#      - name: Build
+#        run: cargo build --verbose --workspace
       - name: Build
+        # [修改] 设置 RUSTFLAGS 环境变量以允许所有警告
+        env:
+          RUSTFLAGS: "-A warnings"
         run: cargo build --verbose --workspace
 
       # 第五步：运行测试
