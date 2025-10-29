@@ -3,9 +3,10 @@ use std::io::Write;
 use std::path::PathBuf;
 use tempfile::{tempdir, TempDir};
 use vavavult::common::constants::{CURRENT_VAULT_VERSION, DATA_SUBDIR, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
+use vavavult::common::hash::VaultHash; // 导入 VaultHash
 use vavavult::file::encrypt::verify_v2_encrypt_check;
 use vavavult::file::VaultPath;
-use vavavult::vault::{AddFileError, CreateError, OpenError, QueryResult, UpdateError, Vault};
+use vavavult::vault::{AddFileError, CreateError, OpenError, QueryError, QueryResult, UpdateError, Vault}; // 导入 QueryError
 
 // ---  V2 文件库测试 ---
 
@@ -271,7 +272,7 @@ fn test_v2_add_file_paths_and_errors() {
     let invalid_path = VaultPath::from("/a/b/../c.txt"); // 规范化为 /a/c.txt
     assert!(vault.add_file(&file1_path, &invalid_path).is_err(), "Should fail, duplicate original content");
 
-    // 7. 错误：尝试添加一个文件，其目标路径不是文件
+    // 7. [已修正] 测试：添加文件到目录，路径应被正确解析
     let path_as_dir = VaultPath::from("/looks/like/dir/");
     let file3_path = create_dummy_file(&dir, "file3.txt", "content3");
     // add_file 内部调用 resolve_final_path，它会附加文件名
@@ -389,4 +390,183 @@ fn test_v2_remove_file() {
         "SELECT COUNT(*) FROM metadata WHERE file_sha256sum = ?1",
         [&hash], |row| row.get(0)).unwrap();
     assert_eq!(meta_count, 0, "Metadata should be cascade deleted");
+}
+
+
+// --- [新增] V2 搜索与列表测试 ---
+
+/// 辅助：创建一个包含用于搜索/列表测试的数据的保险库
+///
+/// 结构:
+/// - /file_A.txt (tags: "tag1", "common") -> hash_a
+/// - /docs/file_B.md (tags: "tag2", "common") -> hash_b
+/// - /docs/deep/file_C.jpg (tags: "tag3", "image") -> hash_c
+/// - /another_file.txt (tags: "tag1", "unique") -> hash_d
+fn setup_vault_with_search_data(dir: &TempDir) -> (Vault, VaultHash, VaultHash, VaultHash, VaultHash) {
+    let (_vault_path, mut vault) = setup_encrypted_vault(dir);
+
+    let file_a_path = create_dummy_file(dir, "file_A.txt", "content A");
+    let file_b_path = create_dummy_file(dir, "file_B.md", "content B");
+    let file_c_path = create_dummy_file(dir, "file_C.jpg", "content C");
+    let file_d_path = create_dummy_file(dir, "another_file.txt", "content D");
+
+    let hash_a = vault.add_file(&file_a_path, &VaultPath::from("/file_A.txt")).unwrap();
+    let hash_b = vault.add_file(&file_b_path, &VaultPath::from("/docs/file_B.md")).unwrap();
+    let hash_c = vault.add_file(&file_c_path, &VaultPath::from("/docs/deep/file_C.jpg")).unwrap();
+    let hash_d = vault.add_file(&file_d_path, &VaultPath::from("/another_file.txt")).unwrap();
+
+    vault.add_tag(&hash_a, "tag1").unwrap();
+    vault.add_tag(&hash_a, "common").unwrap();
+    vault.add_tag(&hash_b, "tag2").unwrap();
+    vault.add_tag(&hash_b, "common").unwrap();
+    vault.add_tag(&hash_c, "tag3").unwrap();
+    vault.add_tag(&hash_c, "image").unwrap();
+    vault.add_tag(&hash_d, "tag1").unwrap();
+    vault.add_tag(&hash_d, "unique").unwrap();
+
+    (vault, hash_a, hash_b, hash_c, hash_d)
+}
+
+/// 测试 `list_all`
+#[test]
+fn test_v2_list_all() {
+    let dir = tempdir().unwrap();
+    let (vault, ..) = setup_vault_with_search_data(&dir);
+
+    let all_files = vault.list_all().unwrap();
+    assert_eq!(all_files.len(), 4);
+}
+
+/// 测试 `find_by_tag`
+#[test]
+fn test_v2_find_by_tag() {
+    let dir = tempdir().unwrap();
+    let (vault, hash_a, hash_b, _hash_c, hash_d) = setup_vault_with_search_data(&dir);
+
+    // 查找 "tag1"
+    let tag1_files = vault.find_by_tag("tag1").unwrap();
+    assert_eq!(tag1_files.len(), 2);
+    assert!(tag1_files.iter().any(|f| f.sha256sum == hash_a));
+    assert!(tag1_files.iter().any(|f| f.sha256sum == hash_d));
+
+    // 查找 "common"
+    let common_files = vault.find_by_tag("common").unwrap();
+    assert_eq!(common_files.len(), 2);
+    assert!(common_files.iter().any(|f| f.sha256sum == hash_a));
+    assert!(common_files.iter().any(|f| f.sha256sum == hash_b));
+
+    // 查找不存在的
+    let none_files = vault.find_by_tag("nonexistent").unwrap();
+    assert_eq!(none_files.len(), 0);
+}
+
+/// 测试 `find_by_keyword` (不区分大小写，搜索路径和标签)
+#[test]
+fn test_v2_find_by_keyword() {
+    let dir = tempdir().unwrap();
+    let (vault, hash_a, hash_b, hash_c, hash_d) = setup_vault_with_search_data(&dir);
+
+    // 搜索 "file" (匹配路径)
+    let file_files = vault.find_by_keyword("file").unwrap();
+    assert_eq!(file_files.len(), 4);
+
+    // 搜索 "tag1" (匹配标签)
+    let tag1_files = vault.find_by_keyword("tag1").unwrap();
+    assert_eq!(tag1_files.len(), 2);
+
+    // 搜索 "docs" (匹配路径)
+    let docs_files = vault.find_by_keyword("docs").unwrap();
+    assert_eq!(docs_files.len(), 2);
+    assert!(docs_files.iter().any(|f| f.sha256sum == hash_b));
+    assert!(docs_files.iter().any(|f| f.sha256sum == hash_c));
+
+    // 搜索 "image" (匹配标签)
+    let image_files = vault.find_by_keyword("image").unwrap();
+    assert_eq!(image_files.len(), 1);
+    assert_eq!(image_files[0].sha256sum, hash_c);
+
+    // 搜索 "deep" (匹配路径)
+    let deep_files = vault.find_by_keyword("deep").unwrap();
+    assert_eq!(deep_files.len(), 1);
+    assert_eq!(deep_files[0].sha256sum, hash_c);
+
+    // 搜索 "unique" (匹配标签)
+    let unique_files = vault.find_by_keyword("unique").unwrap();
+    assert_eq!(unique_files.len(), 1);
+    assert_eq!(unique_files[0].sha256sum, hash_d);
+
+    // 搜索 "A.TXT" (测试不区分大小写)
+    let case_files = vault.find_by_keyword("A.TXT").unwrap();
+    assert_eq!(case_files.len(), 1);
+    assert_eq!(case_files[0].sha256sum, hash_a);
+
+    // 搜索 "nonexistent"
+    let none_files = vault.find_by_keyword("nonexistent").unwrap();
+    assert_eq!(none_files.len(), 0);
+}
+
+/// 测试 `list_by_path` (返回 `Vec<VaultPath>`)
+#[test]
+fn test_v2_list_by_path() {
+    let dir = tempdir().unwrap();
+    let (vault, ..) = setup_vault_with_search_data(&dir);
+
+    // 1. 列表 /
+    let mut root_list = vault.list_by_path(&VaultPath::from("/")).unwrap();
+    root_list.sort(); // 确保顺序
+    assert_eq!(root_list, vec![
+        VaultPath::from("/another_file.txt"),
+        VaultPath::from("/docs/"),
+        VaultPath::from("/file_A.txt"),
+    ]);
+
+    // 2. 列表 /docs/
+    let mut docs_list = vault.list_by_path(&VaultPath::from("/docs/")).unwrap();
+    docs_list.sort();
+    assert_eq!(docs_list, vec![
+        VaultPath::from("/docs/deep/"),
+        VaultPath::from("/docs/file_B.md"),
+    ]);
+
+    // 3. 列表 /docs/deep/
+    let mut deep_list = vault.list_by_path(&VaultPath::from("/docs/deep/")).unwrap();
+    deep_list.sort();
+    assert_eq!(deep_list, vec![
+        VaultPath::from("/docs/deep/file_C.jpg"),
+    ]);
+
+    // 4. 列表空目录 /nonexistent/
+    let empty_list = vault.list_by_path(&VaultPath::from("/nonexistent/")).unwrap();
+    assert!(empty_list.is_empty());
+
+    // 5. 错误：在文件上调用
+    let file_path = VaultPath::from("/file_A.txt");
+    let file_list_err = vault.list_by_path(&file_path);
+    assert!(matches!(file_list_err, Err(QueryError::NotADirectory(_))));
+}
+
+/// 测试 `list_all_recursive` (返回 `Vec<VaultHash>`)
+#[test]
+fn test_v2_list_all_recursive() {
+    let dir = tempdir().unwrap();
+    let (vault, hash_a, hash_b, hash_c, hash_d) = setup_vault_with_search_data(&dir);
+
+    // 1. 递归列表 /docs/
+    let mut docs_hashes = vault.list_all_recursive(&VaultPath::from("/docs/")).unwrap();
+    docs_hashes.sort();
+    let mut expected_docs_hashes = vec![hash_b, hash_c];
+    expected_docs_hashes.sort();
+    assert_eq!(docs_hashes, expected_docs_hashes);
+
+    // 2. 递归列表 / (全部)
+    let mut all_hashes = vault.list_all_recursive(&VaultPath::from("/")).unwrap();
+    all_hashes.sort();
+    let mut expected_all_hashes = vec![hash_a, hash_b, hash_c, hash_d];
+    expected_all_hashes.sort();
+    assert_eq!(all_hashes, expected_all_hashes);
+
+    // 3. 错误：在文件上调用
+    let file_path = VaultPath::from("/file_A.txt");
+    let file_list_err = vault.list_all_recursive(&file_path);
+    assert!(matches!(file_list_err, Err(QueryError::NotADirectory(_))));
 }

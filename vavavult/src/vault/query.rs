@@ -264,7 +264,10 @@ pub(super) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultP
             // 4. 这是一个子目录或更深层的文件
             if let Some(subdir_name) = remainder.split('/').next() {
                 if !subdir_name.is_empty() {
-                    let dir_path = path.join(subdir_name)?;
+                    // 我们必须将 subdir_name 作为一个目录段 (带斜杠) 来连接
+                    let subdir_segment = format!("{}/", subdir_name);
+                    let dir_path = path.join(&subdir_segment)?; // 例如 "/".join("docs/")
+
                     if seen_subdirs.insert(dir_path.clone()) {
                         entries.push(dir_path);
                     }
