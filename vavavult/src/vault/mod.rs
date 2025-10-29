@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 mod add;
 mod config;
@@ -19,10 +20,7 @@ use crate::vault::query::{
     find_by_name_or_tag_fuzzy, find_by_tag, list_all_files, list_by_path,
 };
 use crate::vault::remove::remove_file;
-use crate::vault::update::{
-    add_tag, add_tags, clear_tags, remove_file_metadata, remove_tag, remove_vault_metadata,
-    rename_file, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time,
-};
+use crate::vault::update::{add_tag, add_tags, clear_tags, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
 pub use add::{AddFileError, AddTransaction};
 pub use config::VaultConfig;
 pub use create::{CreateError, OpenError};
@@ -267,6 +265,7 @@ impl Vault {
         touch_vault_update_time(self)?;
         Ok(result)
     }
+
     /// 阶段 1: 加密一个文件并准备用于批量提交 (线程安全)。
     ///
     /// # Arguments
@@ -302,19 +301,42 @@ impl Vault {
         Ok(())
     }
 
-    /// 重命名文件，使其指向一个新的 VaultPath。
+    /// Moves a file within the vault to a new path.
     ///
-    /// 这只改变数据库中的 `path` 属性。
+    /// - If `target_path` is a directory (e.g., `/new/dir/`), the file is moved there, keeping its original filename.
+    /// - If `target_path` is a file (e.g., `/new/dir/new_name.txt`), the file is moved and renamed.
     ///
     /// # Arguments
-    /// * `sha256sum` - 要重命名的文件的哈希值。
-    /// * `new_path` - 文件的新 [`VaultPath`]。必须是一个文件路径 (e.g., `/a/b.txt`)。
+    /// * `sha256sum` - The hash of the file to move (URL-safe Base64 string).
+    /// * `target_path` - The target [`VaultPath`].
     ///
     /// # Errors
-    /// 如果文件未找到，`new_path` 是一个目录路径 (`InvalidNewFilePath`)，
-    /// 或者新路径已被占用，则返回 `UpdateError`。
-    pub fn rename_file(&mut self, hash: &VaultHash, new_path: &VaultPath) -> Result<(), UpdateError> {
-        rename_file(self, hash, new_path)?;
+    /// Returns `UpdateError` if the file is not found, the target path is invalid or already taken by another file.
+    pub fn move_file(&mut self, hash: &VaultHash, target_path: &VaultPath) -> Result<(), UpdateError> {
+        move_file(self, &hash, target_path)?;
+        touch_vault_update_time(self)
+    }
+
+    /// Renames a file in its current directory.
+    ///
+    /// Only changes the filename part, keeping the parent directory the same.
+    ///
+    /// # Arguments
+    /// * `sha256sum` - The hash of the file to rename (URL-safe Base64 string).
+    /// * `new_filename` - The new filename (must not contain path separators `/` or `\`).
+    ///
+    /// # Errors
+    /// Returns `UpdateError` if the file is not found, the `new_filename` is invalid, or the resulting path is already taken.
+    pub fn rename_file_inplace(&mut self, hash: &VaultHash, new_filename: &str) -> Result<(), UpdateError> {
+        rename_file_inplace(self, &hash, new_filename)?;
+        touch_vault_update_time(self)
+    }
+
+    /// Use `move_file` or `rename_file_inplace` instead.
+    #[deprecated(since="0.3.0", note="Use `move_file` or `rename_file_inplace` instead")]
+    pub fn rename_file(&mut self, sha256sum: &str, new_path: &VaultPath) -> Result<(), UpdateError> {
+        let hash = VaultHash::from_str(sha256sum)?;
+        rename_file(self, &hash, new_path)?;
         touch_vault_update_time(self)
     }
 

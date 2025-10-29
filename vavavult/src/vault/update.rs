@@ -3,7 +3,7 @@ use rusqlite::params;
 use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_UPDATE_TIME};
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
-use crate::file::VaultPath;
+use crate::file::{PathError, VaultPath};
 use crate::utils::time::now_as_rfc3339_string;
 use crate::vault::{query, QueryResult, Vault};
 
@@ -15,14 +15,20 @@ pub enum UpdateError {
     #[error("Database update error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
+    #[error("VaultPath error: {0}")]
+    VaultPathError(#[from] PathError),
+
     #[error("File with SHA256 '{0}' not found.")]
     FileNotFound(String),
 
-    #[error("The new path '{0}' is already taken.")]
-    DuplicateFileName(String),
+    #[error("Target path '{0}' is already taken.")]
+    DuplicateTargetPath(String),
 
-    #[error("The new path '{0}' is invalid: must be a file path, not a directory path.")]
-    InvalidNewFilePath(String),
+    #[error("Target path '{0}' is invalid: must be a file path, not a directory path.")]
+    InvalidTargetFilePath(String),
+
+    #[error("Invalid new filename '{0}': contains path separators.")]
+    InvalidFilename(String),
 
     #[error("Failed to write configuration file: {0}")]
     ConfigWriteError(#[from] std::io::Error),
@@ -37,41 +43,134 @@ pub enum UpdateError {
     HashPauseError(#[from] HashParseError),
 }
 
-/// 重命名保险库中的一个文件 (更新其路径)。
-pub fn rename_file(vault: &Vault, sha256sum: &VaultHash, new_path: &VaultPath) -> Result<(), UpdateError> {
+/// 移动保险库中的文件到新的路径。
+///
+/// - 如果 `target_path` 是目录 (e.g., `/new/dir/`), 文件会被移动到该目录下，保持原文件名。
+/// - 如果 `target_path` 是文件 (e.g., `/new/dir/new_name.txt`), 文件会被移动并重命名。
+pub fn move_file(
+    vault: &Vault,
+    hash: &VaultHash,
+    target_path: &VaultPath
+) -> Result<(), UpdateError> {
+    // 1. 查找原始文件信息
+    let original_entry = match query::check_by_hash(vault, hash)? {
+        QueryResult::Found(entry) => entry,
+        QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
+    };
+    let original_vault_path = VaultPath::from(original_entry.path.as_str());
 
-    // 1. 验证 new_path 必须是一个文件路径
-    if !new_path.is_file() {
-        return Err(UpdateError::InvalidNewFilePath(new_path.as_str().to_string()));
-    }
+    // 2. 解析最终的目标路径
+    let final_path = if target_path.is_dir() {
+        // 目标是目录，保留原文件名
+        let original_filename = original_vault_path.file_name()
+            .ok_or_else(|| UpdateError::VaultPathError(PathError::JoinToFile))?; // 理论上不会发生，因为库中存的总是文件路径
+        target_path.join(original_filename)?
+    } else {
+        // 目标是文件，直接使用
+        target_path.clone()
+    };
 
-    //  2. 规范化步骤被移除, 直接使用 as_str()
-    let normalized_new_path = new_path.as_str();
-
-    // 3. 检查新路径是否已被占用 (逻辑不变，变量名更新)
-    if let QueryResult::Found(entry) = query::check_by_name(vault, normalized_new_path)? {
-        return if &entry.sha256sum != sha256sum {
-            Err(UpdateError::DuplicateFileName(normalized_new_path.to_string()))
+    // 3. 检查目标路径是否已被占用 (排除自身)
+    if let QueryResult::Found(existing) = query::check_by_name(vault, final_path.as_str())? {
+        if existing.sha256sum != *hash {
+            return Err(UpdateError::DuplicateTargetPath(final_path.as_str().to_string()));
         } else {
-            Ok(()) // 路径未改变
+            // 目标路径就是当前路径，无需操作
+            return Ok(());
         }
     }
 
-    // 4. 检查文件是否存在 (不变)
+    // 4. 执行更新
+    let rows_affected = vault.database_connection.execute(
+        "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
+        params![final_path.as_str(), hash],
+    )?;
+
+    if rows_affected == 0 {
+        // 理论上不应该发生，因为我们已经确认文件存在
+        return Err(UpdateError::FileNotFound(hash.to_string()));
+    }
+
+    touch_file_update_time(vault, hash)?;
+    Ok(())
+}
+
+/// 在当前目录下重命名文件。
+///
+/// 只改变文件的名称部分，保持其父目录不变。
+pub fn rename_file_inplace(
+    vault: &Vault,
+    hash: &VaultHash,
+    new_filename: &str
+) -> Result<(), UpdateError> {
+    // 1. 验证新文件名不包含路径分隔符
+    if new_filename.contains('/') || new_filename.contains('\\') {
+        return Err(UpdateError::InvalidFilename(new_filename.to_string()));
+    }
+
+    // 2. 查找原始文件信息
+    let original_entry = match query::check_by_hash(vault, hash)? {
+        QueryResult::Found(entry) => entry,
+        QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
+    };
+    let original_vault_path = VaultPath::from(original_entry.path.as_str());
+
+    // 3. 获取父目录
+    let parent_dir = original_vault_path.parent()?; // parent() 返回 Result
+
+    // 4. 构建新的文件路径
+    let final_path = parent_dir.join(new_filename)?;
+
+    // 5. 检查目标路径是否已被占用 (排除自身)
+    if let QueryResult::Found(existing) = query::check_by_name(vault, final_path.as_str())? {
+        if existing.sha256sum != *hash {
+            return Err(UpdateError::DuplicateTargetPath(final_path.as_str().to_string()));
+        } else {
+            // 目标路径就是当前路径，无需操作
+            return Ok(());
+        }
+    }
+
+    // 6. 执行更新
+    let rows_affected = vault.database_connection.execute(
+        "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
+        params![final_path.as_str(), hash],
+    )?;
+
+    if rows_affected == 0 {
+        // 理论上不应该发生
+        return Err(UpdateError::FileNotFound(hash.to_string()));
+    }
+
+    touch_file_update_time(vault, hash)?;
+    Ok(())
+}
+
+/// [废弃] 重命名保险库中的一个文件 (更新其路径)。
+#[deprecated(since="0.3.0", note="Use `move_file` or `rename_file_inplace` instead")]
+pub fn rename_file(vault: &Vault, sha256sum: &VaultHash, new_path: &VaultPath) -> Result<(), UpdateError> {
+    // 保留旧实现，但标记为废弃
+    if !new_path.is_file() {
+        return Err(UpdateError::InvalidTargetFilePath(new_path.as_str().to_string()));
+    }
+    let normalized_new_path = new_path.as_str();
+    if let QueryResult::Found(entry) = query::check_by_name(vault, normalized_new_path)? {
+        return if &entry.sha256sum != sha256sum {
+            Err(UpdateError::DuplicateTargetPath(normalized_new_path.to_string()))
+        } else {
+            Ok(())
+        }
+    }
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
-
-    // 5. 执行更新 (不变)
     let rows_affected = vault.database_connection.execute(
         "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
         params![normalized_new_path, sha256sum],
     )?;
-
     if rows_affected == 0 {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
-
     touch_file_update_time(vault, sha256sum)?;
     Ok(())
 }
