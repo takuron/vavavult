@@ -12,7 +12,7 @@ pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), Box<
     Ok(())
 }
 
-pub fn handle_status(vault: &Vault) -> Result<(), Box<dyn Error>> {
+pub fn handle_status(_vault: &Vault) -> Result<(), Box<dyn Error>> {
     // 核心库现在直接提供 list_all_files 方法
     // let file_count = vault.list_all()?.len();
     // 
