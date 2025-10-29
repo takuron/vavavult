@@ -40,7 +40,7 @@ fn handle_extract_single_file(vault: Arc<Mutex<Vault>>, vault_name: Option<Strin
     if let Some(parent) = final_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    vault_guard.extract_file(&file_entry.sha256sum.to_string(), &final_path)?;
+    vault_guard.extract_file(&file_entry.sha256sum, &final_path)?;
     println!("File extracted successfully.");
 
     if delete {
@@ -111,7 +111,7 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
         }
 
         let vault_guard = vault.lock().unwrap();
-        match vault_guard.extract_file(&entry.sha256sum.to_string(), &final_path) {
+        match vault_guard.extract_file(&entry.sha256sum, &final_path) {
             Ok(_) => {
                 success_count += 1;
             }
@@ -206,7 +206,7 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
 
             let result = {
                 let vault_guard = vault_clone.lock().unwrap();
-                vault_guard.extract_file(&entry.sha256sum.to_string(), &final_path)
+                vault_guard.extract_file(&entry.sha256sum, &final_path)
             };
 
             if let Err(e) = &result {

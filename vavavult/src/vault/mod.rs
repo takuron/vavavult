@@ -313,8 +313,8 @@ impl Vault {
     /// # Errors
     /// 如果文件未找到，`new_path` 是一个目录路径 (`InvalidNewFilePath`)，
     /// 或者新路径已被占用，则返回 `UpdateError`。
-    pub fn rename_file(&mut self, sha256sum: &str, new_path: &VaultPath) -> Result<(), UpdateError> {
-        rename_file(self, &VaultHash::from_nopad_base64(sha256sum)?, new_path)?;
+    pub fn rename_file(&mut self, hash: &VaultHash, new_path: &VaultPath) -> Result<(), UpdateError> {
+        rename_file(self, hash, new_path)?;
         touch_vault_update_time(self)
     }
 
@@ -425,10 +425,10 @@ impl Vault {
     /// is a filesystem error during the copy.
     pub fn extract_file(
         &self,
-        sha256sum: &str,
+        hash: &VaultHash,
         destination_path: &Path,
     ) -> Result<(), ExtractError> {
-        extract_file(self, &VaultHash::from_nopad_base64(sha256sum)?, destination_path)
+        extract_file(self, hash, destination_path)
     }
 
     /// Removes a file from the vault.
