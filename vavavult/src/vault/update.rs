@@ -71,7 +71,7 @@ pub fn move_file(
     };
 
     // 3. 检查目标路径是否已被占用 (排除自身)
-    if let QueryResult::Found(existing) = query::check_by_name(vault, final_path.as_str())? {
+    if let QueryResult::Found(existing) = query::check_by_path(vault, final_path.as_str())? {
         if existing.sha256sum != *hash {
             return Err(UpdateError::DuplicateTargetPath(final_path.as_str().to_string()));
         } else {
@@ -122,7 +122,7 @@ pub fn rename_file_inplace(
     let final_path = parent_dir.join(new_filename)?;
 
     // 5. 检查目标路径是否已被占用 (排除自身)
-    if let QueryResult::Found(existing) = query::check_by_name(vault, final_path.as_str())? {
+    if let QueryResult::Found(existing) = query::check_by_path(vault, final_path.as_str())? {
         if existing.sha256sum != *hash {
             return Err(UpdateError::DuplicateTargetPath(final_path.as_str().to_string()));
         } else {
@@ -154,7 +154,7 @@ pub fn rename_file(vault: &Vault, sha256sum: &VaultHash, new_path: &VaultPath) -
         return Err(UpdateError::InvalidTargetFilePath(new_path.as_str().to_string()));
     }
     let normalized_new_path = new_path.as_str();
-    if let QueryResult::Found(entry) = query::check_by_name(vault, normalized_new_path)? {
+    if let QueryResult::Found(entry) = query::check_by_path(vault, normalized_new_path)? {
         return if &entry.sha256sum != sha256sum {
             Err(UpdateError::DuplicateTargetPath(normalized_new_path.to_string()))
         } else {

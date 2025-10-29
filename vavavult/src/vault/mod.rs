@@ -16,7 +16,7 @@ use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add, Encryp
 use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError, extract_file};
 use crate::vault::query::{
-    check_by_hash, check_by_name, find_by_name_and_tag_fuzzy, find_by_name_fuzzy,
+    check_by_hash, check_by_path, find_by_name_and_tag_fuzzy, find_by_name_fuzzy,
     find_by_name_or_tag_fuzzy, find_by_tag, list_all_files, list_by_path,
 };
 use crate::vault::remove::remove_file;
@@ -94,7 +94,7 @@ impl Vault {
     /// # Errors
     /// Returns `QueryError` if there is a database issue or data inconsistency.
     pub fn find_by_name(&self, name: &str) -> Result<QueryResult, QueryError> {
-        check_by_name(self, name)
+        check_by_path(self, name)
     }
 
     /// [EXPERIMENTAL] Finds a file entry using a VaultPath.
@@ -114,7 +114,7 @@ impl Vault {
     pub fn find_by_vault_path(&self, path: &VaultPath) -> Result<QueryResult, QueryError> {
         // 桥接：调用现有的 &str API
         // 注意：这依赖于 `VaultPath` 的 `as_str()` 实现
-        check_by_name(self, path.as_str())
+        check_by_path(self, path.as_str())
     }
 
     /// Finds a file entry by its SHA256 hash.

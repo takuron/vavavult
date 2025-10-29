@@ -159,7 +159,7 @@ pub fn commit_add_files(
         let entry = &file_to_add.file_entry;
 
         // 检查数据库中路径是否重复
-        if let QueryResult::Found(_) = query::check_by_name(vault, &entry.path)? {
+        if let QueryResult::Found(_) = query::check_by_path(vault, &entry.path)? {
             cleanup_temp_files(&files);
             return Err(AddFileError::DuplicateFileName(entry.path.clone()));
         }
