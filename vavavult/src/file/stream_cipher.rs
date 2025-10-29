@@ -132,7 +132,7 @@ pub fn stream_decrypt(
     mut source: impl Read + Seek,
     mut destination: impl Write,
     password: &str,
-) -> Result<(), StreamCipherError> {
+) -> Result<VaultHash, StreamCipherError> {
     // ... (此函数的实现与 V1 相同，无需更改) ...
     // --- 步骤 1-3 和之前一样：读取头部/尾部，派生密钥 ---
     let mut salt = [0u8; SALT_LEN];
@@ -180,14 +180,20 @@ pub fn stream_decrypt(
 
     // --- 6. 完成解密与验证 ---
     let mut final_chunk = vec![0; cipher.block_size()];
+    // [修改] finalize 会进行 GCM 认证检查，如果失败会返回 Err
     let count = decrypter.finalize(&mut final_chunk)?;
-
     plaintext_buffer.write_all(&final_chunk[..count])?;
 
-    // --- 7. 认证成功后，才写入最终目的地 ---
+    // --- [新增] 7. 计算解密后内容的哈希 ---
+    // 只有在 finalize 成功后（即 GCM 认证通过）才进行哈希计算
+    let original_hasher = Sha256::digest(&plaintext_buffer);
+    let original_hash = VaultHash::new(original_hasher.into());
+
+    // --- 8. 认证成功后，才写入最终目的地 ---
     destination.write_all(&plaintext_buffer)?;
 
-    Ok(())
+    // --- [修改] 9. 返回计算出的原始哈希 ---
+    Ok(original_hash)
 }
 
 // --- 单元测试 ---

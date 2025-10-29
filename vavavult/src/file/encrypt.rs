@@ -84,18 +84,18 @@ pub fn encrypt_file(
     Ok((encrypted_sha256, original_sha256))
 }
 
-/// 解密一个文件。
+/// 解密一个文件，并返回解密后内容的 SHA256 哈希。
 pub fn decrypt_file(
     source_path: &Path,
     dest_path: &Path,
     password: &str,
-) -> Result<(), EncryptError> {
+) -> Result<VaultHash, EncryptError> { // [修改] 返回值类型
     let mut source_file = File::open(source_path)?;
     let mut dest_file = File::create(dest_path)?;
-    stream_cipher::stream_decrypt(&mut source_file, &mut dest_file, password)?;
-    Ok(())
+    // 调用 stream_decrypt 并返回其结果 (VaultHash)
+    let original_hash = stream_cipher::stream_decrypt(&mut source_file, &mut dest_file, password)?;
+    Ok(original_hash)
 }
-
 // --- 字符串加解密 API (保持不变) ---
 
 /// 加密一个字符串，并返回 Base64 编码的密文。
