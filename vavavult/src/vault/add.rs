@@ -152,74 +152,74 @@ pub(crate) fn encrypt_file_for_add_standalone(
     })
 }
 
-/// 阶段 1: 准备一个文件添加事务 (线程安全的自由函数)
-pub fn encrypt_file_for_add(vault: &Vault, source_path: &Path,dest_path: &VaultPath) -> Result<EncryptedAddingFile, AddFileError> {
-    // 验证源文件
-    if !source_path.is_file() {
-        return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
-    }
-
-    // 解析最终的文件路径
-    let final_dest_path = resolve_final_path(source_path, dest_path)?;
-
-    // 在执行昂贵的加密操作 *之前* 检查无效的文件路径
-    if !final_dest_path.is_file() {
-        return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
-    }
-
-    // --- 1. 获取文件元数据  ---
-    let source_metadata = fs::metadata(source_path)?;
-    let file_size = source_metadata.len();
-    let source_modified_time: DateTime<Utc> = source_metadata.modified()?.into();
-
-    // --- [修改] 2. 准备 IO 句柄 ---
-    let data_dir_path = vault.root_path.join(DATA_SUBDIR);
-    fs::create_dir_all(&data_dir_path)?;
-
-    // 打开源文件用于读取
-    let mut source_file = File::open(source_path)?;
-
-    // 直接在 data 目录中创建临时文件
-    let mut temp_file = tempfile::Builder::new()
-        .prefix(".vava-add-")
-        .suffix(".tmp")
-        .tempfile_in(&data_dir_path)?;
-
-    // --- [修改] 3. 直接调用 stream_cipher ---
-    let per_file_password = generate_random_password(16);
-
-    // 将 &mut source_file 和 &mut temp_file 直接传递给流式加密器
-    let (encrypted_sha256sum, original_sha256sum) =
-        stream_cipher::stream_encrypt_and_hash(
-            &mut source_file,
-            &mut temp_file, // <-- 传递可写句柄
-            &per_file_password
-        )?; // <-- 错误现在是 StreamCipherError，会被 AddFileError::from 捕获
-
-    // --- 4. 构建完整的 FileEntry (不变) ---
-    let now = now_as_rfc3339_string();
-    let metadata = vec![
-        MetadataEntry { key: META_FILE_ADD_TIME.to_string(), value: now.clone() },
-        MetadataEntry { key: META_FILE_UPDATE_TIME.to_string(), value: now },
-        MetadataEntry { key: META_FILE_SIZE.to_string(), value: file_size.to_string() },
-        MetadataEntry { key: META_SOURCE_MODIFIED_TIME.to_string(), value: source_modified_time.to_rfc3339() },
-    ];
-
-    let file_entry = FileEntry {
-        path: final_dest_path,
-        sha256sum: encrypted_sha256sum,
-        original_sha256sum,
-        encrypt_password: per_file_password,
-        tags: Vec::new(),
-        metadata,
-    };
-
-    // --- 5. 返回封装的对象 (不变) ---
-    Ok(EncryptedAddingFile {
-        file_entry,
-        temp_file,
-    })
-}
+// /// 阶段 1: 准备一个文件添加事务 (线程安全的自由函数)
+// pub fn encrypt_file_for_add(vault: &Vault, source_path: &Path,dest_path: &VaultPath) -> Result<EncryptedAddingFile, AddFileError> {
+//     // 验证源文件
+//     if !source_path.is_file() {
+//         return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
+//     }
+//
+//     // 解析最终的文件路径
+//     let final_dest_path = resolve_final_path(source_path, dest_path)?;
+//
+//     // 在执行昂贵的加密操作 *之前* 检查无效的文件路径
+//     if !final_dest_path.is_file() {
+//         return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
+//     }
+//
+//     // --- 1. 获取文件元数据  ---
+//     let source_metadata = fs::metadata(source_path)?;
+//     let file_size = source_metadata.len();
+//     let source_modified_time: DateTime<Utc> = source_metadata.modified()?.into();
+//
+//     // --- [修改] 2. 准备 IO 句柄 ---
+//     let data_dir_path = vault.root_path.join(DATA_SUBDIR);
+//     fs::create_dir_all(&data_dir_path)?;
+//
+//     // 打开源文件用于读取
+//     let mut source_file = File::open(source_path)?;
+//
+//     // 直接在 data 目录中创建临时文件
+//     let mut temp_file = tempfile::Builder::new()
+//         .prefix(".vava-add-")
+//         .suffix(".tmp")
+//         .tempfile_in(&data_dir_path)?;
+//
+//     // --- [修改] 3. 直接调用 stream_cipher ---
+//     let per_file_password = generate_random_password(16);
+//
+//     // 将 &mut source_file 和 &mut temp_file 直接传递给流式加密器
+//     let (encrypted_sha256sum, original_sha256sum) =
+//         stream_cipher::stream_encrypt_and_hash(
+//             &mut source_file,
+//             &mut temp_file, // <-- 传递可写句柄
+//             &per_file_password
+//         )?; // <-- 错误现在是 StreamCipherError，会被 AddFileError::from 捕获
+//
+//     // --- 4. 构建完整的 FileEntry (不变) ---
+//     let now = now_as_rfc3339_string();
+//     let metadata = vec![
+//         MetadataEntry { key: META_FILE_ADD_TIME.to_string(), value: now.clone() },
+//         MetadataEntry { key: META_FILE_UPDATE_TIME.to_string(), value: now },
+//         MetadataEntry { key: META_FILE_SIZE.to_string(), value: file_size.to_string() },
+//         MetadataEntry { key: META_SOURCE_MODIFIED_TIME.to_string(), value: source_modified_time.to_rfc3339() },
+//     ];
+//
+//     let file_entry = FileEntry {
+//         path: final_dest_path,
+//         sha256sum: encrypted_sha256sum,
+//         original_sha256sum,
+//         encrypt_password: per_file_password,
+//         tags: Vec::new(),
+//         metadata,
+//     };
+//
+//     // --- 5. 返回封装的对象 (不变) ---
+//     Ok(EncryptedAddingFile {
+//         file_entry,
+//         temp_file,
+//     })
+// }
 
 /// 阶段 2: 提交一个文件添加事务 (需要独占访问的自由函数)
 pub fn commit_add_files(
