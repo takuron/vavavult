@@ -9,26 +9,44 @@ use crate::vault::config::VaultConfig;
 use crate::vault::create::CreateError::VaultAlreadyExists;
 use crate::vault::Vault;
 
+/// Defines errors that can occur during vault creation.
+//
+// // 定义在保险库创建期间可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
+    /// The target directory already exists and is not empty.
+    //
+    // // 目标目录已存在且不为空。
     #[error("Vault directory already exists at {0}")]
     VaultAlreadyExists(PathBuf),
 
+    /// An I/O error occurred while creating directories or writing files.
+    //
+    // // 在创建目录或写入文件时发生 I/O 错误。
     #[error("Failed to create vault directory: {0}")]
     DirectoryCreationError(#[from] std::io::Error),
 
+    /// Failed to serialize the `master.json` configuration file.
+    //
+    // // 序列化 `master.json` 配置文件失败。
     #[error("Failed to serialize configuration: {0}")]
     SerializationError(#[from] serde_json::Error),
 
+    /// An error occurred while initializing the SQLite database.
+    //
+    // // 初始化 SQLite 数据库时发生错误。
     #[error("Failed to init database: {0}")]
     DatabaseInitError(#[from] rusqlite::Error),
 
+    /// Failed to generate the encryption password check string.
+    //
+    // // 创建加密密码检查字符串失败。
     #[error("Failed to create encryption check: {0}")]
     EncryptionError(#[from] EncryptError),
 }
 
 /// 创建一个新的保险库 (V2)。
-pub fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>) -> Result<Vault, CreateError>{
+pub(crate) fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>) -> Result<Vault, CreateError>{
     if vault_path.exists() && fs::read_dir(vault_path)?.next().is_some(){
         return  Err(VaultAlreadyExists(vault_path.to_path_buf()));
     } else {
@@ -115,32 +133,62 @@ pub fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>)
     Ok(vault)
 }
 
-#[derive(Debug, thiserror::Error)] // (OpenError 枚举保持不变)
+/// Defines errors that can occur when opening an existing vault.
+//
+// // 定义在打开一个已存在的保险库时可能发生的错误。
+#[derive(Debug, thiserror::Error)]
 pub enum OpenError {
+    /// The specified path does not exist or is not a directory.
+    //
+    // // 指定的路径不存在或不是一个目录。
     #[error("Vault path does not exist or is not a directory: {0}")]
     PathNotFound(PathBuf),
 
+    /// The `master.json` file is missing from the vault directory.
+    //
+    // // 保险库目录中缺少 `master.json` 文件。
     #[error("Configuration file 'master.json' not found in vault.")]
     ConfigNotFound,
 
+    /// The database file (e.g., `master.db`) specified in the config is missing.
+    //
+    // // 配置中指定的数据库文件 (例如 `master.db`) 丢失。
     #[error("Database file specified in config not found.")]
     DatabaseNotFound,
 
+    /// An I/O error occurred while reading the configuration file.
+    //
+    // // 读取配置文件时发生 I/O 错误。
     #[error("Failed to read configuration file: {0}")]
     ConfigReadError(#[from] std::io::Error),
 
+    /// Failed to parse the `master.json` configuration file.
+    //
+    // // 解析 `master.json` 配置文件失败。
     #[error("Failed to parse configuration file: {0}")]
     ConfigParseError(#[from] serde_json::Error),
 
+    /// Failed to open or connect to the SQLite database.
+    //
+    // // 打开或连接到 SQLite 数据库失败。
     #[error("Failed to open database: {0}")]
     DatabaseOpenError(#[from] rusqlite::Error),
 
+    /// An incorrect password was provided for an encrypted vault.
+    //
+    // // 为加密保险库提供了错误的密码。
     #[error("Invalid password provided for encrypted vault.")]
     InvalidPassword,
 
+    /// The vault is encrypted, but no password was provided.
+    //
+    // // 保险库已加密，但未提供密码。
     #[error("Password required for an encrypted vault but was not provided.")]
     PasswordRequired,
 
+    /// The vault's version in `master.json` is not supported by this library version.
+    //
+    // // `master.json` 中的保险库版本不受此库版本支持。
     #[error("Unsupported vault version: found {found}, but this library supports version {supported}.")]
     UnsupportedVersion {
         supported: u32,

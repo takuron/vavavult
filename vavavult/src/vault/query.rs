@@ -5,31 +5,55 @@ use crate::file::{FileEntry, PathError, VaultPath};
 use crate::vault::Vault;
 use crate::common::hash::{VaultHash, HashParseError};
 
-/// 查询操作的返回结果。(保持不变)
+/// Represents the result of a query that seeks a single `FileEntry`.
+//
+// // 代表寻求单个 `FileEntry` 的查询结果。
 #[derive(Debug)]
 pub enum QueryResult {
     NotFound,
     Found(FileEntry),
 }
 
-/// 查询操作中可能发生的错误。(保持不变)
+/// Defines errors that can occur during a query operation.
+//
+// // 定义在查询操作期间可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
+    /// An error occurred while interacting with the database.
+    //
+    // // 与数据库交互时发生错误。
     #[error("Database error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
+    /// Data inconsistency: A record was found in the database, but the corresponding
+    /// encrypted file is missing from the `data/` directory.
+    //
+    // // 数据不一致：在数据库中找到了记录，但 `data/` 目录中缺少
+    // // 相应的加密文件。
     #[error("Data inconsistency: Record for SHA256 '{0}' found in DB, but file is missing from data store.")]
     FileMissing(String),
 
+    /// Failed to deserialize data (e.g., metadata).
+    //
+    // // 反序列化数据失败 (例如元数据)。
     #[error("Failed to deserialize data: {0}")]
     DeserializationError(#[from] serde_json::Error),
 
+    /// A hash string failed to parse.
+    //
+    // // 哈希字符串解析失败。
     #[error("Hash parsing error: {0}")]
     HashParse(#[from] HashParseError),
 
+    /// A directory-listing operation was attempted on a file path.
+    //
+    // // 尝试在文件路径上执行目录列表操作。
     #[error("Path is not a directory: {0}")]
     NotADirectory(String),
 
+    /// An error occurred during `VaultPath` construction.
+    //
+    // // `VaultPath` 构建期间发生错误。
     #[error("Path construction error: {0}")]
     PathError(#[from] PathError),
 }
@@ -172,10 +196,18 @@ pub fn check_by_original_hash(vault: &Vault, original_hash: &VaultHash) -> Resul
     }
 }
 
-/// Represents the result of listing a path's contents. (保持不变)
+/// Represents the result of listing a directory's contents (non-recursive).
+//
+// // 代表列出目录内容的结果（非递归）。
 #[derive(Debug, Default)]
 pub struct ListResult {
-    pub files: Vec<FileEntry>, // 将包含 V2 FileEntry
+    /// A list of files found directly in that directory.
+    //
+    // // 在该目录中直接找到的文件列表。
+    pub files: Vec<FileEntry>,
+    /// A list of subdirectory names (not full paths) found.
+    //
+    // // 找到的子目录名称列表（非完整路径）。
     pub subdirectories: Vec<String>,
 }
 

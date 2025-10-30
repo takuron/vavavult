@@ -5,40 +5,76 @@ use crate::common::hash::{HashParseError, VaultHash};
 use crate::file::encrypt::EncryptError;
 use crate::vault::{query, QueryResult, Vault};
 
+/// Defines errors that can occur during the file extraction process.
+//
+// // 定义在文件提取过程中可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractError {
+    /// A database query failed (e.g., file not found).
+    //
+    // // 数据库查询失败 (例如，文件未找到)。
     #[error("Database query error: {0}")]
     QueryError(#[from] query::QueryError),
 
+    /// An I/O error occurred (e.g., cannot create destination directory).
+    //
+    // // 发生 I/O 错误 (例如，无法创建目标目录)。
     #[error("File system error: {0}")]
     FileSystemError(#[from] std::io::Error),
 
+    /// The requested file (by hash) was not found in the database or `data/` directory.
+    //
+    // // 在数据库或 `data/` 目录中未找到所请求的文件 (按哈希)。
     #[error("File with SHA256 '{0}' not found.")]
     FileNotFound(String),
 
+    /// File decryption failed, often due to an incorrect password (if manually supplied) or data corruption.
+    //
+    // // 文件解密失败，通常是由于密码错误 (如果手动提供) 或数据损坏。
     #[error("File decryption failed: {0}")]
     DecryptionError(#[from] EncryptError),
 
+    /// The hash string provided was in an invalid format.
+    //
+    // // 提供的哈希字符串格式无效。
     #[error("Invalid hash format: {0}")]
     HashParseError(#[from] HashParseError),
 
+    /// The hash of the decrypted file did not match the expected original hash.
+    /// This indicates the file in the vault's `data/` directory is corrupt.
+    //
+    // // 解密后文件的哈希与预期的原始哈希不匹配。
+    // // 这表明保险库 `data/` 目录中的文件已损坏。
     #[error("Integrity check failed for file '{path}': Expected original hash {expected}, but calculated {calculated}. The file in the vault might be corrupted.")]
     IntegrityCheckFailed {
         path: String,
         expected: String,
-        calculated: String, 
+        calculated: String,
     }
 }
 
+/// A "ticket" containing all necessary information to perform a file extraction.
+/// This is returned by `Vault::prepare_extraction_task` and is thread-safe.
+//
+// // 包含执行文件提取所需所有信息的“票据”。
+// // 由 `Vault::prepare_extraction_task` 返回，并且是线程安全的。
 #[derive(Debug, Clone)]
 pub struct ExtractionTask {
-    /// 加密文件在 `data/` 目录中的路径。
+    /// The path to the encrypted file within the `data/` directory.
+    //
+    // // `data/` 目录中加密文件的路径。
     pub internal_path: PathBuf,
-    /// 该文件的解密密码。
+    /// The password required to decrypt this specific file.
+    //
+    // // 解密此特定文件所需的密码。
     pub password: String,
-    /// 预期解密后的原始哈希值。
+    /// The expected hash of the *original* (decrypted) content.
+    //
+    // // *原始* (解密后) 内容的预期哈希值。
     pub expected_original_hash: VaultHash,
-    /// 原始文件路径（仅用于日志记录）。
+    /// The original vault path of the file (used for logging).
+    //
+    // // 文件的原始保险库路径 (仅用于日志记录)。
     pub original_vault_path: String,
 }
 

@@ -4,23 +4,44 @@ use rusqlite::params;
 use std::fs as std_fs;
 use crate::common::hash::{HashParseError, VaultHash};
 
+/// Defines errors that can occur during the file removal process.
+//
+// // 定义在文件删除过程中可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum RemoveError {
+    /// A database query failed.
+    //
+    // // 数据库查询失败。
     #[error("Database query error: {0}")]
     QueryError(#[from] query::QueryError),
 
+    /// An error occurred while deleting the file record from the database.
+    //
+    // // 从数据库删除文件记录时发生错误。
     #[error("Database delete error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
+    /// An I/O error occurred while deleting the physical file from the `data/` directory.
+    //
+    // // 从 `data/` 目录删除物理文件时发生 I/O 错误。
     #[error("File system error: {0}")]
     FileSystemError(#[from] std::io::Error),
 
+    /// The file to be removed was not found in the database.
+    //
+    // // 在数据库中未找到要删除的文件。
     #[error("File with SHA256 '{0}' not found.")]
     FileNotFound(String),
 
+    /// Failed to update the vault's last-modified timestamp.
+    //
+    // // 更新保险库的最后修改时间戳失败。
     #[error("Failed to update vault timestamp: {0}")]
     TimestampUpdateError(#[from] UpdateError),
 
+    /// The hash string provided was in an invalid format.
+    //
+    // // 提供的哈希字符串格式无效。
     #[error("Wrong hash error: {0}")]
     HashParseError(#[from] HashParseError),
 }
@@ -34,7 +55,7 @@ pub enum RemoveError {
 /// # Arguments
 /// * `vault` - 一个 Vault 实例。
 /// * `sha256sum` - 要删除的文件的加密后内容的 Base64 哈希。
-pub fn remove_file(vault: &Vault, sha256sum: &VaultHash) -> Result<(), RemoveError> {
+pub(crate) fn remove_file(vault: &Vault, sha256sum: &VaultHash) -> Result<(), RemoveError> {
     // 1. 确认文件存在于数据库中 (query::check_by_hash 已更新为 V2)
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(RemoveError::FileNotFound(sha256sum.to_string()));

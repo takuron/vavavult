@@ -5,45 +5,76 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use rusqlite::{ToSql, types::{ValueRef, FromSqlResult, FromSqlError, Value}};
 use rusqlite::types::{FromSql, ToSqlOutput};
 
-/// 一个代表 256 位哈希值 (如 SHA-256) 的类型安全包装器。
+/// A type-safe wrapper for a 256-bit hash value (e.g., SHA-256).
 ///
-/// 它内部存储 32 字节的原始数据，并负责将其编码/解码为
-/// 43 字节长、无填充、URL 安全的 Base64 字符串
+/// It internally stores 32 bytes of raw data and handles encoding/decoding
+/// to/from a 43-byte, URL-safe, padding-free Base64 string for display,
+/// serialization, and database storage.
+//
+// // 一个代表 256 位哈希值 (如 SHA-256) 的类型安全包装器。
+// //
+// // 它内部存储 32 字节的原始数据，并负责将其编码/解码为
+// // 43 字节长、URL 安全、无填充的 Base64 字符串，用于显示、
+// // 序列化和数据库存储。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VaultHash([u8; 32]);
 
-/// 解析 VaultHash 字符串时可能发生的错误。
+/// Errors that can occur when parsing a `VaultHash` string.
+//
+// // 解析 `VaultHash` 字符串时可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum HashParseError {
+    /// The Base64 string had an unexpected length.
+    //
+    // // Base64 字符串的长度不符合预期。
     #[error("Invalid Base64 string length: expected 43, got {0}")]
     InvalidLength(usize),
+    /// An error occurred during Base64 decoding.
+    //
+    // // Base64 解码过程中发生错误。
     #[error("Base64 decoding error: {0}")]
     Base64(#[from] base64::DecodeError),
+    /// The decoded data did not have the expected 32-byte length.
+    //
+    // // 解码后的数据不具有预期的 32 字节长度。
     #[error("Decoded data has invalid byte length: expected 32, got {0}")]
     InvalidByteLength(usize),
+    /// An error occurred during Hex decoding.
+    //
+    // // Hex 解码过程中发生错误。
     #[error("Hex decoding error: {0}")]
     Hex(#[from] hex::FromHexError),
 }
 
 impl VaultHash {
-    /// 原始哈希字节数组的长度 (256 位 = 32 字节)。
+    /// The length of the raw hash in bytes (256 bits = 32 bytes).
+    //
+    // // 原始哈希字节数组的长度 (256 位 = 32 字节)。
     pub const BYTE_LEN: usize = 32;
-    /// 编码后 Base64 字符串的长度。
+    /// The length of the URL-safe, padding-free Base64 encoded string.
+    //
+    // // 编码后（URL安全、无填充）Base64 字符串的长度。
     pub const BASE64_LEN: usize = 43;
 
-    /// 从原始 32 字节数组创建一个 `VaultHash`。
+    /// Creates a `VaultHash` from a raw 32-byte array.
+    //
+    // // 从原始 32 字节数组创建一个 `VaultHash`。
     pub fn new(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
-    /// 以字节切片的形式返回原始 32 字节哈希。
+    /// Returns the raw 32-byte hash as a byte slice.
+    //
+    // // 以字节数组切片的形式返回原始 32 字节哈希。
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
-    /// 将 32 字节的哈希编码为 43 字节的 Base64 字符串。
-    ///
-    /// 这种格式替换 `+` 为 `-`，并替换 `/` 为 `_`。
+    /// Encodes the 32-byte hash into a 43-byte URL-safe, padding-free Base64 string.
+    /// This format replaces `+` with `-` and `/` with `_`.
+    //
+    // // 将 32 字节的哈希编码为 43 字节的 URL 安全、无填充的 Base64 字符串。
+    // // 这种格式替换 `+` 为 `-`，并替换 `/` 为 `_`。
     pub fn to_nopad_base64(&self) -> String {
         // 1. 使用标准 "无填充" 引擎进行编码
         let mut s = STANDARD_NO_PAD.encode(self.0);
@@ -56,7 +87,9 @@ impl VaultHash {
         s
     }
 
-    /// 从 43 字节的 Base64 字符串解码回 `VaultHash`。
+    /// Decodes a 43-byte URL-safe, padding-free Base64 string back into a `VaultHash`.
+    //
+    // // 从 43 字节的 URL 安全、无填充的 Base64 字符串解码回 `VaultHash`。
     pub fn from_nopad_base64(s: &str) -> Result<Self, HashParseError> {
         // 1. 验证长度
         if s.len() != Self::BASE64_LEN {
@@ -76,14 +109,16 @@ impl VaultHash {
         Ok(Self(byte_array))
     }
 
-    /// 将 32 字节的哈希编码为标准的、带填充的 Base64 字符串。
-    ///
-    /// 长度通常为 44 字节 (包括 `=` 填充)。
+    /// Encodes the 32-byte hash into a standard, padded Base64 string (usually 44 bytes).
+    //
+    // // 将 32 字节的哈希编码为标准的、带填充的 Base64 字符串（通常为 44 字节）。
     pub fn to_standard_base64(&self) -> String {
         STANDARD.encode(self.0)
     }
 
-    /// 从标准的、可能带填充的 Base64 字符串解码回 `VaultHash`。
+    /// Decodes a standard, potentially padded Base64 string back into a `VaultHash`.
+    //
+    // // 从标准的、可能带填充的 Base64 字符串解码回 `VaultHash`。
     pub fn from_standard_base64(s: &str) -> Result<Self, HashParseError> {
         let bytes = STANDARD.decode(s)?;
         let byte_array = bytes.clone().try_into()
@@ -91,12 +126,16 @@ impl VaultHash {
         Ok(Self(byte_array))
     }
 
-    /// 将 32 字节的哈希编码为小写的 Hex 字符串 (64 字节)。
+    /// Encodes the 32-byte hash into a lowercase Hex string (64 bytes).
+    //
+    // // 将 32 字节的哈希编码为小写的 Hex 字符串 (64 字节)。
     pub fn to_hex(&self) -> String {
         hex::encode(self.0)
     }
 
-    /// 从 Hex 字符串 (大小写不敏感) 解码回 `VaultHash`。
+    /// Decodes a (case-insensitive) Hex string back into a `VaultHash`.
+    //
+    // // 从 Hex 字符串 (大小写不敏感) 解码回 `VaultHash`。
     pub fn from_hex(s: &str) -> Result<Self, HashParseError> {
         let bytes = hex::decode(s)?;
         let byte_array = bytes.clone().try_into()

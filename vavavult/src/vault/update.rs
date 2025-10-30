@@ -7,38 +7,74 @@ use crate::file::{PathError, VaultPath};
 use crate::utils::time::now_as_rfc3339_string;
 use crate::vault::{query, QueryResult, Vault};
 
+/// Defines errors that can occur during metadata or file path update operations.
+//
+// // 定义在元数据或文件路径更新操作期间可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
+    /// A database query failed (e.g., file not found).
+    //
+    // // 数据库查询失败 (例如，文件未找到)。
     #[error("Database query error: {0}")]
     QueryError(#[from] query::QueryError),
 
+    /// An error occurred while executing a database update (e.g., INSERT, UPDATE, DELETE).
+    //
+    // // 执行数据库更新 (例如 INSERT, UPDATE, DELETE) 时发生错误。
     #[error("Database update error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
+    /// An error occurred during `VaultPath` construction.
+    //
+    // // `VaultPath` 构建期间发生错误。
     #[error("VaultPath error: {0}")]
     VaultPathError(#[from] PathError),
 
+    /// The file to be updated was not found.
+    //
+    // // 未找到要更新的文件。
     #[error("File with SHA256 '{0}' not found.")]
     FileNotFound(String),
 
+    /// The target `VaultPath` for a move/rename operation is already in use by another file.
+    //
+    // // 移动/重命名操作的目标 `VaultPath` 已被另一个文件占用。
     #[error("Target path '{0}' is already taken.")]
     DuplicateTargetPath(String),
 
+    /// The target `VaultPath` was a directory, but a file path was required.
+    //
+    // // 目标 `VaultPath` 是一个目录，但需要的是文件路径。
     #[error("Target path '{0}' is invalid: must be a file path, not a directory path.")]
     InvalidTargetFilePath(String),
 
+    /// The new filename for `rename_file_inplace` contained path separators (`/` or `\`).
+    //
+    // // `rename_file_inplace` 的新文件名包含路径分隔符 (`/` 或 `\`)。
     #[error("Invalid new filename '{0}': contains path separators.")]
     InvalidFilename(String),
 
+    /// An I/O error occurred while writing the `master.json` config file.
+    //
+    // // 写入 `master.json` 配置文件时发生 I/O 错误。
     #[error("Failed to write configuration file: {0}")]
     ConfigWriteError(#[from] std::io::Error),
 
+    /// Failed to serialize the `master.json` configuration.
+    //
+    // // 序列化 `master.json` 配置失败。
     #[error("Failed to serialize configuration: {0}")]
     SerializationError(#[from] serde_json::Error),
 
+    /// The specified metadata key was not found.
+    //
+    // // 未找到指定的元数据键。
     #[error("Metadata key '{0}' not found.")]
     MetadataKeyNotFound(String),
 
+    /// The hash string provided was in an invalid format.
+    //
+    // // 提供的哈希字符串格式无效。
     #[error("Wrong hash error: {0}")]
     HashParseError(#[from] HashParseError),
 }
@@ -47,7 +83,7 @@ pub enum UpdateError {
 ///
 /// - 如果 `target_path` 是目录 (e.g., `/new/dir/`), 文件会被移动到该目录下，保持原文件名。
 /// - 如果 `target_path` 是文件 (e.g., `/new/dir/new_name.txt`), 文件会被移动并重命名。
-pub fn move_file(
+pub(crate) fn move_file(
     vault: &Vault,
     hash: &VaultHash,
     target_path: &VaultPath
@@ -98,7 +134,7 @@ pub fn move_file(
 /// 在当前目录下重命名文件。
 ///
 /// 只改变文件的名称部分，保持其父目录不变。
-pub fn rename_file_inplace(
+pub(crate) fn rename_file_inplace(
     vault: &Vault,
     hash: &VaultHash,
     new_filename: &str
@@ -179,7 +215,7 @@ pub fn rename_file_inplace(
 // --- 文件标签操作 (不变) ---
 
 /// 为文件添加一个标签。
-pub fn add_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), UpdateError> {
+pub(crate) fn add_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -192,7 +228,7 @@ pub fn add_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), Up
 }
 
 /// 为文件批量添加多个标签。
-pub fn add_tags(vault: &mut Vault, sha256sum: &VaultHash, tags: &[&str]) -> Result<(), UpdateError> {
+pub(crate) fn add_tags(vault: &mut Vault, sha256sum: &VaultHash, tags: &[&str]) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -208,7 +244,7 @@ pub fn add_tags(vault: &mut Vault, sha256sum: &VaultHash, tags: &[&str]) -> Resu
 }
 
 /// 从文件中删除一个标签。
-pub fn remove_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), UpdateError> {
+pub(crate) fn remove_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -221,7 +257,7 @@ pub fn remove_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(),
 }
 
 /// 删除一个文件的所有标签。
-pub fn clear_tags(vault: &Vault, sha256sum: &VaultHash) -> Result<(), UpdateError> {
+pub(crate) fn clear_tags(vault: &Vault, sha256sum: &VaultHash) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -236,7 +272,7 @@ pub fn clear_tags(vault: &Vault, sha256sum: &VaultHash) -> Result<(), UpdateErro
 // --- 文件元数据操作 (不变) ---
 
 /// Sets a metadata key-value pair for a file (upsert operation).
-pub fn set_file_metadata(vault: &Vault, sha256sum: &VaultHash, metadata:MetadataEntry) -> Result<(), UpdateError> {
+pub(crate) fn set_file_metadata(vault: &Vault, sha256sum: &VaultHash, metadata:MetadataEntry) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -251,7 +287,7 @@ pub fn set_file_metadata(vault: &Vault, sha256sum: &VaultHash, metadata:Metadata
 }
 
 /// Removes a metadata key-value pair from a file.
-pub fn remove_file_metadata(vault: &Vault, sha256sum: &VaultHash, key: &str) -> Result<(), UpdateError> {
+pub(crate) fn remove_file_metadata(vault: &Vault, sha256sum: &VaultHash, key: &str) -> Result<(), UpdateError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
     }
@@ -268,14 +304,14 @@ pub fn remove_file_metadata(vault: &Vault, sha256sum: &VaultHash, key: &str) -> 
 // --- 保险库操作 ---
 
 /// 设置保险库的新名称。
-pub fn set_name(vault: &mut Vault, new_name: &str) -> Result<(), UpdateError> {
+pub(crate) fn set_name(vault: &mut Vault, new_name: &str) -> Result<(), UpdateError> {
     vault.config.name = new_name.to_string();
     // [修改] 只保存配置，不触碰元数据
     _save_config(vault)
 }
 
 /// 从数据库获取保险库元数据。
-pub fn get_vault_metadata(vault: &Vault, key: &str) -> Result<String, UpdateError> {
+pub(crate) fn get_vault_metadata(vault: &Vault, key: &str) -> Result<String, UpdateError> {
     vault.database_connection.query_row(
         "SELECT meta_value FROM vault_metadata WHERE meta_key = ?1",
         params![key],
@@ -290,7 +326,7 @@ pub fn get_vault_metadata(vault: &Vault, key: &str) -> Result<String, UpdateErro
 }
 
 /// 为保险库设置一个元数据键值对 (upsert 操作)。
-pub fn set_vault_metadata(vault: &mut Vault, metadata_entry: MetadataEntry) -> Result<(), UpdateError> {
+pub(crate) fn set_vault_metadata(vault: &mut Vault, metadata_entry: MetadataEntry) -> Result<(), UpdateError> {
     // 直接操作数据库
     vault.database_connection.execute(
         "INSERT OR REPLACE INTO vault_metadata (meta_key, meta_value) VALUES (?1, ?2)",
@@ -300,7 +336,7 @@ pub fn set_vault_metadata(vault: &mut Vault, metadata_entry: MetadataEntry) -> R
 }
 
 /// 从保险库中移除一个元数据键值对。
-pub fn remove_vault_metadata(vault: &mut Vault, key: &str) -> Result<(), UpdateError> {
+pub(crate) fn remove_vault_metadata(vault: &mut Vault, key: &str) -> Result<(), UpdateError> {
     // [修改] 直接操作数据库
     let rows_affected = vault.database_connection.execute(
         "DELETE FROM vault_metadata WHERE meta_key = ?1",

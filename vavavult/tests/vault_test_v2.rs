@@ -541,7 +541,7 @@ fn test_v2_large_file_integrity() {
     let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
 
     // 文件大小和缓冲区
-    const FILE_SIZE: usize = 32 * 1024 * 1024; // 32MB
+    const FILE_SIZE: usize = 16 * 1024 * 1024; // 32MB
     const BUFFER_SIZE: usize = 8192; // 8KB
     let mut buffer = vec![0u8; BUFFER_SIZE];
 

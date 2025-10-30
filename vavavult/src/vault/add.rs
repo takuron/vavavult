@@ -22,66 +22,115 @@ use crate::vault::{query, FileEntry, UpdateError};
 use crate::vault::query::QueryResult;
 pub(crate) use crate::vault::Vault;
 
+/// Defines errors that can occur during the file addition process.
+//
+// // 定义在文件添加过程中可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum AddFileError {
+    /// The specified source file does not exist or is not a file.
+    //
+    // // 指定的源文件不存在或不是一个文件。
     #[error("Source file not found at {0}")]
     SourceNotFound(PathBuf),
 
+    /// An I/O error occurred while reading the source file or writing the encrypted file.
+    //
+    // // 在读取源文件或写入加密文件时发生 I/O 错误。
     #[error("Failed to read source file: {0}")]
     ReadError(#[from] std::io::Error),
 
+    /// A database error occurred during the transaction.
+    //
+    // // 在事务期间发生数据库错误。
     #[error("Database error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
+    /// The target `VaultPath` was a directory path, but a file path was required.
+    //
+    // // 目标 `VaultPath` 是一个目录路径，但需要的是文件路径。
     #[error("The provided vault path is invalid: '{0}' (must be a file path, not a directory path)")]
     InvalidFilePath(String),
 
+    /// A database query failed during pre-checks.
+    //
+    // // 在预检查期间数据库查询失败。
     #[error("Database query error: {0}")]
     QueryError(#[from] query::QueryError),
 
+    /// A file with the same target `VaultPath` already exists in the vault or batch.
+    //
+    // // 具有相同目标 `VaultPath` 的文件已存在于保险库或批处理中。
     #[error("A file with the same path '{0}' already exists in the vault or in this batch.")]
     DuplicateFileName(String),
 
+    /// A file with the same *encrypted* content hash already exists.
+    //
+    // // 具有相同 *加密* 内容哈希的文件已存在。
     #[error("A file with the same content (encrypted SHA256: {0}) already exists in the vault.")]
     DuplicateContent(String),
 
+    /// A file with the same *original* content hash already exists.
+    //
+    // // 具有相同 *原始* 内容哈希的文件已存在。
     #[error("A file with the same original content (Original SHA256: {0}) already exists at path '{1}' or in this batch.")]
     DuplicateOriginalContent (String, String),
 
+    /// The source file path has no filename (e.g., ".") and cannot be added to a directory.
+    //
+    // // 源文件路径没有文件名 (例如 ".") 并且无法添加到目录中。
     #[error("Source file has no name and cannot be added to a directory path.")]
     SourceFileNameError,
 
+    /// An error occurred during file encryption.
+    //
+    // // 文件加密期间发生错误。
     #[error("File encryption failed: {0}")]
     EncryptionError(#[from] EncryptError),
 
+    /// An error occurred in the underlying stream cipher.
+    //
+    // // 底层流加密器发生错误。
     #[error("Stream cipher error: {0}")]
     StreamCipherError(#[from] StreamCipherError),
 
+    /// Failed to update the vault's last-modified timestamp.
+    //
+    // // 更新保险库的最后修改时间戳失败。
     #[error("Failed to update vault timestamp: {0}")]
     TimestampUpdateError(#[from] UpdateError),
 
+    /// An error occurred constructing the final `VaultPath`.
+    //
+    // // 构建最终 `VaultPath` 时发生错误。
     #[error("Failed to construct final path: {0}")]
     PathConstructionError(#[from] PathError),
 
 }
 
-/// 代表一个准备好的文件添加 (V2)。
-#[derive(Debug)]
-pub struct AddTransaction {
-    /// 加密后内容的 Base64(unpadded) 哈希 (43 字节)
-    pub encrypted_sha256sum: VaultHash,
-    /// 原始文件内容的 Base64(unpadded) 哈希 (43 字节)
-    pub original_sha256sum: VaultHash,
-    /// 指向临时加密文件的路径 (在 `temp/` 目录下)
-    pub temp_path: PathBuf,
-    /// 用于此文件加密的随机密码
-    pub per_file_password: String,
-    /// 原始文件大小
-    pub file_size: u64,
-    /// 原始文件修改时间
-    pub source_modified_time: DateTime<Utc>,
-}
+/// Represents a prepared file addition (V2 - Deprecated by EncryptedAddingFile).
+//
+// // 代表一个准备好的文件添加 (V2 - 已被 EncryptedAddingFile 取代)。
+// #[derive(Debug)]
+// pub struct AddTransaction {
+//     /// 加密后内容的 Base64(unpadded) 哈希 (43 字节)
+//     pub encrypted_sha256sum: VaultHash,
+//     /// 原始文件内容的 Base64(unpadded) 哈希 (43 字节)
+//     pub original_sha256sum: VaultHash,
+//     /// 指向临时加密文件的路径 (在 `temp/` 目录下)
+//     pub temp_path: PathBuf,
+//     /// 用于此文件加密的随机密码
+//     pub per_file_password: String,
+//     /// 原始文件大小
+//     pub file_size: u64,
+//     /// 原始文件修改时间
+//     pub source_modified_time: DateTime<Utc>,
+// }
 
+/// Represents an encrypted file ready to be committed to the vault database.
+/// This struct is returned by `Vault::encrypt_file_for_add` and consumed by `Vault::commit_add_files`.
+//
+// // 代表一个已加密、准备好提交到保险库数据库的文件。
+// // 此结构由 `Vault::encrypt_file_for_add` 返回，并由 `Vault::commit_add_files` 消费。
 #[derive(Debug)]
 pub struct EncryptedAddingFile {
     /// 最终将插入到数据库的 FileEntry 结构。

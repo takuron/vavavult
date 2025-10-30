@@ -4,42 +4,71 @@ use rusqlite::ToSql;
 use rusqlite::types::{FromSql, FromSqlResult, ToSqlOutput, Value, ValueRef};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// 定义 VaultPath 操作中可能发生的错误。
+/// Defines errors that can occur during `VaultPath` operations.
+//
+// // 定义 `VaultPath` 操作期间可能发生的错误。
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PathError {
-    /// 尝试获取根目录 ("/") 的父目录。
+    /// Attempted to get the parent of the root directory ("/").
+    //
+    // // 尝试获取根目录 ("/") 的父目录。
     #[error("Cannot get the parent of the root directory")]
     ParentOfRoot,
-    /// 尝试在文件路径上执行目录操作 (例如 join)。
+    /// Attempted to perform a directory-only operation (like `join`) on a file path.
+    //
+    // // 尝试在文件路径上执行仅限目录的操作 (例如 `join`)。
     #[error("Cannot join a path segment to a file path")]
     JoinToFile,
 }
 
-/// 代表一个在vavavult内部的、绝对的、规范化的对象路径。
+/// Represents an absolute, normalized object path within a `vavavult`.
 ///
-/// 严格区分 "文件" 和 "目录":
-/// - 目录路径 **必须** 以 "/" 结尾 (e.g., "/a/b/").
-/// - 文件路径 **必须不** 以 "/" 结尾 (e.g., "/a/b/c.txt").
-/// - 根目录是特殊情况, 路径为 "/".
+/// This struct strictly distinguishes between "files" and "directories":
+/// - Directory paths **must** end with a "/" (e.g., "/a/b/").
+/// - File paths **must not** end with a "/" (e.g., "/a/b/c.txt").
+/// - The root directory is a special case, represented as "/".
+///
+/// All paths are normalized upon creation, handling `\`, `..`, `.`, and illegal characters.
+//
+// // 代表一个在 `vavavult` 内部的、绝对的、规范化的对象路径。
+// //
+// // 此结构严格区分 "文件" 和 "目录":
+// // - 目录路径 **必须** 以 "/" 结尾 (例如 "/a/b/")。
+// // - 文件路径 **必须不** 以 "/" 结尾 (例如 "/a/b/c.txt")。
+// // - 根目录是特殊情况, 路径为 "/"。
+// //
+// // 所有路径在创建时都会被规范化，处理 `\`、`..`、`.` 和非法字符。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VaultPath {
     inner: String,
 }
 
 impl VaultPath {
-    /// 从任何可以引用为 &str 的类型创建一个新的 VaultPath。
+    /// Creates a new `VaultPath` from any type that can be referenced as a `&str`.
     ///
-    /// 路径将被规范化:
-    /// - 转换 '\' 为 '/'.
-    /// - 解析 ".." 和 ".".
-    /// - 确保路径以 "/" 开头.
-    /// - 保留有意义的结尾 "/", 以区分文件和目录.
+    /// The path will be normalized:
+    /// - Converts `\` to `/`.
+    /// - Resolves `..` and `.`.
+    /// - Ensures the path starts with `/`.
+    /// - Removes illegal characters (e.g., `<`, `>`, `*`, `?`).
+    /// - Preserves a meaningful trailing `/` to distinguish directories from files.
+    //
+    // // 从任何可以引用为 `&str` 的类型创建一个新的 `VaultPath`。
+    // //
+    // // 路径将被规范化:
+    // // - 转换 `\` 为 `/`。
+    // // - 解析 ".." 和 ".".
+    // // - 确保路径以 "/" 开头。
+    // // - 移除非法字符 (例如 `<`、`>`、`*`、`?`)。
+    // // - 保留有意义的结尾 "/"，以区分文件和目录。
     pub fn new<S: AsRef<str>>(raw_path: S) -> Self {
         let normalized = Self::normalize(raw_path.as_ref());
         Self { inner: normalized }
     }
 
-    /// 规范化路径的核心逻辑。
+    /// Normalization logic. (Internal)
+    //
+    // // 规范化路径的核心逻辑。(内部)
     fn normalize(raw_path: &str) -> String {
         let path_str = raw_path.replace('\\', "/");
         let had_trailing_slash = path_str.ends_with('/') && path_str.len() > 1;
@@ -81,31 +110,44 @@ impl VaultPath {
         result
     }
 
-    /// 路径是否为根目录 ("/")。
-    /// 这是两个主要判断依据之一。
+    /// Checks if the path is the root directory ("/").
+    //
+    // // 路径是否为根目录 ("/")。
     pub fn is_root(&self) -> bool {
         self.inner == "/"
     }
 
-    /// 路径是否代表一个目录 (以 "/" 结尾)。
-    /// 根目录 ("/") 也会返回 true。
-    /// 这是两个主要判断依据之二。
+    /// Checks if the path represents a directory (i.e., it ends with "/").
+    /// The root ("/") is considered a directory.
+    //
+    // // 路径是否代表一个目录 (以 "/" 结尾)。
+    // // 根目录 ("/") 也会返回 true。
     pub fn is_dir(&self) -> bool {
         self.inner.ends_with('/')
     }
 
-    /// 路径是否代表一个文件 (不以 "/" 结尾)。
+    /// Checks if the path represents a file (i.e., it does not end with "/").
+    //
+    // // 路径是否代表一个文件 (不以 "/" 结尾)。
     pub fn is_file(&self) -> bool {
         !self.is_dir()
     }
 
-    /// 返回父目录。
+    /// Returns the parent directory.
     ///
     /// - `/a/b/c.txt` (File) -> Ok(`/a/b/`)
     /// - `/a/b/c/` (Dir) -> Ok(`/a/b/`)
     /// - `/a.txt` (File) -> Ok(`/`)
     /// - `/a/` (Dir) -> Ok(`/`)
     /// - `/` (Root) -> Err(PathError::ParentOfRoot)
+    //
+    // // 返回父目录。
+    // //
+    // // - `/a/b/c.txt` (文件) -> Ok(`/a/b/`)
+    // // - `/a/b/c/` (目录) -> Ok(`/a/b/`)
+    // // - `/a.txt` (文件) -> Ok(`/`)
+    // // - `/a/` (目录) -> Ok(`/`)
+    // // - `/` (根) -> Err(PathError::ParentOfRoot)
     pub fn parent(&self) -> Result<VaultPath, PathError> {
         if self.is_root() {
             return Err(PathError::ParentOfRoot);
@@ -128,10 +170,15 @@ impl VaultPath {
         }
     }
 
-    /// 如果是文件，返回文件名；如果是目录，返回 None。
+    /// Returns the file name if the path is a file, otherwise `None`.
     ///
     /// - `/a/b/c.txt` -> `Some("c.txt")`
     /// - `/a/b/` -> `None`
+    //
+    // // 如果是文件，返回文件名；如果是目录，返回 `None`。
+    // //
+    // // - `/a/b/c.txt` -> `Some("c.txt")`
+    // // - `/a/b/` -> `None`
     pub fn file_name(&self) -> Option<&str> {
         if self.is_file() {
             self.inner.rfind('/').map(|idx| &self.inner[idx + 1..])
@@ -140,11 +187,17 @@ impl VaultPath {
         }
     }
 
-    /// 如果是目录（非根），返回目录名；如果是文件或根，返回 None。
+    /// Returns the directory name if the path is a non-root directory, otherwise `None`.
     ///
     /// - `/a/b/c/` -> `Some("c")`
     /// - `/a/b.txt` -> `None`
     /// - `/` -> `None`
+    //
+    // // 如果是目录（非根），返回目录名；如果是文件或根，返回 `None`。
+    // //
+    // // - `/a/b/c/` -> `Some("c")`
+    // // - `/a/b.txt` -> `None`
+    // // - `/` -> `None`
     pub fn dir_name(&self) -> Option<&str> {
         if self.is_dir() && !self.is_root() {
             // 移除结尾的 '/', 找到前一个 '/'
@@ -155,13 +208,21 @@ impl VaultPath {
         }
     }
 
-    /// 将一个路径段连接到当前 **目录** 路径。
+    /// Joins a path segment to the current **directory** path.
     ///
-    /// - `segment` 是文件名: `/a/b/`.join("c.txt") -> Ok(`/a/b/c.txt`)
-    /// - `segment` 是目录: `/a/b/`.join("c/") -> Ok(`/a/b/c/`)
-    /// - 在文件上调用: `/a/b.txt`.join(...) -> Err(PathError::JoinToFile)
+    /// - `segment` is a file name: `/a/b/`.join("c.txt") -> Ok(`/a/b/c.txt`)
+    /// - `segment` is a directory: `/a/b/`.join("c/") -> Ok(`/a/b/c/`)
+    /// - Called on a file: `/a/b.txt`.join(...) -> Err(PathError::JoinToFile)
     ///
-    /// `segment` 中的 `..` 或 `\` 会被自动规范化。
+    /// `..` or `\` in the `segment` will be automatically normalized.
+    //
+    // // 将一个路径段连接到当前 **目录** 路径。
+    // //
+    // // - `segment` 是文件名: `/a/b/`.join("c.txt") -> Ok(`/a/b/c.txt`)
+    // // - `segment` 是目录: `/a/b/`.join("c/") -> Ok(`/a/b/c/`)
+    // // - 在文件上调用: `/a/b.txt`.join(...) -> Err(PathError::JoinToFile)
+    // //
+    // // `segment` 中的 `..` 或 `\` 会被自动规范化。
     pub fn join(&self, segment: &str) -> Result<VaultPath, PathError> {
         if self.is_file() {
             return Err(PathError::JoinToFile);
@@ -172,15 +233,22 @@ impl VaultPath {
         Ok(VaultPath::new(new_path_str))
     }
 
-    /// 以 &str 的形式返回规范化的路径字符串 (e.g., "/a/b/c.txt" 或 "/a/b/").
+    /// Returns the normalized path string as a `&str` (e.g., "/a/b/c.txt" or "/a/b/").
+    //
+    // // 以 `&str` 的形式返回规范化的路径字符串 (例如 "/a/b/c.txt" 或 "/a/b/")。
     pub fn as_str(&self) -> &str {
         &self.inner
     }
 
-    /// 将保险库路径转换为适合本地操作系统的相对路径 `PathBuf`。
+    /// Converts the vault path to a relative `PathBuf` suitable for the local OS.
     ///
     /// - `/a/b/c.txt` -> `a/b/c.txt`
     /// - `/a/b/` -> `a/b`
+    //
+    // // 将保险库路径转换为适合本地操作系统的相对路径 `PathBuf`。
+    // //
+    // // - `/a/b/c.txt` -> `a/b/c.txt`
+    // // - `/a/b/` -> `a/b`
     pub fn as_os_path(&self) -> PathBuf {
         let mut relative_path = if self.inner.starts_with('/') {
             &self.inner[1..]
