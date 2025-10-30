@@ -11,7 +11,7 @@ mod update;
 
 use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
-use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add, EncryptedAddingFile};
+use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add_standalone as _encrypt_file_for_add_standalone, EncryptedAddingFile};
 use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError, extract_file};
 use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, list_all_files, list_all_recursive, list_by_path};
@@ -24,6 +24,7 @@ pub use query::ListResult;
 pub use query::{QueryError, QueryResult};
 pub use remove::RemoveError;
 pub use update::UpdateError;
+use crate::common::constants::DATA_SUBDIR;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
 
@@ -158,6 +159,12 @@ impl Vault {
         Ok(result)
     }
 
+    /// 返回 data 目录的路径。
+    /// 用于在无锁的情况下调用 `add::encrypt_file_for_add_standalone`。
+    pub fn get_data_dir_path(&self) -> PathBuf {
+        self.root_path.join(DATA_SUBDIR)
+    }
+
     /// 阶段 1: 加密一个文件并准备用于批量提交 (线程安全)。
     ///
     /// # Arguments
@@ -176,7 +183,8 @@ impl Vault {
         source_path: &Path,
         dest_path: &VaultPath,
     ) -> Result<EncryptedAddingFile, AddFileError> {
-        encrypt_file_for_add(self, source_path, dest_path)
+        let data_dir = self.get_data_dir_path();
+        encrypt_file_for_add_standalone(&data_dir, source_path, dest_path)
     }
 
     /// 阶段 2: 提交一个或多个已加密的文件到保险库 (需要独占访问)。
@@ -365,7 +373,7 @@ impl Vault {
     /// Returns `UpdateError` if the configuration cannot be serialized or written to disk.
     pub fn set_name(&mut self, new_name: &str) -> Result<(), UpdateError> {
         set_name(self, new_name)?;
-        touch_vault_update_time(self)
+        Ok(())
     }
     /// 从数据库获取保险库元数据。
     ///
@@ -405,4 +413,22 @@ impl Vault {
         remove_vault_metadata(self, key)?;
         touch_vault_update_time(self)
     }
+}
+
+/// (阶段 1) 加密一个文件用于添加。
+///
+/// 这是一个线程安全的独立函数，不依赖 `&Vault` 实例。
+/// 非常适合在 `rayon` 并行循环中调用。
+///
+/// # Arguments
+/// * `data_dir_path` - Vault 的 `data` 目录路径 (从 `Vault::get_data_dir_path()` 获取)。
+/// * `source_path` - 本地源文件路径。
+/// * `dest_path` - 目标 `VaultPath`。
+pub fn encrypt_file_for_add_standalone(
+    data_dir_path: &Path,
+    source_path: &Path,
+    dest_path: &VaultPath,
+) -> Result<EncryptedAddingFile, AddFileError> {
+    // [修改] 公开重导出
+    _encrypt_file_for_add_standalone(data_dir_path, source_path, dest_path)
 }

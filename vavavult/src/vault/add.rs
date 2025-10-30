@@ -90,22 +90,84 @@ pub struct EncryptedAddingFile {
     temp_file: NamedTempFile,
 }
 
+/// 这是新的独立函数 (standalone)，不依赖 Vault。
+/// 它可以被 CLI 无锁调用。
+pub(crate) fn encrypt_file_for_add_standalone(
+    data_dir_path: &Path, // [修改] 只接收 data_dir_path
+    source_path: &Path,
+    dest_path: &VaultPath
+) -> Result<EncryptedAddingFile, AddFileError> {
+
+    // 1. 验证源文件
+    if !source_path.is_file() {
+        return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
+    }
+    // 2. 解析最终路径
+    let final_dest_path = resolve_final_path(source_path, dest_path)?;
+    if !final_dest_path.is_file() {
+        return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
+    }
+    // 3. 获取元数据
+    let source_metadata = fs::metadata(source_path)?;
+    let file_size = source_metadata.len();
+    let source_modified_time: DateTime<Utc> = source_metadata.modified()?.into();
+
+    // 4. 准备 IO 句柄
+    fs::create_dir_all(data_dir_path)?;
+    let mut source_file = File::open(source_path)?;
+    let mut temp_file = tempfile::Builder::new()
+        .prefix(".vava-add-")
+        .suffix(".tmp")
+        .tempfile_in(data_dir_path)?;
+
+    // 5. 调用 stream_cipher
+    let per_file_password = generate_random_password(16);
+    let (encrypted_sha256sum, original_sha256sum) =
+        stream_cipher::stream_encrypt_and_hash(
+            &mut source_file,
+            &mut temp_file,
+            &per_file_password
+        )?;
+    // 6. 构建 FileEntry
+    let now = now_as_rfc3339_string();
+    let metadata = vec![
+        MetadataEntry { key: META_FILE_ADD_TIME.to_string(), value: now.clone() },
+        MetadataEntry { key: META_FILE_UPDATE_TIME.to_string(), value: now },
+        MetadataEntry { key: META_FILE_SIZE.to_string(), value: file_size.to_string() },
+        MetadataEntry { key: META_SOURCE_MODIFIED_TIME.to_string(), value: source_modified_time.to_rfc3339() },
+    ];
+
+    let file_entry = FileEntry {
+        path: final_dest_path,
+        sha256sum: encrypted_sha256sum,
+        original_sha256sum,
+        encrypt_password: per_file_password,
+        tags: Vec::new(),
+        metadata,
+    };
+    // 7. 返回
+    Ok(EncryptedAddingFile {
+        file_entry,
+        temp_file,
+    })
+}
+
 /// 阶段 1: 准备一个文件添加事务 (线程安全的自由函数)
 pub fn encrypt_file_for_add(vault: &Vault, source_path: &Path,dest_path: &VaultPath) -> Result<EncryptedAddingFile, AddFileError> {
-    // 验证源文件 (不变)
+    // 验证源文件
     if !source_path.is_file() {
         return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
     }
 
-    // 解析最终的文件路径 (不变)
+    // 解析最终的文件路径
     let final_dest_path = resolve_final_path(source_path, dest_path)?;
 
-    // 在执行昂贵的加密操作 *之前* 检查无效的文件路径 (不变)
+    // 在执行昂贵的加密操作 *之前* 检查无效的文件路径
     if !final_dest_path.is_file() {
         return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
     }
 
-    // --- 1. 获取文件元数据 (不变) ---
+    // --- 1. 获取文件元数据  ---
     let source_metadata = fs::metadata(source_path)?;
     let file_size = source_metadata.len();
     let source_modified_time: DateTime<Utc> = source_metadata.modified()?.into();
@@ -235,8 +297,10 @@ pub fn commit_add_files(
 
 /// 快捷函数：添加一个新文件
 pub fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<VaultHash, AddFileError> {
-    // 阶段 1: 加密 (此函数现在内部处理路径解析)
-    let file_to_add = encrypt_file_for_add(vault, source_path, dest_path)?;
+    // 阶段 1: 加密
+    let data_dir = vault.root_path.join(DATA_SUBDIR);
+    let file_to_add = encrypt_file_for_add_standalone(&data_dir, source_path, dest_path)?;
+
     let hash = file_to_add.file_entry.sha256sum.clone();
 
     // 阶段 2: 提交 (批量 API，但只传一个)
