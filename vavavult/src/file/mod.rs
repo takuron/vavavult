@@ -1,7 +1,7 @@
 use crate::common::metadata::MetadataEntry;
 
 pub mod encrypt;
-mod stream_cipher;
+pub(crate) mod stream_cipher;
 pub mod path;
 pub use path::{PathError, VaultPath};
 use crate::common::hash::VaultHash;

@@ -1,8 +1,10 @@
+use std::fs;
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
 use crate::file::stream_cipher;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use tempfile::NamedTempFile;
 use crate::common::hash::VaultHash;
 use crate::utils::random::generate_random_string;
 
@@ -18,6 +20,8 @@ pub enum EncryptError {
     Base64(#[from] base64::DecodeError),
     #[error("OpenSSL rand error: {0}")]
     Rand(#[from] openssl::error::ErrorStack),
+    #[error("Tempfile persistence error: {0}")]
+    TempFilePersist(#[from] tempfile::PersistError),
 }
 
 /// V2: 创建一个新的、带随机明文的加密检查字符串 "raw:encrypted_base64"
@@ -89,11 +93,31 @@ pub fn decrypt_file(
     source_path: &Path,
     dest_path: &Path,
     password: &str,
-) -> Result<VaultHash, EncryptError> { // [修改] 返回值类型
+) -> Result<VaultHash, EncryptError> {
     let mut source_file = File::open(source_path)?;
-    let mut dest_file = File::create(dest_path)?;
-    // 调用 stream_decrypt 并返回其结果 (VaultHash)
-    let original_hash = stream_cipher::stream_decrypt(&mut source_file, &mut dest_file, password)?;
+
+    // 1. 确保目标目录存在
+    let parent_dir = dest_path.parent().ok_or_else(|| {
+        EncryptError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Destination path has no parent directory",
+        ))
+    })?;
+    fs::create_dir_all(parent_dir)?;
+
+    // 2. 在目标目录中创建一个临时文件
+    //    这可以确保我们在同一个文件系统上，使重命名(persist)操作是原子的。
+    let mut temp_file = NamedTempFile::new_in(parent_dir)?;
+
+    // 3. 将流式解密写入临时文件
+    //    stream_decrypt 现在会流式写入，并在最后验证 GCM 标签。
+    //    如果标签无效，它会返回 Err，temp_file 会被自动删除。
+    let original_hash =
+        stream_cipher::stream_decrypt(&mut source_file, &mut temp_file, password)?;
+
+    // 4. 认证成功，将临时文件重命名为最终目标路径
+    temp_file.persist(dest_path)?;
+
     Ok(original_hash)
 }
 // --- 字符串加解密 API (保持不变) ---

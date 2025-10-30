@@ -1,18 +1,22 @@
 use std::{fs};
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use rusqlite::Transaction;
+use tempfile::NamedTempFile;
+use crate::file::stream_cipher;
 use crate::common::constants::{
     META_FILE_ADD_TIME, META_FILE_SIZE, META_FILE_UPDATE_TIME,
-    META_SOURCE_MODIFIED_TIME, DATA_SUBDIR, TEMP_SUBDIR
+    META_SOURCE_MODIFIED_TIME, DATA_SUBDIR
 };
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
 use crate::file::encrypt::{EncryptError};
 use crate::file::path::VaultPath;
 use crate::file::PathError;
-use crate::utils::random::{generate_random_password, generate_random_string};
+use crate::file::stream_cipher::StreamCipherError;
+use crate::utils::random::{generate_random_password};
 use crate::utils::time::now_as_rfc3339_string;
 use crate::vault::{query, FileEntry, UpdateError};
 use crate::vault::query::QueryResult;
@@ -50,6 +54,9 @@ pub enum AddFileError {
     #[error("File encryption failed: {0}")]
     EncryptionError(#[from] EncryptError),
 
+    #[error("Stream cipher error: {0}")]
+    StreamCipherError(#[from] StreamCipherError),
+
     #[error("Failed to update vault timestamp: {0}")]
     TimestampUpdateError(#[from] UpdateError),
 
@@ -79,45 +86,55 @@ pub struct AddTransaction {
 pub struct EncryptedAddingFile {
     /// 最终将插入到数据库的 FileEntry 结构。
     pub file_entry: FileEntry,
-    /// 指向 `temp/` 目录中临时加密文件的路径。
-    pub temp_path: PathBuf,
+    /// 指向临时文件句柄。
+    temp_file: NamedTempFile,
 }
 
 /// 阶段 1: 准备一个文件添加事务 (线程安全的自由函数)
-///
-/// V2 中，此函数 *总是* 加密文件到 `TEMP_SUBDIR` 目录。
 pub fn encrypt_file_for_add(vault: &Vault, source_path: &Path,dest_path: &VaultPath) -> Result<EncryptedAddingFile, AddFileError> {
-    // 验证源文件
+    // 验证源文件 (不变)
     if !source_path.is_file() {
         return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
     }
 
-    // 解析最终的文件路径
+    // 解析最终的文件路径 (不变)
     let final_dest_path = resolve_final_path(source_path, dest_path)?;
 
-    // 在执行昂贵的加密操作 *之前* 检查无效的文件路径
-    // (在 commit_add_files 中也会检查，但这里提前失败更好)
+    // 在执行昂贵的加密操作 *之前* 检查无效的文件路径 (不变)
     if !final_dest_path.is_file() {
         return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
     }
 
-    // --- 1. 获取文件元数据 ---
+    // --- 1. 获取文件元数据 (不变) ---
     let source_metadata = fs::metadata(source_path)?;
     let file_size = source_metadata.len();
     let source_modified_time: DateTime<Utc> = source_metadata.modified()?.into();
 
-    // --- 2. 准备临时目录和路径 ---
-    let temp_dir_path = vault.root_path.join(TEMP_SUBDIR);
-    fs::create_dir_all(&temp_dir_path)?;
-    let temp_file_name = format!(".temp_{}", generate_random_string(24));
-    let temp_path = temp_dir_path.join(&temp_file_name);
+    // --- [修改] 2. 准备 IO 句柄 ---
+    let data_dir_path = vault.root_path.join(DATA_SUBDIR);
+    fs::create_dir_all(&data_dir_path)?;
 
-    // --- 3. 执行加密并获取两个哈希 ---
+    // 打开源文件用于读取
+    let mut source_file = File::open(source_path)?;
+
+    // 直接在 data 目录中创建临时文件
+    let mut temp_file = tempfile::Builder::new()
+        .prefix(".vava-add-")
+        .suffix(".tmp")
+        .tempfile_in(&data_dir_path)?;
+
+    // --- [修改] 3. 直接调用 stream_cipher ---
     let per_file_password = generate_random_password(16);
-    let (encrypted_sha256sum, original_sha256sum) =
-        crate::file::encrypt::encrypt_file(source_path, &temp_path, &per_file_password)?;
 
-    // --- 4. 构建完整的 FileEntry ---
+    // 将 &mut source_file 和 &mut temp_file 直接传递给流式加密器
+    let (encrypted_sha256sum, original_sha256sum) =
+        stream_cipher::stream_encrypt_and_hash(
+            &mut source_file,
+            &mut temp_file, // <-- 传递可写句柄
+            &per_file_password
+        )?; // <-- 错误现在是 StreamCipherError，会被 AddFileError::from 捕获
+
+    // --- 4. 构建完整的 FileEntry (不变) ---
     let now = now_as_rfc3339_string();
     let metadata = vec![
         MetadataEntry { key: META_FILE_ADD_TIME.to_string(), value: now.clone() },
@@ -135,10 +152,10 @@ pub fn encrypt_file_for_add(vault: &Vault, source_path: &Path,dest_path: &VaultP
         metadata,
     };
 
-    // --- 5. 返回封装的对象 ---
+    // --- 5. 返回封装的对象 (不变) ---
     Ok(EncryptedAddingFile {
         file_entry,
-        temp_path,
+        temp_file,
     })
 }
 
@@ -160,41 +177,33 @@ pub fn commit_add_files(
 
         // 检查数据库中路径是否重复
         if let QueryResult::Found(_) = query::check_by_path(vault, &entry.path)? {
-            cleanup_temp_files(&files);
             return Err(AddFileError::DuplicateFileName(entry.path.to_string()));
         }
         // 检查批内路径是否重复
         if !paths_in_batch.insert(&entry.path) {
-            cleanup_temp_files(&files);
             return Err(AddFileError::DuplicateFileName(entry.path.to_string()));
         }
 
         // 检查数据库中原始哈希是否重复
         if let QueryResult::Found(existing) = query::check_by_original_hash(vault, &entry.original_sha256sum)? {
-            cleanup_temp_files(&files);
             return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing.path.to_string()));
         }
         // 检查批内原始哈希是否重复
         if let Some(existing_path) = originals_in_batch.insert(&entry.original_sha256sum, &entry.path) {
-            cleanup_temp_files(&files);
             return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing_path.to_string()));
         }
 
         // 检查加密后哈希是否重复 (主键，理论上概率极低，但保险起见)
         if let QueryResult::Found(_) = query::check_by_hash(vault, &entry.sha256sum)? {
-            cleanup_temp_files(&files);
             return Err(AddFileError::DuplicateContent(entry.sha256sum.to_string()));
         }
     }
 
     // --- 2. 提交 (数据库写入和文件移动) ---
     let data_dir_path = vault.root_path.join(DATA_SUBDIR);
-    fs::create_dir_all(&data_dir_path)?;
 
-    // (请求 4) 在单个事务中执行所有数据库写入
     let tx = vault.database_connection.transaction()?;
     {
-        // 准备重用的语句
         let mut file_stmt = tx.prepare(
             "INSERT INTO files (sha256sum, path, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3, ?4)"
         )?;
@@ -205,7 +214,6 @@ pub fn commit_add_files(
         for file_to_add in &files {
             let entry = &file_to_add.file_entry;
 
-            // 插入 'files' 表
             file_stmt.execute((
                 &entry.sha256sum,
                 &entry.path,
@@ -213,15 +221,12 @@ pub fn commit_add_files(
                 &entry.encrypt_password,
             ))?;
 
-            // 插入 'metadata' 表
             for meta in &entry.metadata {
                 meta_stmt.execute((&entry.sha256sum, &meta.key, &meta.value))?;
             }
         }
 
-        // 仅在数据库事务准备好提交时才移动文件
-        // 这样如果文件移动失败，事务可以回滚
-        move_temp_files_to_data(&files, &data_dir_path, &tx)?;
+        move_temp_files_to_data(files, &data_dir_path, &tx)?;
     }
     tx.commit()?;
 
@@ -240,27 +245,19 @@ pub fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) ->
     Ok(hash)
 }
 
-/// 辅助函数，用于在事务失败时清理所有临时文件。
-fn cleanup_temp_files(files: &[EncryptedAddingFile]) {
-    for file in files {
-        if file.temp_path.exists() {
-            let _ = fs::remove_file(&file.temp_path); // 忽略单个删除错误
-        }
-    }
-}
-
 /// 辅助函数：移动文件（在事务中调用）
 fn move_temp_files_to_data(
-    files: &[EncryptedAddingFile],
+    files: Vec<EncryptedAddingFile>, // 接收所有权
     data_dir_path: &Path,
-    _tx: &Transaction, // 接收事务引用以确保它在事务中被调用
+    _tx: &Transaction,
 ) -> Result<(), AddFileError> {
     for file_to_add in files {
         let final_path = data_dir_path.join(&file_to_add.file_entry.sha256sum.to_string());
-        // 如果重命名失败，显式返回 ReadError（std::io::Error）
-        // 这将导致 tx.commit() 失败并触发回滚
-        fs::rename(&file_to_add.temp_path, final_path)
-            .map_err(|e| AddFileError::ReadError(e))?;
+
+        file_to_add.temp_file.persist(final_path)
+            .map_err(|persist_error| {
+                AddFileError::ReadError(persist_error.error)
+            })?;
     }
     Ok(())
 }

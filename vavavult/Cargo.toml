@@ -10,7 +10,7 @@ repository = "https://github.com/takuron/vavavult" # 请替换为您的仓库地
 # 默认不启用任何额外功能
 default = []
 # 启用实验性的、基于 VaultPath 的 API
-experimental_paths = []
+# experimental_paths = []
 
 [dependencies]
 serde = { workspace = true }
@@ -23,6 +23,6 @@ openssl = { workspace = true }
 serde_rusqlite = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }

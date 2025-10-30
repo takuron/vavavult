@@ -22,7 +22,7 @@ pub enum RemoveError {
     TimestampUpdateError(#[from] UpdateError),
 
     #[error("Wrong hash error: {0}")]
-    HashPauseError(#[from] HashParseError),
+    HashParseError(#[from] HashParseError),
 }
 
 /// [V2 修改] 从保险库中删除一个文件。

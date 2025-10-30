@@ -127,14 +127,17 @@ pub fn stream_encrypt_and_hash(
 }
 
 
-/// 解密 (V2 中此函数保持不变)
+/// 此函数现在以恒定的内存使用量运行，在写入解密数据块的同时计算原始哈希值。
+///
+/// # Returns
+/// 成功时返回 `VaultHash` (原始文件的 SHA256)。
+/// 失败时 (例如 GCM 认证失败) 返回 `StreamCipherError`。
 pub fn stream_decrypt(
     mut source: impl Read + Seek,
     mut destination: impl Write,
     password: &str,
 ) -> Result<VaultHash, StreamCipherError> {
-    // ... (此函数的实现与 V1 相同，无需更改) ...
-    // --- 步骤 1-3 和之前一样：读取头部/尾部，派生密钥 ---
+    // --- 读取头部/尾部，派生密钥 ---
     let mut salt = [0u8; SALT_LEN];
     source.read_exact(&mut salt)?;
     let mut iv = [0u8; IV_LEN];
@@ -158,12 +161,13 @@ pub fn stream_decrypt(
     // --- 4. 初始化解密器 ---
     let cipher = Cipher::aes_256_gcm();
     let mut decrypter = Crypter::new(cipher, Mode::Decrypt, &key, Some(&iv))?;
-    decrypter.set_tag(&tag)?;
+    decrypter.set_tag(&tag)?; // 设置期望的 GCM 标签
 
-    // --- 5. 安全的流式处理：先解密到临时缓冲区 ---
-    let mut plaintext_buffer: Vec<u8> = Vec::new();
+    // --- 5. 初始化哈希计算器 ---
+    let mut original_hasher = Sha256::new();
     let mut encrypted_stream = source.take(encrypted_content_len);
-    let mut buffer = [0u8; BUFFER_LEN];
+    let mut buffer = [0u8; BUFFER_LEN]; // 加密块的缓冲区
+    let mut decrypted_buffer = vec![0; BUFFER_LEN + cipher.block_size()]; // 解密块的缓冲区
 
     loop {
         let bytes_read = encrypted_stream.read(&mut buffer)?;
@@ -172,27 +176,34 @@ pub fn stream_decrypt(
         }
         let encrypted_chunk = &buffer[..bytes_read];
 
-        let mut decrypted_chunk = vec![0; bytes_read + cipher.block_size()];
-        let count = decrypter.update(encrypted_chunk, &mut decrypted_chunk)?;
+        // 解密数据块
+        let count = decrypter.update(encrypted_chunk, &mut decrypted_buffer)?;
+        let decrypted_chunk = &decrypted_buffer[..count];
 
-        plaintext_buffer.write_all(&decrypted_chunk[..count])?;
+        // 将解密后的数据块写入目的地 (临时文件)
+        destination.write_all(decrypted_chunk)?;
+        // 更新哈希值
+        original_hasher.update(decrypted_chunk);
     }
 
     // --- 6. 完成解密与验证 ---
+    // `finalize` 会处理解密器中剩余的数据，并执行 GCM 认证检查
+    // 如果标签不匹配，此步骤将返回 OpenSsl 错误
     let mut final_chunk = vec![0; cipher.block_size()];
-    // [修改] finalize 会进行 GCM 认证检查，如果失败会返回 Err
     let count = decrypter.finalize(&mut final_chunk)?;
-    plaintext_buffer.write_all(&final_chunk[..count])?;
+    let decrypted_final_chunk = &final_chunk[..count];
 
-    // --- [新增] 7. 计算解密后内容的哈希 ---
-    // 只有在 finalize 成功后（即 GCM 认证通过）才进行哈希计算
-    let original_hasher = Sha256::digest(&plaintext_buffer);
-    let original_hash = VaultHash::new(original_hasher.into());
+    // 写入最后的数据块
+    destination.write_all(decrypted_final_chunk)?;
+    // 更新哈希
+    original_hasher.update(decrypted_final_chunk);
 
-    // --- 8. 认证成功后，才写入最终目的地 ---
-    destination.write_all(&plaintext_buffer)?;
+    // --- 7. 认证成功，计算最终哈希 ---
+    // 只有当 finalize() 成功时，代码才会执行到这里
+    let original_hash_bytes: [u8; 32] = original_hasher.finalize().into();
+    let original_hash = VaultHash::new(original_hash_bytes);
 
-    // --- [修改] 9. 返回计算出的原始哈希 ---
+    // --- 8. 返回计算出的原始哈希 ---
     Ok(original_hash)
 }
 
@@ -268,7 +279,7 @@ mod tests {
         );
     }
 
-    // [V2 修改] 验证错误密码
+    // 验证错误密码
     #[test]
     fn test_decrypt_with_wrong_password_fails() {
         let original_data = b"some data to be encrypted";
@@ -291,8 +302,6 @@ mod tests {
 
         // 断言解密操作返回了一个错误
         assert!(result.is_err(), "Decryption should fail with wrong password");
-        // 并且断言接收缓冲区是空的
-        assert!(decrypted_data_vec.is_empty(), "Decrypted buffer should be empty on failure");
     }
 
     // 使用真实文件的往返测试

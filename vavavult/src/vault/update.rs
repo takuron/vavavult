@@ -40,7 +40,7 @@ pub enum UpdateError {
     MetadataKeyNotFound(String),
 
     #[error("Wrong hash error: {0}")]
-    HashPauseError(#[from] HashParseError),
+    HashParseError(#[from] HashParseError),
 }
 
 /// 移动保险库中的文件到新的路径。
