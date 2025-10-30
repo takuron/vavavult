@@ -17,3 +17,4 @@ openssl = { version = "0.10.73", features = ["vendored"] }
 serde_rusqlite = "0.40.0"
 base64 = "0.22.1"
 chrono = { version = "0.4.41", features = ["serde"]}
+rayon = "1.11.0"

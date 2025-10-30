@@ -27,7 +27,8 @@ pub use update::UpdateError;
 use crate::common::constants::DATA_SUBDIR;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
-use crate::vault::extract::{extract_file, ExtractionTask, execute_extraction_task_standalone as _execute_extraction_task_standalone, prepare_extraction_task};
+pub use  crate::vault::extract::ExtractionTask;
+use crate::vault::extract::{extract_file, execute_extraction_task_standalone as _execute_extraction_task_standalone, prepare_extraction_task};
 
 /// Represents a vault loaded into memory.
 ///

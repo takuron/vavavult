@@ -17,6 +17,12 @@ use vavavult::file::VaultPath;
 use vavavult::vault::{
     AddFileError, CreateError, OpenError, QueryError, QueryResult, UpdateError, Vault,
 };
+use rayon::prelude::*;
+use std::sync::{Arc, Mutex};
+// 导入新的 API 函数和类型
+use vavavult::vault::{
+    encrypt_file_for_add_standalone, execute_extraction_task_standalone, ExtractionTask,
+};
 
 // ---  V2 文件库测试 ---
 
@@ -967,4 +973,130 @@ fn test_v2_vault_metadata_lifecycle() {
     // 7. 移除不存在的键 (应失败)
     let remove_err = vault.remove_vault_metadata("non_existent_key");
     assert!(matches!(remove_err, Err(UpdateError::MetadataKeyNotFound(_))), "Removing non-existent key should fail");
+}
+
+// --- [新增] 辅助函数：创建多个虚拟文件 ---
+/// 辅助：在临时目录中创建多个虚拟文件
+/// 返回 (路径, 内容) 的元组列表
+fn create_dummy_files(dir: &TempDir, count: usize, prefix: &str) -> Vec<(PathBuf, String)> {
+    let mut files = Vec::new();
+    for i in 0..count {
+        let file_name = format!("{}_{:03}.txt", prefix, i);
+        let content = format!("content for file {} {}!", prefix, i);
+        let file_path = dir.path().join(&file_name);
+        fs::write(&file_path, &content).unwrap();
+        files.push((file_path, content));
+    }
+    files
+}
+
+
+// --- [新增] V2 并行 API 测试 ---
+
+#[test]
+fn test_v2_parallel_add_and_extract_lifecycle() {
+    // 1. 准备
+    let dir = tempdir().unwrap();
+    let (_vault_path, vault) = setup_encrypted_vault(&dir);
+    // 模拟 CLI 的共享状态
+    let vault_arc = Arc::new(Mutex::new(vault));
+
+    const FILE_COUNT: usize = 20; // 并行处理 20 个文件
+    let source_files = create_dummy_files(&dir, FILE_COUNT, "parallel_add");
+
+    let mut source_and_dest = Vec::new();
+    for (i, (source_path, _content)) in source_files.iter().enumerate() {
+        let dest_path = VaultPath::from(format!("/batch1/file_{:03}.txt", i).as_str());
+        source_and_dest.push((source_path.clone(), dest_path));
+    }
+
+    // --- 2. 阶段 1: 并行加密 (ADD) ---
+    println!("Testing parallel encryption...");
+    let data_dir_path = vault_arc.lock().unwrap().get_data_dir_path(); // 1. Lock (快速)
+    // (锁在此处释放)
+
+    let encryption_results: Vec<_> = source_and_dest
+        .into_par_iter() // <-- 2. 并行 (无锁)
+        .map(|(source_path, dest_path)| {
+            // 调用独立的 standalone 函数
+            encrypt_file_for_add_standalone(
+                &data_dir_path,
+                &source_path,
+                &dest_path,
+            )
+        })
+        .collect();
+
+    // 3. 收集加密结果
+    let mut files_to_commit = Vec::new();
+    for result in encryption_results {
+        assert!(result.is_ok(), "Encryption should succeed: {:?}", result.err());
+        files_to_commit.push(result.unwrap());
+    }
+    assert_eq!(files_to_commit.len(), FILE_COUNT);
+
+    // --- 4. 阶段 2: 批量提交 (ADD) ---
+    println!("Testing batch commit...");
+    {
+        let mut vault_guard = vault_arc.lock().unwrap(); // 4. Lock (快速)
+        let commit_result = vault_guard.commit_add_files(files_to_commit);
+        assert!(commit_result.is_ok(), "Commit should succeed");
+    } // (锁在此处释放)
+
+    // 5. 验证添加
+    let all_files = vault_arc.lock().unwrap().list_all().unwrap();
+    assert_eq!(all_files.len(), FILE_COUNT, "All files should be in the vault");
+    let all_hashes: Vec<VaultHash> = all_files.iter().map(|f| f.sha256sum.clone()).collect();
+
+    // --- 6. 阶段 1: 准备提取 (EXTRACT) ---
+    println!("Testing parallel extraction preparation...");
+    let extract_dir = dir.path().join("extracted_files");
+    fs::create_dir_all(&extract_dir).unwrap();
+
+    let tasks: Vec<(ExtractionTask, PathBuf)> = {
+        let vault_guard = vault_arc.lock().unwrap(); // 1. Lock (快速)
+        all_hashes
+            .iter()
+            .enumerate()
+            .map(|(i, hash)| {
+                // 调用快速的 prepare 实例方法
+                let task = vault_guard.prepare_extraction_task(hash).unwrap();
+                let dest_path = extract_dir.join(format!("extracted_file_{:03}.txt", i));
+                (task, dest_path)
+            })
+            .collect()
+    }; // (锁在此处释放)
+    assert_eq!(tasks.len(), FILE_COUNT);
+
+    // --- 7. 阶段 2: 并行执行 (EXTRACT) ---
+    println!("Testing parallel execution...");
+    let extract_results: Vec<_> = tasks
+        .par_iter() // <-- 2. 并行 (无锁)
+        .map(|(task, dest_path)| {
+            // 调用独立的 standalone 函数
+            execute_extraction_task_standalone(task, dest_path)
+        })
+        .collect();
+
+    // 8. 验证提取
+    for result in extract_results {
+        assert!(result.is_ok(), "Extraction should succeed: {:?}", result.err());
+    }
+
+    // --- 9. 验证完整性 ---
+    println!("Verifying integrity...");
+    // 重新获取原始文件内容并与提取的文件内容进行比较
+    let mut original_contents: Vec<String> = source_files.into_iter().map(|(_, content)| content).collect();
+    original_contents.sort(); // 确保顺序一致
+
+    let mut extracted_contents = Vec::new();
+    for i in 0..FILE_COUNT {
+        let dest_path = extract_dir.join(format!("extracted_file_{:03}.txt", i));
+        let content = fs::read_to_string(dest_path).unwrap();
+        extracted_contents.push(content);
+    }
+    extracted_contents.sort(); // 确保顺序一致
+
+    assert_eq!(original_contents, extracted_contents, "Original and extracted contents must match");
+    println!("Parallel add and extract cycle completed successfully.");
 }
