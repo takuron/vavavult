@@ -16,7 +16,7 @@ use vavavult::file::encrypt::verify_v2_encrypt_check;
 use vavavult::file::VaultPath;
 use vavavult::vault::{
     AddFileError, CreateError, OpenError, QueryError, QueryResult, UpdateError, Vault,
-}; 
+};
 
 // ---  V2 文件库测试 ---
 
@@ -262,7 +262,10 @@ fn test_v2_add_file_and_extract_file_cycle() {
         QueryResult::Found(entry) => entry,
         QueryResult::NotFound => panic!("File not found by name after adding"),
     };
-    assert_eq!(entry.path, "/docs/hello.txt");
+
+    // [修改] 比较 VaultPath 和 VaultPath
+    assert_eq!(entry.path, VaultPath::from("/docs/hello.txt"));
+
     assert_eq!(entry.sha256sum, encrypted_hash);
     assert!(!entry.original_sha256sum.to_string().is_empty()); // 确保原始哈希存在
     assert_eq!(entry.metadata.len(), 4); // 4 个系统元数据
@@ -448,7 +451,7 @@ fn test_v2_remove_file() {
     let hash = vault
         .add_file(&file_path, &VaultPath::from("/delete_me.txt"))
         .unwrap();
-    
+
     let original_hash = match vault.find_by_hash(&hash) {
         Ok(QueryResult::Found(e)) => e.original_sha256sum,
         _ => panic!("File not found right after add"),
@@ -485,7 +488,7 @@ fn test_v2_remove_file() {
             .unwrap(),
         QueryResult::NotFound
     ));
-    
+
     assert!(matches!(
         vault.find_by_hash(&hash).unwrap(),
         QueryResult::NotFound

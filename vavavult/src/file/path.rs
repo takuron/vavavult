@@ -1,5 +1,8 @@
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
+use rusqlite::ToSql;
+use rusqlite::types::{FromSql, FromSqlResult, ToSqlOutput, Value, ValueRef};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// 定义 VaultPath 操作中可能发生的错误。
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -204,6 +207,65 @@ impl From<&Path> for VaultPath {
 impl Display for VaultPath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.inner)
+    }
+}
+
+/// 存储到数据库时，编码为 TEXT
+impl ToSql for VaultPath {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        // 存储规范化的字符串
+        Ok(ToSqlOutput::Owned(Value::Text(self.as_str().to_string())))
+    }
+}
+
+/// 从数据库 TEXT 读取
+impl FromSql for VaultPath {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        value.as_str().map(|s| {
+            // 从数据库读取时，我们信任它已经是规范化的
+            // 但 VaultPath::new() 是幂等的，使用它更安全
+            VaultPath::new(s)
+        })
+    }
+}
+
+// --- Serde (JSON, etc.) Support ---
+
+/// 序列化为字符串
+impl Serialize for VaultPath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// 从字符串反序列化
+impl<'de> Deserialize<'de> for VaultPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct VaultPathVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for VaultPathVisitor {
+            type Value = VaultPath;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                formatter.write_str("a vault path string (e.g. /a/b.txt)")
+            }
+
+            // `VaultPath::new` 会处理规范化
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(VaultPath::new(value))
+            }
+        }
+
+        deserializer.deserialize_str(VaultPathVisitor)
     }
 }
 

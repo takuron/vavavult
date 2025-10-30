@@ -127,7 +127,7 @@ pub fn encrypt_file_for_add(vault: &Vault, source_path: &Path,dest_path: &VaultP
     ];
 
     let file_entry = FileEntry {
-        path: final_dest_path.as_str().to_string(),
+        path: final_dest_path,
         sha256sum: encrypted_sha256sum,
         original_sha256sum,
         encrypt_password: per_file_password,
@@ -159,25 +159,25 @@ pub fn commit_add_files(
         let entry = &file_to_add.file_entry;
 
         // 检查数据库中路径是否重复
-        if let QueryResult::Found(_) = query::check_by_path(vault, &VaultPath::new(&entry.path))? {
+        if let QueryResult::Found(_) = query::check_by_path(vault, &entry.path)? {
             cleanup_temp_files(&files);
-            return Err(AddFileError::DuplicateFileName(entry.path.clone()));
+            return Err(AddFileError::DuplicateFileName(entry.path.to_string()));
         }
         // 检查批内路径是否重复
         if !paths_in_batch.insert(&entry.path) {
             cleanup_temp_files(&files);
-            return Err(AddFileError::DuplicateFileName(entry.path.clone()));
+            return Err(AddFileError::DuplicateFileName(entry.path.to_string()));
         }
 
         // 检查数据库中原始哈希是否重复
         if let QueryResult::Found(existing) = query::check_by_original_hash(vault, &entry.original_sha256sum)? {
             cleanup_temp_files(&files);
-            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing.path));
+            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing.path.to_string()));
         }
         // 检查批内原始哈希是否重复
         if let Some(existing_path) = originals_in_batch.insert(&entry.original_sha256sum, &entry.path) {
             cleanup_temp_files(&files);
-            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing_path.clone()));
+            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing_path.to_string()));
         }
 
         // 检查加密后哈希是否重复 (主键，理论上概率极低，但保险起见)

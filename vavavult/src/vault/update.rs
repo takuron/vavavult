@@ -57,7 +57,7 @@ pub fn move_file(
         QueryResult::Found(entry) => entry,
         QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
     };
-    let original_vault_path = VaultPath::from(original_entry.path.as_str());
+    let original_vault_path = original_entry.path.clone();
 
     // 2. 解析最终的目标路径
     let final_path = if target_path.is_dir() {
@@ -113,7 +113,7 @@ pub fn rename_file_inplace(
         QueryResult::Found(entry) => entry,
         QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
     };
-    let original_vault_path = VaultPath::from(original_entry.path.as_str());
+    let original_vault_path = original_entry.path.clone();
 
     // 3. 获取父目录
     let parent_dir = original_vault_path.parent()?; // parent() 返回 Result

@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::io;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::str::FromStr;
 use chrono::Local;
 use vavavult::common::hash::VaultHash;
@@ -93,9 +93,8 @@ pub fn find_file_entry(vault: &Vault, name: Option<String>, sha: Option<String>)
 /// 确定最终的输出路径
 pub fn determine_output_path(entry: &FileEntry, dest_dir: PathBuf, output_name: Option<String>) -> PathBuf {
     let final_filename = output_name.unwrap_or_else(|| {
-        Path::new(&entry.path)
-            .file_name()
-            .and_then(|s| s.to_str())
+        // [修改] 使用 VaultPath::file_name() 代替 Path::new()
+        entry.path.file_name()
             .unwrap_or("unnamed_file")
             .to_string()
     });

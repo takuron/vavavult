@@ -82,10 +82,12 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
 
     println!("The following {} files will be extracted to {:?}", files_to_extract.len(), destination);
 
-    // (后续逻辑不变)
     for entry in &files_to_extract {
-        let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
-        let final_path = destination.join(relative_path);
+        let relative_path_str = entry.path.as_str()
+            .strip_prefix(dir_path) // dir_path 是 &str
+            .unwrap_or_else(|| entry.path.as_str().trim_start_matches('/'));
+
+        let final_path = destination.join(relative_path_str);
         let final_path_display = final_path.to_string_lossy().replace('\\', "/");
         println!("  - {} -> \"{}\"", entry.path, final_path_display);
     }
@@ -106,8 +108,12 @@ fn handle_extract_directory_single_threaded(vault: Arc<Mutex<Vault>>, dir_path: 
     let mut success_count = 0;
     let mut fail_count = 0;
     for entry in &files_to_extract {
-        let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
-        let final_path = destination.join(relative_path);
+        let relative_path_str = entry.path.as_str()
+            .strip_prefix(dir_path) // dir_path 是 &str
+            .unwrap_or_else(|| entry.path.as_str().trim_start_matches('/'));
+
+        // [修改] 使用字符串 relative_path_str
+        let final_path = destination.join(relative_path_str);
 
         if let Some(parent) = final_path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
@@ -179,11 +185,13 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
     }
 
     println!("The following {} files will be extracted to {:?}", files_to_extract.len(), destination);
-
-    // (后续逻辑不变)
+    
     for entry in &files_to_extract {
-        let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
-        let final_path = destination.join(relative_path);
+        let relative_path_str = entry.path.as_str()
+            .strip_prefix(dir_path) // dir_path 是 &str
+            .unwrap_or_else(|| entry.path.as_str().trim_start_matches('/'));
+
+        let final_path = destination.join(relative_path_str);
         let final_path_display = final_path.to_string_lossy().replace('\\', "/");
         println!("  - {} -> \"{}\"", entry.path, final_path_display);
     }
@@ -208,8 +216,11 @@ fn handle_extract_directory_parallel(vault: Arc<Mutex<Vault>>, dir_path: &str, d
             let vault_clone = Arc::clone(&vault);
             let pb_clone = pb.clone();
 
-            let relative_path = Path::new(&entry.path).strip_prefix(dir_path).unwrap_or(Path::new(&entry.path));
-            let final_path = destination.join(relative_path);
+            let relative_path_str = entry.path.as_str()
+                .strip_prefix(dir_path) // dir_path 是 &str
+                .unwrap_or_else(|| entry.path.as_str().trim_start_matches('/'));
+
+            let final_path = destination.join(relative_path_str);
 
             if let Some(parent) = final_path.parent() {
                 if let Err(e) = fs::create_dir_all(parent) {

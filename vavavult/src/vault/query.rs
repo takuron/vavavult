@@ -38,7 +38,7 @@ pub enum QueryError {
 fn fetch_full_entry(
     conn: &Connection,
     sha256sum: &VaultHash,          // [修改]
-    path: &str,               // 文件路径
+    path: VaultPath,               // 文件路径
     original_sha256sum: &VaultHash, // [修改]
     encrypt_password: &str    // 文件密码
 ) -> Result<FileEntry, QueryError> {
@@ -62,7 +62,7 @@ fn fetch_full_entry(
     // 构建 V2 FileEntry
     Ok(FileEntry {
         sha256sum: sha256sum.clone(),
-        path: path.to_string(),
+        path,
         original_sha256sum: original_sha256sum.clone(),
         encrypt_password: encrypt_password.to_string(),
         tags,
@@ -84,7 +84,7 @@ pub fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResult, Que
     if let Some(res) = stmt.query_row(params![normalized_path], |row| {
         Ok((
             row.get::<_, VaultHash>(0)?,
-            row.get::<_, String>(1)?,
+            row.get::<_, VaultPath>(1)?,
             row.get::<_, VaultHash>(2)?,
             row.get::<_, String>(3)?,
         ))
@@ -96,7 +96,7 @@ pub fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResult, Que
             return Err(QueryError::FileMissing(sha256sum.to_string()));
         }
 
-        let entry = fetch_full_entry(&vault.database_connection, &sha256sum, &path, &original_sha256sum, &encrypt_password)?;
+        let entry = fetch_full_entry(&vault.database_connection, &sha256sum, path, &original_sha256sum, &encrypt_password)?;
         Ok(QueryResult::Found(entry))
     } else {
         Ok(QueryResult::NotFound)
@@ -114,7 +114,7 @@ pub fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, Que
     if let Some(res) = stmt.query_row(params![hash], |row| {
         Ok((
             row.get::<_, VaultHash>(0)?,
-            row.get::<_, String>(1)?,
+            row.get::<_, VaultPath>(1)?,
             row.get::<_, VaultHash>(2)?,
             row.get::<_, String>(3)?,
         ))
@@ -131,7 +131,7 @@ pub fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, Que
         }
 
         // 使用 V2 字段调用 fetch_full_entry
-        let entry = fetch_full_entry(&vault.database_connection, hash, &path, &original_sha256sum, &encrypt_password)?;
+        let entry = fetch_full_entry(&vault.database_connection, hash,path, &original_sha256sum, &encrypt_password)?;
         Ok(QueryResult::Found(entry))
     } else {
         Ok(QueryResult::NotFound)
@@ -148,7 +148,7 @@ pub fn check_by_original_hash(vault: &Vault, original_hash: &VaultHash) -> Resul
     if let Some(res) = stmt.query_row(params![original_hash], |row| {
         Ok((
             row.get::<_, VaultHash>(0)?, // [修改]
-            row.get::<_, String>(1)?,
+            row.get::<_, VaultPath>(1)?,
             row.get::<_, VaultHash>(2)?, // [修改]
             row.get::<_, String>(3)?,
         ))
@@ -165,7 +165,7 @@ pub fn check_by_original_hash(vault: &Vault, original_hash: &VaultHash) -> Resul
         }
 
         // 使用 V2 字段调用 fetch_full_entry
-        let entry = fetch_full_entry(&vault.database_connection, &sha256sum, &path, original_hash, &encrypt_password)?;
+        let entry = fetch_full_entry(&vault.database_connection, &sha256sum, path, original_hash, &encrypt_password)?;
         Ok(QueryResult::Found(entry))
     } else {
         Ok(QueryResult::NotFound)
@@ -195,7 +195,7 @@ pub struct ListResult {
 fn process_rows_to_entries(
     vault: &Vault,
     // [修改] 行元组现在包含 V2 字段
-    rows: Vec<(VaultHash, String, VaultHash, String)>,
+    rows: Vec<(VaultHash, VaultPath, VaultHash, String)>,
 ) -> Result<Vec<FileEntry>, QueryError> {
     let mut entries = Vec::with_capacity(rows.len());
     // [修改] 解构 V2 字段
@@ -203,7 +203,7 @@ fn process_rows_to_entries(
         let entry = fetch_full_entry(
             &vault.database_connection,
             &sha256sum,
-            &path,
+            path,
             &original_sha256sum,
             &encrypt_password,
         )?;
@@ -224,7 +224,7 @@ pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
         .query_map([], |row| {
             Ok((
                 row.get::<_, VaultHash>(0)?,
-                row.get::<_, String>(1)?,
+                row.get::<_, VaultPath>(1)?,
                 row.get::<_, VaultHash>(2)?,
                 row.get::<_, String>(3)?,
             ))
@@ -321,7 +321,7 @@ pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FileEntry>, QueryErro
         .query_map(params![tag], |row| {
             Ok((
                 row.get::<_, VaultHash>(0)?,
-                row.get::<_, String>(1)?,
+                row.get::<_, VaultPath>(1)?,
                 row.get::<_, VaultHash>(2)?,
                 row.get::<_, String>(3)?,
             ))
@@ -348,7 +348,7 @@ pub(super) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEn
         .query_map(params![like_pattern], |row| {
             Ok((
                 row.get::<_, VaultHash>(0)?,
-                row.get::<_, String>(1)?,
+                row.get::<_, VaultPath>(1)?,
                 row.get::<_, VaultHash>(2)?,
                 row.get::<_, String>(3)?,
             ))

@@ -67,7 +67,7 @@ pub fn extract_file(
     if calculated_original_hash != file_entry.original_sha256sum {
         // 哈希不匹配！文件可能已损坏
         return Err(ExtractError::IntegrityCheckFailed {
-            path: file_entry.path, // 添加文件路径以便识别
+            path: file_entry.path.to_string(), // 添加文件路径以便识别
             expected: file_entry.original_sha256sum.to_string(), // 转换为 String
             calculated: calculated_original_hash.to_string(), // 转换为 String
         });

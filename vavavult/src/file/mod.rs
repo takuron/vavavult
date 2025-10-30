@@ -10,7 +10,7 @@ use crate::common::hash::VaultHash;
 #[derive(Debug,Clone)]
 pub struct FileEntry {
     /// 文件在保险库中的唯一路径 (例如 "/docs/report.txt")
-    pub path: String,
+    pub path: VaultPath,
 
     /// 加密后* 的文件内容的 SHA256 哈希值。
     /// 这是文件的主键，也是它在保险库数据目录中的存储名。

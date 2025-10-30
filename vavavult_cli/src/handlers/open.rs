@@ -1,6 +1,5 @@
 use std::env;
 use std::error::Error;
-use std::path::Path;
 use vavavult::vault::Vault;
 use crate::utils::find_file_entry;
 
@@ -9,7 +8,7 @@ pub fn handle_open(vault: &Vault, vault_name: Option<String>, sha256: Option<Str
 
     // 1. 创建一个临时文件路径
     let temp_dir = env::temp_dir();
-    let file_name = Path::new(&file_entry.path).file_name().unwrap_or_default();
+    let file_name = file_entry.path.file_name().unwrap_or_default();
     let temp_path = temp_dir.join(file_name);
 
     // 2. 提取文件到临时路径
