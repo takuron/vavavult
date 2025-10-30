@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs;
 use crate::common::constants::DATA_SUBDIR;
 use crate::common::hash::{HashParseError, VaultHash};
@@ -30,12 +30,24 @@ pub enum ExtractError {
     }
 }
 
-/// 从保险库中提取一个文件，并在解密后验证其完整性。
-pub fn extract_file(
+#[derive(Debug, Clone)]
+pub struct ExtractionTask {
+    /// 加密文件在 `data/` 目录中的路径。
+    pub internal_path: PathBuf,
+    /// 该文件的解密密码。
+    pub password: String,
+    /// 预期解密后的原始哈希值。
+    pub expected_original_hash: VaultHash,
+    /// 原始文件路径（仅用于日志记录）。
+    pub original_vault_path: String,
+}
+
+/// (阶段 1) 准备一个文件用于提取。
+/// 这是一个快速的、需要 `&Vault` 锁的数据库查询。
+pub(crate) fn prepare_extraction_task(
     vault: &Vault,
-    sha256sum: &VaultHash, // 这是加密后内容的哈希
-    destination_path: &Path,
-) -> Result<(), ExtractError> {
+    sha256sum: &VaultHash,
+) -> Result<ExtractionTask, ExtractError> {
     // 1. 在数据库中查找文件的完整信息
     let file_entry = match query::check_by_hash(vault, sha256sum)? {
         QueryResult::Found(entry) => entry,
@@ -50,29 +62,54 @@ pub fn extract_file(
         return Err(ExtractError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 3. 确保目标目录存在
+    // 3. 打包为 "工作票据"
+    Ok(ExtractionTask {
+        internal_path,
+        password: file_entry.encrypt_password,
+        expected_original_hash: file_entry.original_sha256sum,
+        original_vault_path: file_entry.path.to_string(),
+    })
+}
+
+/// (阶段 2) 执行一个已准备好的提取任务。
+/// 这是一个缓慢的、线程安全的函数（无 `&Vault` 锁）。
+pub(crate) fn execute_extraction_task_standalone(
+    task: &ExtractionTask,
+    destination_path: &Path,
+) -> Result<(), ExtractError> {
+    // 1. 确保目标目录存在
     if let Some(parent_dir) = destination_path.parent() {
         fs::create_dir_all(parent_dir)?;
     }
 
-    //  4. 执行解密并获取计算出的原始哈希 ---
-    let password = &file_entry.encrypt_password;
+    // 2. 执行解密 (缓慢的操作)
     let calculated_original_hash = crate::file::encrypt::decrypt_file(
-        &internal_path,
-        destination_path, // 解密函数现在直接写入目标路径
-        password
-    )?; // decrypt_file 现在返回 Result<VaultHash, EncryptError>
+        &task.internal_path,
+        destination_path,
+        &task.password,
+    )?;
 
-    // --- [新增] 5. 比较哈希 ---
-    if calculated_original_hash != file_entry.original_sha256sum {
-        // 哈希不匹配！文件可能已损坏
+    // 3. 比较哈希 (完整性检查)
+    if calculated_original_hash != task.expected_original_hash {
         return Err(ExtractError::IntegrityCheckFailed {
-            path: file_entry.path.to_string(), // 添加文件路径以便识别
-            expected: file_entry.original_sha256sum.to_string(), // 转换为 String
-            calculated: calculated_original_hash.to_string(), // 转换为 String
+            path: task.original_vault_path.clone(),
+            expected: task.expected_original_hash.to_string(),
+            calculated: calculated_original_hash.to_string(),
         });
     }
 
-    // 如果哈希匹配，文件已成功解密并写入 destination_path
     Ok(())
+}
+
+/// 从保险库中提取一个文件，并在解密后验证其完整性。
+pub(crate) fn extract_file(
+    vault: &Vault,
+    sha256sum: &VaultHash,
+    destination_path: &Path,
+) -> Result<(), ExtractError> {
+    // 阶段 1: 准备 (快速, 有锁)
+    let task = prepare_extraction_task(vault, sha256sum)?;
+
+    // 阶段 2: 执行 (缓慢, 无锁)
+    execute_extraction_task_standalone(&task, destination_path)
 }

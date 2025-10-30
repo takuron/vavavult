@@ -13,7 +13,7 @@ use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add_standalone as _encrypt_file_for_add_standalone, EncryptedAddingFile};
 use crate::vault::create::{create_vault, open_vault};
-pub use crate::vault::extract::{ExtractError, extract_file};
+pub use crate::vault::extract::{ExtractError};
 use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, list_all_files, list_all_recursive, list_by_path};
 use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
@@ -27,6 +27,7 @@ pub use update::UpdateError;
 use crate::common::constants::DATA_SUBDIR;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
+use crate::vault::extract::{extract_file, ExtractionTask, execute_extraction_task_standalone as _execute_extraction_task_standalone, prepare_extraction_task};
 
 /// Represents a vault loaded into memory.
 ///
@@ -325,6 +326,34 @@ impl Vault {
         touch_vault_update_time(self)
     }
 
+    pub fn prepare_extraction_task(
+        &self,
+        hash: &VaultHash
+    ) -> Result<ExtractionTask, ExtractError> {
+        prepare_extraction_task(self, hash)
+    }
+
+    /// (阶段 2) 执行一个已准备好的提取任务。
+    ///
+    /// 这是一个 `&self` 实例方法，它包装了 `execute_extraction_task_standalone`
+    /// 以实现 API 的对称性。
+    ///
+    /// **注意**: 此方法是 CPU 和 IO 密集型操作 (解密)。
+    /// 在多线程环境中 (如 CLI)，应优先使用 `prepare_extraction_task`
+    /// 收集所有任务，然后并行调用 `vavavult::vault::execute_extraction_task_standalone`。
+    ///
+    /// # Arguments
+    /// * `task` - 从 `Vault::prepare_extraction_task()` 获取的任务对象。
+    /// * `destination_path` - 本地目标文件路径。
+    pub fn execute_extraction_task(
+        &self, // 接收 &self 以实现 API 对称性，但内部实现不使用它
+        task: &ExtractionTask,
+        destination_path: &Path,
+    ) -> Result<(), ExtractError> {
+        // [修改] 调用 pub(crate) 的 _standalone 函数
+        _execute_extraction_task_standalone(task, destination_path)
+    }
+
     /// Extracts a file from the vault to a specified destination path.
     ///
     /// This copies the physical file from the vault's internal storage to a
@@ -415,7 +444,7 @@ impl Vault {
     }
 }
 
-/// (阶段 1) 加密一个文件用于添加。
+/// 加密一个文件用于添加。
 ///
 /// 这是一个线程安全的独立函数，不依赖 `&Vault` 实例。
 /// 非常适合在 `rayon` 并行循环中调用。
@@ -431,4 +460,19 @@ pub fn encrypt_file_for_add_standalone(
 ) -> Result<EncryptedAddingFile, AddFileError> {
     // [修改] 公开重导出
     _encrypt_file_for_add_standalone(data_dir_path, source_path, dest_path)
+}
+
+/// 执行一个已准备好的提取任务。
+///
+/// 这是一个线程安全的独立函数，不依赖 `&Vault` 实例。
+/// 非常适合在 `rayon` 并行循环中调用。
+///
+/// # Arguments
+/// * `task` - 从 `Vault::prepare_extraction_task()` 获取的任务对象。
+/// * `destination_path` - 本地目标文件路径。
+pub fn execute_extraction_task_standalone(
+    task: &ExtractionTask,
+    destination_path: &Path,
+) -> Result<(), ExtractError> {
+    _execute_extraction_task_standalone(task, destination_path)
 }
