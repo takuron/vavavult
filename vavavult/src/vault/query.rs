@@ -390,6 +390,15 @@ pub(super) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEn
     // 4. 处理行
     process_rows_to_entries(vault, rows)
 }
+/// 高效地获取保险库中文件的总数。
+pub(super) fn get_total_file_count(vault: &Vault) -> Result<i64, QueryError> {
+    let count = vault.database_connection.query_row(
+        "SELECT COUNT(*) FROM files",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
 
 // Finds all files matching a path pattern and a specific tag.
 // #[deprecated(since = "0.2.2", note = "Please use `find_by_name_or_tag_fuzzy` instead for combined searching")]

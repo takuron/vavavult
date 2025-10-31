@@ -11,13 +11,13 @@ mod update;
 
 use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
-use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add_standalone as _encrypt_file_for_add_standalone, EncryptedAddingFile};
+use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add_standalone as _encrypt_file_for_add_standalone};
 use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError};
-use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, list_all_files, list_all_recursive, list_by_path};
+use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, get_total_file_count, list_all_files, list_all_recursive, list_by_path};
 use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
-pub use add::{AddFileError};
+pub use add::{AddFileError, EncryptedAddingFile};
 pub use config::VaultConfig;
 pub use create::{CreateError, OpenError};
 pub use query::ListResult;
@@ -194,6 +194,17 @@ impl Vault {
     // // 如果 `path` 是一个文件路径（例如 "/a.txt"），则返回 `QueryError::NotADirectory`。
     pub fn list_all_recursive(&self, path: &VaultPath) -> Result<Vec<VaultHash>, QueryError> {
         list_all_recursive(self, path)
+    }
+
+    /// Gets the total number of files in the vault.
+    ///
+    /// This is a high-performance query that directly counts database rows.
+    //
+    // // 获取保险库中的文件总数。
+    // //
+    // // 这是一个高性能查询，直接对数据库行进行计数。
+    pub fn get_file_count(&self) -> Result<i64, QueryError> {
+        get_total_file_count(self)
     }
 
     // --- Add APIs ---
