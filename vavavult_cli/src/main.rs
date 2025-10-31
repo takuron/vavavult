@@ -141,9 +141,13 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
         ReplCommand::Add { local_path, path, name, parallel } => {
             handlers::add::handle_add(Arc::clone(vault_arc), &local_path, path, name, parallel)?;
         }
-        ReplCommand::List { path, search, detail } => {
+        ReplCommand::List { path, long, recursive } => {
             let vault = vault_arc.lock().unwrap();
-            handlers::list::handle_list(&vault, path, search, detail)?;
+            handlers::list::handle_list(&vault, path, long, recursive)?;
+        }
+        ReplCommand::Search { keyword, long } => {
+            let vault = vault_arc.lock().unwrap();
+            handlers::search::handle_search(&vault, &keyword, long)?;
         }
         ReplCommand::Open { vault_name, sha256 } => {
             let vault = vault_arc.lock().unwrap();

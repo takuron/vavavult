@@ -60,25 +60,34 @@ pub enum ReplCommand {
     //  列出保险库中的文件和目录
     #[command(visible_alias = "ls")]
     List {
-        /// List contents by virtual path
-        //  按虚拟路径列出内容
-        #[arg(short = 'p', long = "path", group = "list_mode")]
+        /// (Optional) The vault path to list. Defaults to root ("/") if not provided.
+        // (可选) 要列出的保险库路径。如果未提供，则默认为根目录 ("/")。
+        #[arg(value_name = "VAULT_PATH")] // [V2 修改] 移除 group = "list_mode"
         path: Option<String>,
 
-        /// Fuzzy search for files by keyword (searches names and tags)
-        // 根据关键词模糊搜索 (搜索文件名和标签)
-        #[arg(short = 's', long = "search", group = "list_mode")] 
-        search: Option<String>,
+        /// Use long-listing format (show details).
+        //  使用长列表格式 (显示详细信息)。
+        #[arg(short = 'l', long = "long")]
+        long: bool,
 
-        // --- [移除] 以下字段已被合并到 --search ---
-        // /// Search for files by tag
-        // //  根据标签搜索文件
-        // #[arg(short = 't', long = "tag", group = "list_mode")]
-        // tag: Option<String>,
-        /// Show detailed information for each file
-        //  显示每个文件的详细信息
-        #[arg(short = 'd', long = "detail")]
-        detail: bool,
+        /// List subdirectories recursively.
+        //  递归列出子目录。
+        #[arg(short = 'R', long = "recursive")]
+        recursive: bool,
+    },
+    /// Search for files by keyword
+    //  按关键字搜索文件
+    #[command(visible_alias = "find")]
+    Search {
+        /// The keyword to search for in file paths and tags
+        //  要在文件路径和标签中搜索的关键字
+        #[arg(required = true)]
+        keyword: String,
+
+        /// Use long-listing format (show details)
+        //  使用长列表格式 (显示详细信息)
+        #[arg(short = 'l', long = "long")]
+        long: bool,
     },
     /// Open a file from the vault with the default application
     //  使用默认应用程序从保险库中打开一个文件

@@ -6,3 +6,4 @@ pub(crate) mod remove;
 pub(crate) mod rename;
 pub(crate) mod tag;
 pub(crate) mod vault;
+pub(crate) mod search;

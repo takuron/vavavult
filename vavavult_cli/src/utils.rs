@@ -9,29 +9,45 @@ use vavavult::file::{FileEntry, VaultPath};
 use vavavult::vault::{QueryResult, Vault};
 use vavavult::utils::time as time_utils;
 
-/// 打印 `FileEntry` 列表的辅助函数 (简化版)
-pub fn print_file_entries(files: &[FileEntry]) {
-    if files.is_empty() {
-        return;
-    }
-    for entry in files {
-        let short_hash = &entry.sha256sum.to_string()[..12];
-        println!("{:<14} {}", short_hash, entry.path);
+/// 打印递归文件列表中的单个条目 (风格 1)
+pub fn print_recursive_file_item(entry: &FileEntry) {
+    let short_hash = &entry.sha256sum.to_string()[..12];
+    // 格式: {12位哈希} {完整路径}
+    println!("{:<14} {}", short_hash, entry.path);
+}
+
+/// 打印浅层(非递归)列表中的单个条目 (风格 1+2 混合)
+/// 注意：此函数效率较低，因为它需要为每个文件查询数据库以获取哈希值。
+pub fn print_shallow_list_item(path: &VaultPath, vault: &Vault) {
+    if path.is_dir() {
+        // 风格 2: 目录
+        // 格式: {占位符} {完整路径}
+        println!("--[folder]--   {}", path);
+    } else {
+        // 风格 1: 文件
+        // 我们需要获取 FileEntry 来显示哈希
+        let hash_prefix = match vault.find_by_path(path) {
+            Ok(QueryResult::Found(entry)) => entry.sha256sum.to_string()[..12].to_string(),
+            _ => "??[error]??".to_string(), // 如果查询失败
+        };
+        println!("{:<14} {}", hash_prefix, path);
     }
 }
 
-/// 打印单个文件详细信息的辅助函数
+/// 打印单个文件的详细信息 (风格 3)
 pub fn print_file_details(entry: &FileEntry) {
     println!("----------------------------------------");
-    println!("  Name:    {}", entry.path);
+    // [V2 新增] 匹配您的新格式
+    println!("  Name:    {}", entry.path.file_name().unwrap_or("?"));
+    println!("  Type:    File");
+    println!("  Path:    {}", entry.path);
     println!("  SHA256:  {}", entry.sha256sum);
 
-    // 打印标签，如果存在
+    // (保留旧逻辑中的 标签 和 元数据，因为它们是详细信息的重要组成部分)
     if !entry.tags.is_empty() {
         println!("  Tags:    {}", entry.tags.join(", "));
     }
 
-    // 筛选并打印元数据
     let system_meta: Vec<_> = entry.metadata.iter().filter(|m| m.key.starts_with("_vavavult_")).collect();
     let user_meta: Vec<_> = entry.metadata.iter().filter(|m| !m.key.starts_with("_vavavult_")).collect();
 
@@ -45,31 +61,34 @@ pub fn print_file_details(entry: &FileEntry) {
     if !system_meta.is_empty() {
         println!("  System Info:");
         for meta in system_meta {
-            // 美化键名
             let pretty_key = meta.key.trim_start_matches("_vavavult_").replace('_', " ");
-
-            // --- 新增逻辑：检查是否是时间戳并进行转换 ---
             let value = if meta.key.ends_with("_time") {
-                // 如果元数据的键以 "_time" 结尾，就尝试解析并格式化为本地时间
                 time_utils::parse_rfc3339_string(&meta.value)
                     .map(|utc_time| {
                         let local_time = utc_time.with_timezone(&Local);
                         local_time.format("%Y-%m-%d %H:%M:%S %Z").to_string()
                     })
-                    .unwrap_or_else(|_| meta.value.clone()) // 如果解析失败，则显示原始值
+                    .unwrap_or_else(|_| meta.value.clone())
             } else {
-                // 否则，直接使用原始值
                 meta.value.clone()
             };
-            // --- 逻辑结束 ---
-
             println!("    - {}: {}", pretty_key, value);
         }
     }
+    // (结尾的横线由 list handler 统一添加)
 }
 
+// --- [V2 新增] 风格 4: "详细 目录" (用于 ls -l) ---
+/// 打印单个目录的详细信息 (风格 4)
+pub fn print_dir_details(path: &VaultPath) {
+    if !path.is_dir() { return; } // 安全检查
+    println!("----------------------------------------");
+    println!("  Name:    {}", path.dir_name().unwrap_or("/"));
+    println!("  Type:    Folder");
+    println!("  Path:    {}", path);
+}
 
-// --- 新增: 辅助函数 ---
+// --- 辅助函数 ---
 
 /// 根据 name 或 sha256 查找文件，返回找到的 FileEntry
 pub fn find_file_entry(vault: &Vault, name: Option<String>, sha: Option<String>) -> Result<FileEntry, Box<dyn Error>> {
