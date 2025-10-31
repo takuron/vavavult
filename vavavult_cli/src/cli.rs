@@ -89,6 +89,8 @@ pub enum ReplCommand {
         #[arg(short = 'l', long = "long")]
         long: bool,
     },
+    /// Open a file from the vault with the default application
+    //  使用默认应用程序从保险库中打开一个文件
     Open {
         /// The path of the file to open (e.g., "/report.txt").
         /// Mutually exclusive with --hash.
