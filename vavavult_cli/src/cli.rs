@@ -41,15 +41,15 @@ pub enum ReplCommand {
         #[arg(required = true)]
         local_path: PathBuf,
 
-        /// (Optional) Specify a new name for the added file (single file only)
-        // (可选) 为添加的文件指定一个新名称 (仅限单文件)
-        #[arg(short = 'n', long = "name")]
-        file_name: Option<String>,
+        /// (Optional) Set the target path or directory in the vault.
+        // (可选) 在保险库中设置目标路径或目录。
+        #[arg(short = 'p', long = "path")]
+        path: Option<String>,
 
-        /// (Optional) Specify the destination directory inside the vault
-        // (可选) 指定在保险库中的目标目录
-        #[arg(short = 'd', long = "dir")]
-        dest_dir: Option<String>,
+        /// (Optional) Set/override the final filename.
+        // (可选) 设置或覆盖最终的文件名。
+        #[arg(short = 'n', long = "name")]
+        name: Option<String>,
 
         /// (EXPERIMENTAL) Use multiple threads to add files in parallel
         // (实验性) 使用多线程并行添加文件
@@ -92,48 +92,52 @@ pub enum ReplCommand {
         #[arg(short = 's', long = "sha256", group = "identifier")]
         sha256: Option<String>,
     },
+
     /// Extract a file or directory from the vault
     //  从保险库中提取一个文件或目录
     #[command(visible_alias = "get")]
     Extract {
-        /// The name of the file to extract (in the vault)
-        //  要提取的文件的名称 (在保险库中)
-        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present_any = ["sha256", "dir_path"])]
-        vault_name: Option<String>,
+        /// The path in the vault to extract (e.g., "/docs/" or "/report.txt").
+        /// Mutually exclusive with --hash.
+        //  要提取的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
+        //  与 --hash 互斥。
+        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
+        path: Option<String>,
 
-        /// The SHA256 hash of the file to extract
-        //  要提取的文件的 SHA256 哈希值
-        #[arg(short = 's', long = "sha256", group = "identifier")]
-        sha256: Option<String>,
+        /// The full 43-character hash of the file to extract.
+        /// Mutually exclusive with --path.
+        //  要提取的文件的完整 43 字符哈希。
+        //  与 --path 互斥。
+        #[arg(short = 'h', long = "hash", group = "source")]
+        hash: Option<String>,
 
-        /// The vault virtual directory to extract
-        //  要提取的保险库虚拟目录
-        #[arg(short = 'd', long = "dir", group = "identifier")]
-        dir_path: Option<String>,
-
-        /// The local destination directory where the file(s) will be saved
-        //  文件将被保存到的本地目标目录
-        #[arg(required = true)]
+        /// The local destination directory where the file(s) will be saved.
+        //  文件将被保存到的本地目标目录。
+        #[arg(value_name = "LOCAL_DESTINATION", required = true)]
         destination: PathBuf,
 
-        /// (Optional) Specify a new name for the extracted file (single file extraction only)
-        //  (可选) 为提取出的文件指定一个新的名称 (仅限单文件提取)
-        #[arg(short = 'o', long = "output", conflicts_with = "dir_path")]
+        /// (Optional) Specify a new name for the extracted file.
+        /// Only valid when extracting a single file (using --hash or a file path).
+        // (可选) 为提取出的文件指定一个新的名称。
+        //  仅在提取单个文件时 (使用 --hash 或文件路径) 有效。
+        #[arg(short = 'o', long = "output")]
         output_name: Option<String>,
 
-        /// Delete the source file from the vault after successful extraction
-        //  提取成功后从保险库中删除源文件
+        /// Only extract files directly in the specified directory, not subdirectories.
+        /// (The default is to extract recursively).
+        //  仅提取指定目录中的直接文件，不提取子目录。
+        // （默认行为是递归提取）。
+        #[arg(long)]
+        non_recursive: bool,
+
+        /// Delete the source file(s) from the vault after successful extraction.
+        //  提取成功后从保险库中删除源文件。
         #[arg(long)]
         delete: bool,
 
-        /// Recursively extract all files in subdirectories (directory mode only)
-        //  递归提取子目录中的所有文件 (仅限目录模式)
-        #[arg(short = 'r', long, requires = "dir_path")]
-        recursive: bool,
-
-        /// (EXPERIMENTAL) Use multiple threads to extract files in parallel
-        // (实验性) 使用多线程并行提取文件
-        #[arg(long, requires = "dir_path")]
+        /// (EXPERIMENTAL) Use multiple threads to extract files in parallel.
+        // (实验性) 使用多线程并行提取文件。
+        #[arg(long)]
         parallel: bool,
     },
     /// Permanently delete a file from the vault

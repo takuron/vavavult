@@ -138,8 +138,8 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
     };
 
     match command {
-        ReplCommand::Add { local_path, file_name, dest_dir, parallel } => {
-            handlers::add::handle_add(Arc::clone(vault_arc), &local_path, file_name, dest_dir, parallel)?;
+        ReplCommand::Add { local_path, path, name, parallel } => {
+            handlers::add::handle_add(Arc::clone(vault_arc), &local_path, path, name, parallel)?;
         }
         ReplCommand::List { path, search, detail } => {
             let vault = vault_arc.lock().unwrap();
@@ -149,8 +149,17 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             let vault = vault_arc.lock().unwrap();
             handlers::open::handle_open(&vault, vault_name, sha256)?;
         }
-        ReplCommand::Extract { vault_name, sha256, dir_path, destination, output_name, delete, recursive, parallel } => {
-            handlers::extract::handle_extract(Arc::clone(vault_arc), vault_name, sha256, dir_path, destination, output_name, delete, recursive, parallel)?;
+        ReplCommand::Extract { path, hash, destination, output_name, non_recursive, delete, parallel } => {
+            handlers::extract::handle_extract(
+                Arc::clone(vault_arc),
+                path,
+                hash,
+                destination,
+                output_name,
+                non_recursive,
+                delete,
+                parallel
+            )?;
         }
         ReplCommand::Remove { vault_name, sha256 } => {
             let mut vault = vault_arc.lock().unwrap();
