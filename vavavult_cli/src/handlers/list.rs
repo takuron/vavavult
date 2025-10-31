@@ -13,10 +13,17 @@ pub fn handle_list(
     long: bool,
     recursive: bool,
 ) -> Result<(), Box<dyn Error>> {
-
-    // 模式 2: 列表 (默认)
     let target_path_str = path.unwrap_or_else(|| "/".to_string());
     let target_vault_path = VaultPath::from(target_path_str.as_str());
+
+    if target_vault_path.is_file() {
+        // [修改] ls 命令现在只接受目录。如果传入文件路径，则报错。
+        // 这与 open 命令的逻辑保持一致。
+        return Err(format!(
+            "Cannot list '{}': Path is a file, not a directory. 'ls' is for directories.",
+            target_vault_path
+        ).into());
+    }
 
     // 检查 `ls` 的目标是文件还是目录
     if target_vault_path.is_file() {

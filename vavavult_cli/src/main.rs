@@ -149,9 +149,10 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             let vault = vault_arc.lock().unwrap();
             handlers::search::handle_search(&vault, &keyword, long)?;
         }
-        ReplCommand::Open { vault_name, sha256 } => {
+        ReplCommand::Open { path, hash } => {
             let vault = vault_arc.lock().unwrap();
-            handlers::open::handle_open(&vault, vault_name, sha256)?;
+            // 传递新的参数
+            handlers::open::handle_open(&vault, path, hash)?;
         }
         ReplCommand::Extract { path, hash, destination, output_name, non_recursive, delete, parallel } => {
             handlers::extract::handle_extract(

@@ -89,17 +89,20 @@ pub enum ReplCommand {
         #[arg(short = 'l', long = "long")]
         long: bool,
     },
-    /// Open a file from the vault with the default application
-    //  使用默认应用程序从保险库中打开一个文件
     Open {
-        /// The name of the file to open
-        //  要打开的文件的名称
-        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
-        vault_name: Option<String>,
-        /// The SHA256 hash of the file to open
-        //  要打开的文件的 SHA256 哈希值
-        #[arg(short = 's', long = "sha256", group = "identifier")]
-        sha256: Option<String>,
+        /// The path of the file to open (e.g., "/report.txt").
+        /// Mutually exclusive with --hash.
+        //  要打开的文件的路径 (例如 "/report.txt")。
+        //  与 --hash 互斥。
+        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
+        path: Option<String>,
+
+        /// The full 43-character hash of the file to open.
+        /// Mutually exclusive with --path.
+        //  要打开的文件的完整 43 字符哈希。
+        //  与 --path 互斥。
+        #[arg(short = 'h', long = "hash", group = "source")]
+        hash: Option<String>,
     },
 
     /// Extract a file or directory from the vault
