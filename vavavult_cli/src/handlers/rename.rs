@@ -1,5 +1,4 @@
 use std::error::Error;
-use vavavult::file::VaultPath;
 use vavavult::vault::Vault;
 use crate::utils::find_file_entry;
 
