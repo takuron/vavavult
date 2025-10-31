@@ -162,21 +162,43 @@ pub enum ReplCommand {
         #[arg(short = 's', long = "sha256", group = "identifier")]
         sha256: Option<String>,
     },
-    /// Rename the current vault
-    //  重命名当前保险库
-    Rename {
-        /// The current name of the file to rename
-        //  要重命名的文件的当前名称
-        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
-        vault_name: Option<String>,
-        /// The SHA256 hash of the file to rename
-        //  要重命名的文件的 SHA256 哈希值
-        #[arg(short = 's', long = "sha256", group = "identifier")]
-        sha256: Option<String>,
+    /// Move (mv) or rename a file within the vault
+    //  在保险库中移动 (mv) 或重命名一个文件
+    #[command(visible_alias = "mv")]
+    Move {
+        /// The path of the file to move.
+        //  要移动的文件的路径。
+        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
+        path: Option<String>,
 
-        /// The new name for the file
-        //  文件的新名称
-        #[arg(required = true)]
+        /// The full 43-character hash of the file to move.
+        //  要移动的文件的完整 43 字符哈希。
+        #[arg(short = 'h', long = "hash", group = "source")]
+        hash: Option<String>,
+
+        /// The new destination.
+        //  新的目标位置。
+        #[arg(required = true, value_name = "DESTINATION")]
+        destination: String,
+    },
+
+    /// Rename a file in its current directory (in-place)
+    //  在当前目录中就地重命名一个文件
+    #[command(visible_alias = "ren")]
+    Rename {
+        /// The path of the file to rename.
+        //  要重命名的文件的路径。
+        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
+        path: Option<String>,
+
+        /// The full 43-character hash of the file to rename.
+        //  要重命名的文件的完整 43 字符哈希。
+        #[arg(short = 'h', long = "hash", group = "source")]
+        hash: Option<String>,
+
+        /// The new filename (must not contain path separators '/')
+        //  新的文件名 (不能包含路径分隔符 '/')
+        #[arg(required = true, value_name = "NEW_FILENAME")]
         new_name: String,
     },
     /// Manage tags for files

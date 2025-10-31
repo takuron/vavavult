@@ -90,17 +90,22 @@ pub fn print_dir_details(path: &VaultPath) {
 
 // --- 辅助函数 ---
 
-/// 根据 name 或 sha256 查找文件，返回找到的 FileEntry
-pub fn find_file_entry(vault: &Vault, name: Option<String>, sha: Option<String>) -> Result<FileEntry, Box<dyn Error>> {
-    let query_result = if let Some(n) = name {
-        // [修改] 使用 find_by_path 和 VaultPath
-        vault.find_by_path(&VaultPath::from(n.as_str()))?
-    } else if let Some(s) = sha {
-        // [修改] 使用 find_by_hash 和 VaultHash
-        let hash = VaultHash::from_str(&s)?;
-        vault.find_by_hash(&hash)?
+/// 根据 path 或 hash 查找文件，返回找到的 FileEntry
+pub fn find_file_entry(
+    vault: &Vault,
+    path: Option<String>,
+    hash: Option<String>,
+) -> Result<FileEntry, Box<dyn Error>> {
+    let query_result = if let Some(p) = path {
+        // 按路径查找
+        vault.find_by_path(&VaultPath::from(p.as_str()))?
+    } else if let Some(h) = hash {
+        // 按哈希查找
+        let vault_hash = VaultHash::from_str(&h)?;
+        vault.find_by_hash(&vault_hash)?
     } else {
-        unreachable!(); // Clap 应该已经阻止了这种情况
+        // 适应新的参数名
+        return Err("You must provide either a --path (-p) or a --hash (-h).".into());
     };
 
     match query_result {

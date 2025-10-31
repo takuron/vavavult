@@ -169,9 +169,13 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             let mut vault = vault_arc.lock().unwrap();
             handlers::remove::handle_remove(&mut vault, vault_name, sha256)?;
         }
-        ReplCommand::Rename { vault_name, sha256, new_name } => {
+        ReplCommand::Move { path, hash, destination } => {
             let mut vault = vault_arc.lock().unwrap();
-            handlers::rename::handle_file_rename(&mut vault, vault_name, sha256, &new_name)?;
+            handlers::move_cl::handle_move(&mut vault, path, hash, destination)?;
+        }
+        ReplCommand::Rename { path, hash, new_name } => {
+            let mut vault = vault_arc.lock().unwrap();
+            handlers::rename::handle_file_rename(&mut vault, path, hash, &new_name)?;
         }
         // [修改] 更新 Vault 子命令的处理路径
         ReplCommand::Vault(vault_command) => {
