@@ -165,9 +165,9 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
                 parallel
             )?;
         }
-        ReplCommand::Remove { vault_name, sha256 } => {
+        ReplCommand::Remove { path, hash, recursive, force } => {
             let mut vault = vault_arc.lock().unwrap();
-            handlers::remove::handle_remove(&mut vault, vault_name, sha256)?;
+            handlers::remove::handle_remove(&mut vault, path, hash, recursive, force)?;
         }
         ReplCommand::Move { path, hash, destination } => {
             let mut vault = vault_arc.lock().unwrap();
@@ -177,12 +177,11 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             let mut vault = vault_arc.lock().unwrap();
             handlers::rename::handle_file_rename(&mut vault, path, hash, &new_name)?;
         }
-        // [修改] 更新 Vault 子命令的处理路径
         ReplCommand::Vault(vault_command) => {
             match vault_command {
                 VaultCommand::Rename { new_name } => {
                     let mut vault = vault_arc.lock().unwrap();
-                    // [修改] 调用新模块中的函数
+
                     handlers::vault::handle_vault_rename(&mut vault, &new_name)?;
                 }
                 VaultCommand::Status => {
@@ -196,20 +195,16 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
         ReplCommand::Tag(tag_command) => {
             let mut vault = vault_arc.lock().unwrap();
             match tag_command {
-                TagCommand::Add { vault_name, sha256, dir_path, tags, recursive } => {
-                    handlers::tag::handle_tag_add(&mut vault, vault_name, sha256, dir_path, &tags, recursive)?;
+                TagCommand::Add { path, hash, tags } => {
+                    handlers::tag::handle_tag_add(&mut vault, path, hash, &tags)?;
                 }
-                TagCommand::Remove { vault_name, sha256, dir_path, tags, recursive } => {
-                    handlers::tag::handle_tag_remove(&mut vault, vault_name, sha256, dir_path, &tags, recursive)?;
+                TagCommand::Remove { path, hash, tags } => {
+                    handlers::tag::handle_tag_remove(&mut vault, path, hash, &tags)?;
                 }
-                TagCommand::Clear { vault_name, sha256 } => {
-                    handlers::tag::handle_tag_clear(&mut vault, vault_name, sha256)?;
+                TagCommand::Clear { path, hash } => {
+                    handlers::tag::handle_tag_clear(&mut vault, path, hash)?;
                 }
             }
-        }
-        ReplCommand::Close => {
-            let vault_name = app_state.active_vault.take().unwrap().lock().unwrap().config.name.clone();
-            println!("Closed vault '{}'.", vault_name);
         }
         ReplCommand::Exit => {
             let vault_name = app_state.active_vault.take().unwrap().lock().unwrap().config.name.clone();

@@ -149,18 +149,33 @@ pub enum ReplCommand {
         #[arg(long)]
         parallel: bool,
     },
-    /// Permanently delete a file from the vault
-    // 从保险库中永久删除一个文件
+    /// Permanently delete a file or directory from the vault
+    //  从保险库中永久删除一个文件或目录
     #[command(visible_alias = "rm")]
     Remove {
-        /// The name of the file to delete
-        //  要删除的文件的名称
-        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
-        vault_name: Option<String>,
-        /// The SHA256 hash of the file to delete
-        //  要删除的文件的 SHA256 哈希值
-        #[arg(short = 's', long = "sha256", group = "identifier")]
-        sha256: Option<String>,
+        /// The path in the vault to delete (e.g., "/docs/" or "/report.txt").
+        /// Mutually exclusive with --hash.
+        //  要删除的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
+        //  与 --hash 互斥。
+        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
+        path: Option<String>,
+
+        /// The full 43-character hash of the file to delete.
+        /// Mutually exclusive with --path.
+        //  要删除的文件的完整 43 字符哈希。
+        //  与 --path 互斥。
+        #[arg(short = 'h', long = "hash", group = "source")]
+        hash: Option<String>,
+
+        /// Required to delete a directory (only applies when using --path)
+        //  删除目录时需要此选项 (仅在使用 --path 时适用)
+        #[arg(short = 'r', long)]
+        recursive: bool,
+
+        /// Force deletion without confirmation
+        //  强制删除而不进行确认
+        #[arg(short = 'f', long)]
+        force: bool,
     },
     /// Move (mv) or rename a file within the vault
     //  在保险库中移动 (mv) 或重命名一个文件
@@ -209,9 +224,6 @@ pub enum ReplCommand {
     //  管理保险库本身
     #[command(subcommand)]
     Vault(VaultCommand), // 将之前的 Rename 移到这里
-    /// Close the current vault
-    //  关闭当前保险库
-    Close,
     /// Exit the interactive session
     //  退出交互式会话
     Exit,
@@ -236,73 +248,65 @@ pub enum VaultCommand {
 // --- `tag` 的子命令 ---
 #[derive(Parser, Debug)]
 pub enum TagCommand {
-    /// Add one or more tags to a file or a directory of files
-    //  将一个或多个标签添加到一个文件或文件目录
+    /// Add one or more tags to a file or directory
+    //  将一个或多个标签添加到一个文件或目录
     Add {
-        /// The name of the file to tag (in the vault)
-        //  要标记的文件的名称 (在保险库中)
-        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present_any = ["sha256", "dir_path"])]
-        vault_name: Option<String>,
+        /// The path in the vault to tag (e.g., "/docs/" or "/report.txt").
+        /// Mutually exclusive with --hash.
+        //  要标记的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
+        //  与 --hash 互斥。
+        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
+        path: Option<String>,
 
-        /// The SHA256 hash of the file to tag
-        //  要标记的文件的 SHA256 哈希值
-        #[arg(short = 's', long = "sha256", group = "identifier")]
-        sha256: Option<String>,
-
-        /// The vault directory to apply tags to (batch mode)
-        //  要应用标签的保险库目录 (批处理模式)
-        #[arg(short = 'd', long = "dir", group = "identifier")]
-        dir_path: Option<String>,
+        /// The full 43-character hash of the file to tag.
+        /// Mutually exclusive with --path.
+        //  要标记的文件的完整 43 字符哈希。
+        //  与 --path 互斥。
+        #[arg(short = 'h', long = "hash", group = "source")]
+        hash: Option<String>,
 
         /// One or more tags to add, separated by spaces
         //  要添加的一个或多个标签，以空格分隔
         #[arg(required = true, num_args = 1..)]
         tags: Vec<String>,
-
-        /// Recursively add tags to all files in subdirectories (directory mode only)
-        //  递归地为子目录中的所有文件添加标签 (仅限目录模式)
-        #[arg(short = 'r', long, requires = "dir_path")]
-        recursive: bool,
     },
-    /// Remove one or more tags from a file or a directory of files
-    //  从一个文件或文件目录中删除一个或多个标签
+    /// Remove one or more tags from a file or directory
+    //  从一个文件或目录中删除一个或多个标签
     Remove {
-        /// The name of the file to remove tags from (in the vault)
-        //  要从中删除标签的文件的名称 (在保险库中)
-        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present_any = ["sha256", "dir_path"])]
-        vault_name: Option<String>,
+        /// The path in the vault to remove tags from (e.g., "/docs/" or "/report.txt").
+        /// Mutually exclusive with --hash.
+        //  要从中删除标签的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
+        //  与 --hash 互斥。
+        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
+        path: Option<String>,
 
-        /// The SHA256 hash of the file to remove tags from
-        //  要从中删除标签的文件的 SHA256 哈希值
-        #[arg(short = 's', long = "sha256", group = "identifier")]
-        sha256: Option<String>,
-
-        /// The vault directory to remove tags from (batch mode)
-        //  要从中删除标签的保险库目录 (批处理模式)
-        #[arg(short = 'd', long = "dir", group = "identifier")]
-        dir_path: Option<String>,
+        /// The full 43-character hash of the file to remove tags from.
+        /// Mutually exclusive with --path.
+        //  要从中删除标签的文件的完整 43 字符哈希。
+        //  与 --path 互斥。
+        #[arg(short = 'h', long = "hash", group = "source")]
+        hash: Option<String>,
 
         /// One or more tags to remove, separated by spaces
         //  要删除的一个或多个标签，以空格分隔
         #[arg(required = true, num_args = 1..)]
         tags: Vec<String>,
-
-        /// Recursively remove tags from all files in subdirectories (directory mode only)
-        //  递归地从子目录中的所有文件中删除标签 (仅限目录模式)
-        #[arg(short = 'r', long, requires = "dir_path")]
-        recursive: bool,
     },
-    /// Clear all tags from a file
-    //  清除一个文件的所有标签
+    /// Clear all tags from a file or directory
+    //  清除一个文件或目录的所有标签
     Clear {
-        /// The name of the file to clear tags from (in the vault)
-        //  要清除标签的文件的名称 (在保险库中)
-        #[arg(short = 'n', long = "name", group = "identifier", required_unless_present = "sha256")]
-        vault_name: Option<String>,
+        /// The path in the vault to clear tags from (e.g., "/docs/" or "/report.txt").
+        /// Mutually exclusive with --hash.
+        //  要清除标签的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
+        //  与 --hash 互斥。
+        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
+        path: Option<String>,
 
-        /// The SHA256 hash of the file to clear tags from
-        //  要清除标签的文件的 SHA256 哈希值
-        #[arg(short = 's', long = "sha256", group = "identifier")]
-        sha256: Option<String>,
+        /// The full 43-character hash of the file to clear tags from.
+        /// Mutually exclusive with --path.
+        //  要清除标签的文件的完整 43 字符哈希。
+        //  与 --path 互斥。
+        #[arg(short = 'h', long = "hash", group = "source")]
+        hash: Option<String>,
     },
 }

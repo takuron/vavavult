@@ -135,38 +135,38 @@ pub fn confirm_action(prompt: &str) -> Result<bool, io::Error> {
 }
 
 /// 打印 `ListResult` 的辅助函数
-pub fn print_list_result(paths: &[VaultPath]) {
-    if paths.is_empty() {
-        println!("(empty)");
-        return;
-    }
-
-    // 1. 分离文件和目录
-    let mut files = Vec::new();
-    let mut dirs = Vec::new();
-    for path in paths {
-        if path.is_dir() {
-            dirs.push(path);
-        } else {
-            files.push(path);
-        }
-    }
-
-    // 2. 先打印目录
-    for dir_path in dirs {
-        // 从 "/a/b/c/" 中提取 "c"
-        let dir_name = dir_path.dir_name().unwrap_or("?");
-        println!("[{}/]", dir_name);
-    }
-
-    // 3. 再打印文件 (仅路径)
-    for file_path in files {
-        // 从 "/a/b/c.txt" 中提取 "c.txt"
-        let file_name = file_path.file_name().unwrap_or("?");
-        // 打印简化的输出，不带哈希
-        println!("  {}", file_name);
-    }
-}
+// pub fn print_list_result(paths: &[VaultPath]) {
+//     if paths.is_empty() {
+//         println!("(empty)");
+//         return;
+//     }
+//
+//     // 1. 分离文件和目录
+//     let mut files = Vec::new();
+//     let mut dirs = Vec::new();
+//     for path in paths {
+//         if path.is_dir() {
+//             dirs.push(path);
+//         } else {
+//             files.push(path);
+//         }
+//     }
+//
+//     // 2. 先打印目录
+//     for dir_path in dirs {
+//         // 从 "/a/b/c/" 中提取 "c"
+//         let dir_name = dir_path.dir_name().unwrap_or("?");
+//         println!("[{}/]", dir_name);
+//     }
+//
+//     // 3. 再打印文件 (仅路径)
+//     for file_path in files {
+//         // 从 "/a/b/c.txt" 中提取 "c.txt"
+//         let file_name = file_path.file_name().unwrap_or("?");
+//         // 打印简化的输出，不带哈希
+//         println!("  {}", file_name);
+//     }
+// }
 
 /// 递归地获取一个 vault 目录下的所有文件
 pub(crate) fn get_all_files_recursively(vault: &Vault, dir_path: &str) -> Result<Vec<FileEntry>, Box<dyn Error>> {
