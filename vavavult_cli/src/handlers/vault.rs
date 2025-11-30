@@ -19,6 +19,14 @@ pub fn handle_status(vault: &Vault) -> Result<(), Box<dyn Error>> {
     // 使用新的高效计数 API
     let file_count = vault.get_file_count()?;
 
+    // 获取已启用的功能列表
+    let features = vault.get_enabled_features()?;
+    let features_display = if features.is_empty() {
+        "None".to_string()
+    } else {
+        features.join(", ")
+    };
+
     // 一个辅助函数，用于查找、解析、并格式化时间
     let format_time = |key: &str| -> String {
         // 使用 get_vault_metadata 从数据库获取
@@ -47,6 +55,7 @@ pub fn handle_status(vault: &Vault) -> Result<(), Box<dyn Error>> {
     println!("  Name:           {}", vault.config.name);
     println!("  Path:           {:?}", vault.root_path);
     println!("  Version:        {}", vault.config.version);
+    println!("  Features:       {}", features_display);
     println!("  Encryption:     {}", encryption_status);
     println!("  Total Files:    {}", file_count);
     println!("  Created At:     {}", create_time_local);

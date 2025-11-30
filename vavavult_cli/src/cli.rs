@@ -314,4 +314,28 @@ pub enum TagCommand {
         #[arg(short = 'h', long = "hash", group = "source")]
         hash: Option<String>,
     },
+    /// Set a display color for a file or directory (Requires 'colorfulTag' feature)
+    //  设置文件或目录的显示颜色 (需要启用 'colorfulTag' 功能)
+    Color {
+        /// The path in the vault to color (e.g., "/docs/" or "/report.txt").
+        /// Mutually exclusive with --hash.
+        //  要设置颜色的保险库内路径。
+        //  与 --hash 互斥。
+        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
+        path: Option<String>,
+
+        /// The full 43-character hash of the file to color.
+        /// Mutually exclusive with --path.
+        //  要设置颜色的文件的完整 43 字符哈希。
+        //  与 --path 互斥。
+        #[arg(short = 'h', long = "hash", group = "source")]
+        hash: Option<String>,
+
+        /// The color to set. Allowed values: red, green, yellow, blue, magenta, cyan.
+        /// Use "none" to remove the color.
+        //  要设置的颜色。允许的值: red, green, yellow, blue, magenta, cyan。
+        //  使用 "none" 移除颜色。
+        #[arg(required = true)]
+        color: String,
+    },
 }

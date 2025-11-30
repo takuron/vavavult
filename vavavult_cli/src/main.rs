@@ -205,6 +205,9 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
                 TagCommand::Clear { path, hash } => {
                     handlers::tag::handle_tag_clear(&mut vault, path, hash)?;
                 }
+                TagCommand::Color { path, hash, color } => {
+                    handlers::tag::handle_tag_color(&mut vault, path, hash, &color)?;
+                }
             }
         }
         ReplCommand::Exit => {

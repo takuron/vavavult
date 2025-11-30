@@ -9,40 +9,102 @@ use vavavult::file::{FileEntry, VaultPath};
 use vavavult::vault::{QueryResult, Vault};
 use vavavult::utils::time as time_utils;
 
+/// 从标签列表中提取颜色 (例如 "_color:red" -> "red")
+fn get_file_color(tags: &[String]) -> Option<&str> {
+    for tag in tags {
+        if let Some(color_val) = tag.strip_prefix("_color:") {
+            return Some(color_val);
+        }
+    }
+    None
+}
+
+/// 使用 ANSI 代码为字符串着色
+fn colorize_string(s: &str, color: &str) -> String {
+    let code = match color {
+        "red" => "\x1b[31m",
+        "green" => "\x1b[32m",
+        "yellow" => "\x1b[33m",
+        "blue" => "\x1b[34m",
+        "magenta" => "\x1b[35m",
+        "cyan" => "\x1b[36m",
+        _ => return s.to_string(), // 未知颜色或无颜色
+    };
+    format!("{}{}\x1b[0m", code, s)
+}
+
 /// 打印递归文件列表中的单个条目 (风格 1)
-pub fn print_recursive_file_item(entry: &FileEntry) {
+pub fn print_recursive_file_item(entry: &FileEntry, colors_enabled: bool) {
     let short_hash = &entry.sha256sum.to_string()[..12];
+
+    // 如果启用了颜色且文件有颜色标签，则对整个路径进行着色
+    let mut display_path = entry.path.to_string();
+    if colors_enabled {
+        if let Some(color) = get_file_color(&entry.tags) {
+            display_path = colorize_string(&display_path, color);
+        }
+    }
+
     // 格式: {12位哈希} {完整路径}
-    println!("{:<14} {}", short_hash, entry.path);
+    println!("{:<14} {}", short_hash, display_path);
 }
 
 /// 打印浅层(非递归)列表中的单个条目 (风格 1+2 混合)
 /// 注意：此函数效率较低，因为它需要为每个文件查询数据库以获取哈希值。
-pub fn print_shallow_list_item(path: &VaultPath, vault: &Vault) {
+pub fn print_shallow_list_item(path: &VaultPath, vault: &Vault, colors_enabled: bool) {
     if path.is_dir() {
         // 风格 2: 目录
         // 格式: {占位符} {完整路径}
         println!("--[folder]--   {}", path);
     } else {
         // 风格 1: 文件
-        // 我们需要获取 FileEntry 来显示哈希
-        let hash_prefix = match vault.find_by_path(path) {
-            Ok(QueryResult::Found(entry)) => entry.sha256sum.to_string()[..12].to_string(),
-            _ => "??[error]??".to_string(), // 如果查询失败
-        };
-        println!("{:<14} {}", hash_prefix, path);
+        match vault.find_by_path(path) {
+            Ok(QueryResult::Found(entry)) => {
+                let hash_prefix = entry.sha256sum.to_string()[..12].to_string();
+
+                // 处理颜色
+                let mut display_path = path.to_string();
+                if colors_enabled {
+                    if let Some(color) = get_file_color(&entry.tags) {
+                        display_path = colorize_string(&display_path, color);
+                    }
+                }
+
+                println!("{:<14} {}", hash_prefix, display_path);
+            },
+            _ => {
+                // 如果查询失败
+                println!("{:<14} {}", "??[error]??", path);
+            }
+        }
     }
 }
 
 /// 打印单个文件的详细信息 (风格 3)
-pub fn print_file_details(entry: &FileEntry) {
+pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
     println!("----------------------------------------");
-    // [V2 新增] 匹配您的新格式
-    println!("  Name:    {}", entry.path.file_name().unwrap_or("?"));
-    println!("  Type:    File");
-    println!("  Path:    {}", entry.path);
+
+    // 1. 获取颜色 (如果功能开启)
+    let color_tag = if colors_enabled { get_file_color(&entry.tags) } else { None };
+
+    // 2. 处理文件名显示 (仅对文件名变色)
+    let filename = entry.path.file_name().unwrap_or("?");
+    let display_name = if let Some(c) = color_tag {
+        colorize_string(filename, c)
+    } else {
+        filename.to_string()
+    };
+
+    println!("  Name:            {}", display_name);
+    println!("  Type:            File");
+    println!("  Path:            {}", entry.path);
     println!("  SHA256 (ID):     {}", entry.sha256sum);
     println!("  Original SHA256: {}", entry.original_sha256sum);
+
+    // [新增] 显示当前颜色名称
+    if let Some(c) = color_tag {
+        println!("  Color:           {}", c);
+    }
 
     // 过滤掉以 '_' 开头的标签
     let visible_tags: Vec<&str> = entry.tags.iter()
@@ -51,13 +113,13 @@ pub fn print_file_details(entry: &FileEntry) {
         .collect();
 
     if !visible_tags.is_empty() {
-        println!("  Tags:    {}", visible_tags.join(", "));
+        println!("  Tags:            {}", visible_tags.join(", "));
     }
 
-    // 系统元数据：保留以 _vavavult_ 开头的（用于下方 System Info 显示）
+    // 系统元数据：保留以 _vavavult_ 开头的
     let system_meta: Vec<_> = entry.metadata.iter().filter(|m| m.key.starts_with("_vavavult_")).collect();
 
-    // 用户元数据：过滤掉所有以 '_' 开头的键（包括 _vavavult_ 和其他隐藏键）
+    // 用户元数据：过滤掉所有以 '_' 开头的键
     let user_meta: Vec<_> = entry.metadata.iter().filter(|m| !m.key.starts_with('_')).collect();
 
     if !user_meta.is_empty() {
@@ -84,7 +146,6 @@ pub fn print_file_details(entry: &FileEntry) {
             println!("    - {}: {}", pretty_key, value);
         }
     }
-    // (结尾的横线由 list handler 统一添加)
 }
 
 // --- 风格 4: "详细 目录" (用于 ls -l) ---

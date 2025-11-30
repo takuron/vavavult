@@ -22,10 +22,13 @@ pub fn handle_search(
         keyword
     );
 
+    // 检查 colorfulTag 特性是否启用
+    let colors_enabled = vault.is_feature_enabled("colorfulTag").unwrap_or(false);
+
     if long {
         // 搜索的 -l (详细)
         for file in &found_files {
-            print_file_details(file); // (风格 3)
+            print_file_details(file, colors_enabled); // (风格 3)
         }
         if !found_files.is_empty() {
             println!("----------------------------------------");
@@ -33,7 +36,7 @@ pub fn handle_search(
     } else {
         // 搜索的默认 (非详细)
         for file in &found_files {
-            print_recursive_file_item(file); // (风格 1)
+            print_recursive_file_item(file, colors_enabled); // (风格 1)
         }
     }
 

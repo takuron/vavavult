@@ -24,6 +24,8 @@ pub fn handle_list(
             target_vault_path
         ).into());
     }
+    // 检查 colorfulTag 特性是否启用
+    let colors_enabled = vault.is_feature_enabled("colorfulTag").unwrap_or(false);
 
     // 检查 `ls` 的目标是文件还是目录
     if target_vault_path.is_file() {
@@ -31,9 +33,9 @@ pub fn handle_list(
         match vault.find_by_path(&target_vault_path)? {
             QueryResult::Found(entry) => {
                 if long {
-                    print_file_details(&entry); // (风格 3)
+                    print_file_details(&entry, colors_enabled); // (风格 3)
                 } else {
-                    print_recursive_file_item(&entry); // (风格 1)
+                    print_recursive_file_item(&entry, colors_enabled); // (风格 1)
                 }
             },
             QueryResult::NotFound => {
@@ -62,9 +64,9 @@ pub fn handle_list(
 
         for file in &all_files {
             if long {
-                print_file_details(file); // (风格 3)
+                print_file_details(file, colors_enabled); // (风格 3)
             } else {
-                print_recursive_file_item(file); // (风格 1)
+                print_recursive_file_item(file, colors_enabled); // (风格 1)
             }
         }
         if long && !all_files.is_empty() {
@@ -86,13 +88,13 @@ pub fn handle_list(
                     print_dir_details(path); // (风格 4)
                 } else {
                     if let QueryResult::Found(entry) = vault.find_by_path(path)? {
-                        print_file_details(&entry); // (风格 3)
+                        print_file_details(&entry, colors_enabled); // (风格 3)
                     }
                 }
             } else {
                 // `ls`
                 // (风格 1 + 2)
-                print_shallow_list_item(path, vault);
+                print_shallow_list_item(path, vault, colors_enabled);
             }
         }
         if long && !list_paths.is_empty() {

@@ -274,3 +274,83 @@ pub fn handle_tag_clear(
 
     Ok(())
 }
+
+/// 处理颜色设置命令
+pub fn handle_tag_color(
+    vault: &mut Vault,
+    path: Option<String>,
+    hash: Option<String>,
+    color: &str,
+) -> Result<(), Box<dyn Error>> {
+    const FEATURE_NAME: &str = "colorfulTag";
+    const ALLOWED_COLORS: &[&str] = &["red", "green", "yellow", "blue", "magenta", "cyan", "none"];
+
+    // 1. 验证颜色
+    let color_lower = color.to_lowercase();
+    if !ALLOWED_COLORS.contains(&color_lower.as_str()) {
+        return Err(format!(
+            "Invalid color '{}'. Allowed colors are: {}",
+            color,
+            ALLOWED_COLORS.join(", ")
+        ).into());
+    }
+
+    // 2. 检查并启用特性
+    if !vault.is_feature_enabled(FEATURE_NAME)? {
+        println!("Feature '{}' is not enabled. Enabling it now...", FEATURE_NAME);
+        vault.enable_feature(FEATURE_NAME)?;
+        println!("Feature '{}' enabled.", FEATURE_NAME);
+    }
+
+    // 3. 获取目标文件
+    let (files_to_tag, target_description) = get_files_to_tag(vault, path, hash)?;
+
+    if files_to_tag.is_empty() {
+        println!("No files found for {}. Nothing to color.", target_description);
+        return Ok(());
+    }
+
+    // 4. 处理
+    let pb = ProgressBar::new(files_to_tag.len() as u64);
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [Coloring] [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len}")?
+        .progress_chars("#>-"));
+
+    let mut success_count = 0;
+    let mut fail_count = 0;
+
+    for entry in &files_to_tag {
+        // a. 移除旧的颜色标签
+        // 我们需要遍历文件的标签，找到以 "_color:" 开头的，并移除它们
+        // 注意：FileEntry 中的 tags 是字符串列表，我们需要调用 remove_tag
+        for old_tag in &entry.tags {
+            if old_tag.starts_with("_color:") {
+                if let Err(e) = vault.remove_tag(&entry.sha256sum, old_tag) {
+                    pb.println(format!("Failed to remove old color from {}: {}", entry.path, e));
+                    fail_count += 1;
+                    continue; // 尝试下一个文件
+                }
+            }
+        }
+
+        // b. 添加新颜色 (如果不是 none)
+        if color_lower != "none" {
+            let new_tag = format!("_color:{}", color_lower);
+            if let Err(e) = vault.add_tag(&entry.sha256sum, &new_tag) {
+                pb.println(format!("Failed to set color for {}: {}", entry.path, e));
+                fail_count += 1;
+            } else {
+                success_count += 1;
+            }
+        } else {
+            // 如果是 none，且移除旧标签成功，也算成功
+            success_count += 1;
+        }
+        pb.inc(1);
+    }
+
+    pb.finish_with_message("Color setting complete.");
+    println!("Finished: {} files processed, {} failed.", success_count, fail_count);
+
+    Ok(())
+}
