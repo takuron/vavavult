@@ -1,6 +1,6 @@
 use std::fs;
 use rusqlite::params;
-use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_UPDATE_TIME};
+use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_FEATURES, META_VAULT_UPDATE_TIME};
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
 use crate::file::{PathError, VaultPath};
@@ -77,6 +77,10 @@ pub enum UpdateError {
     // // 提供的哈希字符串格式无效。
     #[error("Wrong hash error: {0}")]
     HashParseError(#[from] HashParseError),
+
+    // 功能名称无效错误
+    #[error("Invalid feature name '{0}': Feature names cannot contain spaces.")]
+    InvalidFeatureName(String),
 }
 
 /// 移动保险库中的文件到新的路径。
@@ -345,6 +349,50 @@ pub(crate) fn remove_vault_metadata(vault: &mut Vault, key: &str) -> Result<(), 
     if rows_affected == 0 {
         return Err(UpdateError::MetadataKeyNotFound(key.to_string()));
     }
+    Ok(())
+}
+
+// --- [新增] 扩展功能操作 ---
+
+/// 启用一个保险库扩展功能。
+///
+/// 如果功能尚未启用，将其添加到 `_vavavult_feature` 列表中。
+/// 功能名称不能包含空格。
+pub(crate) fn enable_vault_feature(vault: &mut Vault, feature_name: &str) -> Result<(), UpdateError> {
+    // 1. 验证功能名称
+    if feature_name.contains(' ') || feature_name.trim().is_empty() {
+        return Err(UpdateError::InvalidFeatureName(feature_name.to_string()));
+    }
+
+    // 2. 获取当前的功能列表
+    // 如果键不存在 (MetadataKeyNotFound)，我们将其视为空字符串
+    let current_value = match get_vault_metadata(vault, META_VAULT_FEATURES) {
+        Ok(v) => v,
+        Err(UpdateError::MetadataKeyNotFound(_)) => String::new(),
+        Err(e) => return Err(e),
+    };
+
+    // 3. 解析并检查是否存在
+    let mut features: Vec<&str> = current_value.split_whitespace().collect();
+
+    if features.contains(&feature_name) {
+        // 功能已启用，直接返回成功
+        return Ok(());
+    }
+
+    // 4. 追加新功能
+    features.push(feature_name);
+
+    // 5. 重新组合并保存
+    // 如果是第一个功能，features.join 会处理得很好
+    let new_value = features.join(" ");
+
+    set_vault_metadata(vault, MetadataEntry {
+        key: META_VAULT_FEATURES.to_string(),
+        value: new_value,
+    })?;
+
+    // 注意：set_vault_metadata 内部已经调用了 touch_vault_update_time
     Ok(())
 }
 

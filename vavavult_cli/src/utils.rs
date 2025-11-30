@@ -41,15 +41,24 @@ pub fn print_file_details(entry: &FileEntry) {
     println!("  Name:    {}", entry.path.file_name().unwrap_or("?"));
     println!("  Type:    File");
     println!("  Path:    {}", entry.path);
-    println!("  SHA256:  {}", entry.sha256sum);
+    println!("  SHA256 (ID):     {}", entry.sha256sum);
+    println!("  Original SHA256: {}", entry.original_sha256sum);
 
-    // (保留旧逻辑中的 标签 和 元数据，因为它们是详细信息的重要组成部分)
-    if !entry.tags.is_empty() {
-        println!("  Tags:    {}", entry.tags.join(", "));
+    // 过滤掉以 '_' 开头的标签
+    let visible_tags: Vec<&str> = entry.tags.iter()
+        .filter(|t| !t.starts_with('_'))
+        .map(|t| t.as_str())
+        .collect();
+
+    if !visible_tags.is_empty() {
+        println!("  Tags:    {}", visible_tags.join(", "));
     }
 
+    // 系统元数据：保留以 _vavavult_ 开头的（用于下方 System Info 显示）
     let system_meta: Vec<_> = entry.metadata.iter().filter(|m| m.key.starts_with("_vavavult_")).collect();
-    let user_meta: Vec<_> = entry.metadata.iter().filter(|m| !m.key.starts_with("_vavavult_")).collect();
+
+    // 用户元数据：过滤掉所有以 '_' 开头的键（包括 _vavavult_ 和其他隐藏键）
+    let user_meta: Vec<_> = entry.metadata.iter().filter(|m| !m.key.starts_with('_')).collect();
 
     if !user_meta.is_empty() {
         println!("  Metadata:");
@@ -78,7 +87,7 @@ pub fn print_file_details(entry: &FileEntry) {
     // (结尾的横线由 list handler 统一添加)
 }
 
-// --- [V2 新增] 风格 4: "详细 目录" (用于 ls -l) ---
+// --- 风格 4: "详细 目录" (用于 ls -l) ---
 /// 打印单个目录的详细信息 (风格 4)
 pub fn print_dir_details(path: &VaultPath) {
     if !path.is_dir() { return; } // 安全检查

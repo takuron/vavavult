@@ -1,7 +1,7 @@
 /// The current version of the vault configuration file format.
 pub const CURRENT_VAULT_VERSION: u32 = 2;
 
-// --- [新增] V2 存储目录常量 ---
+// --- V2 存储目录常量 ---
 /// 存储加密数据文件的子目录。
 pub const DATA_SUBDIR: &str = "data";
 
@@ -15,6 +15,9 @@ pub const META_VAULT_CREATE_TIME: &str = "_vavavult_create_time";
 
 /// Metadata key for the vault last update timestamp (RFC 3339 format).
 pub const META_VAULT_UPDATE_TIME: &str = "_vavavult_update_time";
+
+/// Metadata key for the list of enabled extension features (space-separated).
+pub const META_VAULT_FEATURES: &str = "_vavavult_feature";
 
 // --- 文件元数据常量 ---
 /// Metadata key for the file's addition timestamp (RFC 3339 format).

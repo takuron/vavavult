@@ -1100,3 +1100,53 @@ fn test_v2_parallel_add_and_extract_lifecycle() {
     assert_eq!(original_contents, extracted_contents, "Original and extracted contents must match");
     println!("Parallel add and extract cycle completed successfully.");
 }
+
+/// 测试 V2 扩展功能机制 (Feature Flags)
+#[test]
+fn test_v2_extension_features() {
+    // 1. 准备环境
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+
+    // 2. 验证初始状态 (无任何功能启用)
+    let initial_features = vault.get_enabled_features().unwrap();
+    assert!(initial_features.is_empty(), "Should start with no features enabled");
+
+    assert_eq!(vault.is_feature_enabled("compression_v1").unwrap(), false);
+
+    // 3. 启用一个功能
+    vault.enable_feature("compression_v1").unwrap();
+
+    // 4. 验证启用状态
+    assert_eq!(vault.is_feature_enabled("compression_v1").unwrap(), true);
+    let features_step1 = vault.get_enabled_features().unwrap();
+    assert_eq!(features_step1, vec!["compression_v1"]);
+
+    // 5. 启用第二个功能 (验证追加逻辑)
+    vault.enable_feature("smart_tags").unwrap();
+
+    let features_step2 = vault.get_enabled_features().unwrap();
+    assert_eq!(features_step2.len(), 2);
+    assert!(features_step2.contains(&"compression_v1".to_string()));
+    assert!(features_step2.contains(&"smart_tags".to_string()));
+
+    // 6. 重复启用同一个功能 (应该是幂等的)
+    vault.enable_feature("compression_v1").unwrap();
+    let features_step3 = vault.get_enabled_features().unwrap();
+    assert_eq!(features_step3.len(), 2, "Duplicate enable should not add duplicates");
+
+    // 7. 错误处理：尝试启用带空格的名称
+    let err = vault.enable_feature("invalid feature name");
+    assert!(matches!(err, Err(UpdateError::InvalidFeatureName(_))));
+
+    // 8. 持久化测试：重新打开保险库
+    let vault_path = vault.root_path.clone();
+    drop(vault); // 关闭连接
+
+    let reopened_vault = Vault::open_vault(&vault_path, Some("v2-password")).unwrap();
+    assert_eq!(reopened_vault.is_feature_enabled("compression_v1").unwrap(), true);
+    assert_eq!(reopened_vault.is_feature_enabled("smart_tags").unwrap(), true);
+    assert_eq!(reopened_vault.is_feature_enabled("non_existent").unwrap(), false);
+
+    println!("Extension feature test passed!");
+}

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use rusqlite::{params, OptionalExtension, Connection};
+use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::metadata::MetadataEntry;
 use crate::file::{FileEntry, PathError, VaultPath};
 use crate::vault::Vault;
@@ -398,6 +399,44 @@ pub(super) fn get_total_file_count(vault: &Vault) -> Result<i64, QueryError> {
         |row| row.get(0),
     )?;
     Ok(count)
+}
+
+// 获取所有已启用的扩展功能列表。
+pub(crate) fn get_enabled_vault_features(vault: &Vault) -> Result<Vec<String>, QueryError> {
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT meta_value FROM vault_metadata WHERE meta_key = ?1"
+    )?;
+
+    let result: Option<String> = stmt.query_row(params![META_VAULT_FEATURES], |row| {
+        row.get(0)
+    }).optional()?;
+
+    match result {
+        Some(features_str) => {
+            Ok(features_str.split_whitespace().map(|s| s.to_string()).collect())
+        },
+        None => Ok(Vec::new()),
+    }
+}
+
+/// 检查指定的扩展功能是否已启用。
+pub(crate) fn is_vault_feature_enabled(vault: &Vault, feature_name: &str) -> Result<bool, QueryError> {
+    // 直接查询数据库
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT meta_value FROM vault_metadata WHERE meta_key = ?1"
+    )?;
+
+    let result: Option<String> = stmt.query_row(params![META_VAULT_FEATURES], |row| {
+        row.get(0)
+    }).optional()?;
+
+    match result {
+        Some(features_str) => {
+            // 分割并检查
+            Ok(features_str.split_whitespace().any(|f| f == feature_name))
+        },
+        None => Ok(false), // 如果元数据不存在，说明没有任何功能被启用
+    }
 }
 
 // Finds all files matching a path pattern and a specific tag.

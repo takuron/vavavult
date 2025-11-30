@@ -14,9 +14,9 @@ pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add_standalone as _encrypt_file_for_add_standalone};
 use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError};
-use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, get_total_file_count, list_all_files, list_all_recursive, list_by_path};
+use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path};
 use crate::vault::remove::remove_file;
-use crate::vault::update::{add_tag, add_tags, clear_tags, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
+use crate::vault::update::{add_tag, add_tags, clear_tags, enable_vault_feature, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
 pub use add::{AddFileError, EncryptedAddingFile};
 pub use config::VaultConfig;
 pub use create::{CreateError, OpenError};
@@ -685,6 +685,51 @@ impl Vault {
     pub fn remove_vault_metadata(&mut self, key: &str) -> Result<(), UpdateError> {
         remove_vault_metadata(self, key)?;
         touch_vault_update_time(self)
+    }
+
+    /// Enables a specific extension feature for this vault.
+    ///
+    /// This is used to mark the vault as using a specific capability (e.g., "compression", "deduplication_v2")
+    /// that might be required by future versions of the client.
+    ///
+    /// The feature name is stored in the `_vavavult_feature` metadata list.
+    /// Feature names must be alphanumeric and **cannot contain spaces**.
+    ///
+    /// # Arguments
+    /// * `feature_name` - The unique identifier of the feature.
+    ///
+    /// # Errors
+    /// Returns `UpdateError::InvalidFeatureName` if the name is invalid.
+    //
+    // // 为此保险库启用特定的扩展功能。
+    // //
+    // // 这用于将保险库标记为使用特定的能力（例如 "compression", "deduplication_v2"），
+    // // 未来的客户端版本可能需要这些能力。
+    // //
+    // // 功能名称存储在 `_vavavult_feature` 元数据列表中。
+    // // 功能名称必须是字母数字，且 **不能包含空格**。
+    pub fn enable_feature(&mut self, feature_name: &str) -> Result<(), UpdateError> {
+        enable_vault_feature(self, feature_name)
+    }
+
+    /// Checks if a specific extension feature is currently enabled in this vault.
+    ///
+    /// # Arguments
+    /// * `feature_name` - The feature identifier to check.
+    ///
+    /// # Returns
+    /// `true` if enabled, `false` otherwise.
+    //
+    // // 检查此保险库中目前是否启用了特定的扩展功能。
+    pub fn is_feature_enabled(&self, feature_name: &str) -> Result<bool, QueryError> {
+        is_vault_feature_enabled(self, feature_name)
+    }
+
+    /// Returns a list of all extension features currently enabled for this vault.
+    //
+    // // 返回此保险库当前启用的所有扩展功能的列表。
+    pub fn get_enabled_features(&self) -> Result<Vec<String>, QueryError> {
+        get_enabled_vault_features(self)
     }
 }
 
