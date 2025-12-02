@@ -15,6 +15,23 @@ pub enum QueryResult {
     Found(FileEntry),
 }
 
+/// Represents an entry in a directory listing, distinctively identifying files and subdirectories.
+///
+/// This enum allows consumers to handle files (with full metadata) and subdirectories
+/// differently in a single pass.
+//
+// // 代表目录列表中的一个条目，用于区分文件和子目录。
+// //
+// // 此枚举允许消费者在一次遍历中以不同方式处理文件（包含完整元数据）和子目录。
+#[derive(Debug, Clone)]
+pub enum DirectoryEntry {
+    /// A subdirectory entry, containing only its path.
+    // // 子目录条目，仅包含其路径。
+    Directory(VaultPath),
+    /// A file entry, containing full details (path, hash, metadata, tags, etc.).
+    // // 文件条目，包含完整详细信息（路径、哈希、元数据、标签等）。
+    File(FileEntry),
+}
 /// Defines errors that can occur during a query operation.
 //
 // // 定义在查询操作期间可能发生的错误。
@@ -316,8 +333,79 @@ pub(super) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultP
     Ok(entries)
 }
 
+/// 列出给定目录路径下的条目（文件或子目录），如果是文件则返回详细信息。
+pub(super) fn list_entries_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
+    // 1. 验证输入是否为目录
+    if !path.is_dir() {
+        return Err(QueryError::NotADirectory(path.as_str().to_string()));
+    }
+
+    let mut entries = Vec::new();
+    let mut seen_subdirs = HashSet::new();
+    let base_path_str = path.as_str();
+
+    // 2. 查询所有以该路径为前缀的条目，同时获取用于构建 FileEntry 的字段
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE path LIKE ?1",
+    )?;
+    let like_pattern = format!("{}%", base_path_str);
+
+    // Map 到元组
+    let rows = stmt.query_map(params![like_pattern], |row| {
+        Ok((
+            row.get::<_, VaultHash>(0)?,
+            row.get::<_, String>(1)?, // 先读取 path 字符串进行处理
+            row.get::<_, VaultHash>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+
+    for row_result in rows {
+        let (sha256sum, file_path_str, original_sha256sum, encrypt_password) = row_result?;
+
+        // 计算相对路径
+        let remainder = file_path_str.strip_prefix(base_path_str).unwrap_or("");
+
+        if remainder.contains('/') {
+            // 是子目录中的文件
+            if let Some(subdir_name) = remainder.split('/').next() {
+                if !subdir_name.is_empty() {
+                    let subdir_segment = format!("{}/", subdir_name);
+                    let dir_path = path.join(&subdir_segment)?;
+
+                    if seen_subdirs.insert(dir_path.clone()) {
+                        entries.push(DirectoryEntry::Directory(dir_path));
+                    }
+                }
+            }
+        } else if !remainder.is_empty() {
+            // 是当前目录下的文件
+            let file_vault_path = VaultPath::from(file_path_str.as_str());
+
+            // 获取完整 Entry (包含 tags 和 metadata)
+            let file_entry = fetch_full_entry(
+                &vault.database_connection,
+                &sha256sum,
+                file_vault_path,
+                &original_sha256sum,
+                &encrypt_password
+            )?;
+
+            entries.push(DirectoryEntry::File(file_entry));
+        }
+    }
+
+    // 3. 排序 (按路径字符串排序)
+    entries.sort_by(|a, b| {
+        let path_a = match a { DirectoryEntry::Directory(p) => p.as_str(), DirectoryEntry::File(f) => f.path.as_str() };
+        let path_b = match b { DirectoryEntry::Directory(p) => p.as_str(), DirectoryEntry::File(f) => f.path.as_str() };
+        path_a.cmp(path_b)
+    });
+
+    Ok(entries)
+}
+
 /// 递归列出一个目录下的所有文件 (返回哈希)。
-/// (满足您的请求 2)
 pub(super) fn list_all_recursive(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultHash>, QueryError> {
     // 1. 验证输入是否为目录
     if !path.is_dir() {
@@ -364,7 +452,7 @@ pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FileEntry>, QueryErro
     process_rows_to_entries(vault, rows)
 }
 
-/// [新增] 统一的关键字模糊搜索 (不区分大小写)。
+/// 统一的关键字模糊搜索 (不区分大小写)。
 pub(super) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
     // 1. 准备不区分大小写的 LIKE 模式
     let like_pattern = format!("%{}%", keyword.to_lowercase());
@@ -438,61 +526,3 @@ pub(crate) fn is_vault_feature_enabled(vault: &Vault, feature_name: &str) -> Res
         None => Ok(false), // 如果元数据不存在，说明没有任何功能被启用
     }
 }
-
-// Finds all files matching a path pattern and a specific tag.
-// #[deprecated(since = "0.2.2", note = "Please use `find_by_name_or_tag_fuzzy` instead for combined searching")]
-// pub fn find_by_name_and_tag_fuzzy(
-//     vault: &Vault,
-//     name_pattern: &str,
-//     tag: &str,
-// ) -> Result<Vec<FileEntry>, QueryError> {
-//     // [修改] JOIN files f ... 选择 V2 字段，按 'f.path' 匹配
-//     let mut stmt = vault.database_connection.prepare(
-//         "SELECT f.sha256sum, f.path, f.original_sha256sum, f.encrypt_password
-//          FROM files f JOIN tags t ON f.sha256sum = t.file_sha256sum
-//          WHERE f.path LIKE ?1 AND t.tag = ?2",
-//     )?;
-//     let like_pattern = format!("%{}%", name_pattern);
-//
-//     // [修改] 映射 V2 字段
-//     let rows = stmt
-//         .query_map(params![like_pattern, tag], |row| {
-//             Ok((
-//                 row.get::<_, VaultHash>(0)?,
-//                 row.get::<_, String>(1)?,
-//                 row.get::<_, VaultHash>(2)?,
-//                 row.get::<_, String>(3)?,
-//             ))
-//         })?
-//         .collect::<Result<Vec<_>, _>>()?;
-//
-//     process_rows_to_entries(vault, rows)
-// }
-
-// Finds all files whose path OR tags contain a given pattern.
-// pub fn find_by_name_or_tag_fuzzy(
-//     vault: &Vault,
-//     keyword: &str,
-// ) -> Result<Vec<FileEntry>, QueryError> {
-//     // [修改] 使用 LEFT JOIN，匹配 f.path 或 t.tag
-//     let mut stmt = vault.database_connection.prepare(
-//         "SELECT DISTINCT f.sha256sum, f.path, f.original_sha256sum, f.encrypt_password
-//          FROM files f LEFT JOIN tags t ON f.sha256sum = t.file_sha256sum
-//          WHERE f.path LIKE ?1 OR t.tag LIKE ?1", // 匹配 f.path
-//     )?;
-//     let like_pattern = format!("%{}%", keyword);
-//
-//     // [修改] 映射 V2 字段
-//     let rows = stmt
-//         .query_map(params![like_pattern], |row| {
-//             Ok((
-//                 row.get::<_, VaultHash>(0)?,
-//                 row.get::<_, String>(1)?,
-//                 row.get::<_, VaultHash>(2)?,
-//                 row.get::<_, String>(3)?,
-//             ))
-//         })?
-//         .collect::<Result<Vec<_>, _>>()?;
-//
-//     process_rows_to_entries(vault, rows)
-// }

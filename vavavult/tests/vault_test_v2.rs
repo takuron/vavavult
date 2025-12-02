@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use vavavult::vault::{
     encrypt_file_for_add_standalone, execute_extraction_task_standalone, ExtractionTask,
 };
+use vavavult::vault::DirectoryEntry;
 
 // ---  V2 文件库测试 ---
 
@@ -720,6 +721,89 @@ fn test_v2_find_by_keyword() {
     // 搜索 "nonexistent"
     let none_files = vault.find_by_keyword("nonexistent").unwrap();
     assert_eq!(none_files.len(), 0);
+}
+
+/// 测试 `list_entries_by_path` 接口
+#[test]
+fn test_v2_list_entries_by_path() {
+    let dir = tempdir().unwrap();
+    let (vault, hash_a, hash_b, hash_c, hash_d) = setup_vault_with_search_data(&dir);
+
+    // 数据结构回顾:
+    // - /file_A.txt (hash_a)
+    // - /another_file.txt (hash_d)
+    // - /docs/file_B.md (hash_b)
+    // - /docs/deep/file_C.jpg (hash_c)
+
+    // 1. 测试根目录列表 "/"
+    // 预期:
+    // - File: /another_file.txt
+    // - Directory: /docs/
+    // - File: /file_A.txt
+    let root_entries = vault.list_entries_by_path(&VaultPath::from("/")).unwrap();
+    assert_eq!(root_entries.len(), 3);
+
+    // 验证条目类型和内容
+    match &root_entries[0] {
+        DirectoryEntry::File(entry) => {
+            assert_eq!(entry.path.as_str(), "/another_file.txt");
+            assert_eq!(entry.sha256sum, hash_d);
+            assert!(entry.tags.contains(&"unique".to_string())); // 验证包含完整信息
+        },
+        _ => panic!("Expected File entry for /another_file.txt"),
+    }
+
+    match &root_entries[1] {
+        DirectoryEntry::Directory(path) => {
+            assert_eq!(path.as_str(), "/docs/");
+        },
+        _ => panic!("Expected Directory entry for /docs/"),
+    }
+
+    match &root_entries[2] {
+        DirectoryEntry::File(entry) => {
+            assert_eq!(entry.path.as_str(), "/file_A.txt");
+            assert_eq!(entry.sha256sum, hash_a);
+        },
+        _ => panic!("Expected File entry for /file_A.txt"),
+    }
+
+    // 2. 测试子目录列表 "/docs/"
+    // 预期:
+    // - Directory: /docs/deep/
+    // - File: /docs/file_B.md
+    let docs_entries = vault.list_entries_by_path(&VaultPath::from("/docs/")).unwrap();
+    assert_eq!(docs_entries.len(), 2);
+
+    match &docs_entries[0] {
+        DirectoryEntry::Directory(path) => assert_eq!(path.as_str(), "/docs/deep/"),
+        _ => panic!("Expected Directory entry for /docs/deep/"),
+    }
+
+    match &docs_entries[1] {
+        DirectoryEntry::File(entry) => {
+            assert_eq!(entry.path.as_str(), "/docs/file_B.md");
+            assert_eq!(entry.sha256sum, hash_b);
+        },
+        _ => panic!("Expected File entry for /docs/file_B.md"),
+    }
+
+    // 3. 测试更深层目录 "/docs/deep/"
+    // 预期:
+    // - File: /docs/deep/file_C.jpg
+    let deep_entries = vault.list_entries_by_path(&VaultPath::from("/docs/deep/")).unwrap();
+    assert_eq!(deep_entries.len(), 1);
+    match &deep_entries[0] {
+        DirectoryEntry::File(entry) => {
+            assert_eq!(entry.path.as_str(), "/docs/deep/file_C.jpg");
+            assert_eq!(entry.sha256sum, hash_c);
+        },
+        _ => panic!("Expected File entry"),
+    }
+
+    // 4. 错误测试：尝试对文件路径调用
+    let file_err = vault.list_entries_by_path(&VaultPath::from("/file_A.txt"));
+    assert!(matches!(file_err, Err(QueryError::NotADirectory(_))));
 }
 
 /// 测试 `list_by_path` (返回 `Vec<VaultPath>`)

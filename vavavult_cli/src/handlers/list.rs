@@ -1,10 +1,7 @@
 use std::error::Error;
 use vavavult::file::{VaultPath};
-use vavavult::vault::{QueryResult, Vault};
-use crate::utils::{
-    get_all_files_recursively, print_file_details, print_dir_details,
-    print_recursive_file_item, print_shallow_list_item
-};
+use vavavult::vault::{DirectoryEntry, QueryResult, Vault};
+use crate::utils::{get_all_files_recursively, print_file_details, print_dir_details, print_recursive_file_item, print_directory_entry};
 
 /// 匹配新的 'ls' 风格命令和新的打印风格
 pub fn handle_list(
@@ -17,7 +14,7 @@ pub fn handle_list(
     let target_vault_path = VaultPath::from(target_path_str.as_str());
 
     if target_vault_path.is_file() {
-        // [修改] ls 命令现在只接受目录。如果传入文件路径，则报错。
+        // ls 命令现在只接受目录。如果传入文件路径，则报错。
         // 这与 open 命令的逻辑保持一致。
         return Err(format!(
             "Cannot list '{}': Path is a file, not a directory. 'ls' is for directories.",
@@ -75,29 +72,27 @@ pub fn handle_list(
 
     } else {
         // --- `ls` (默认，非递归) ---
-        let list_paths = vault.list_by_path(&target_vault_path)?;
-        if list_paths.is_empty() {
+        let entries = vault.list_entries_by_path(&target_vault_path)?;
+
+        if entries.is_empty() {
             println!("(empty)");
             return Ok(());
         }
 
-        for path in &list_paths {
+        for entry in &entries {
             if long {
                 // `ls -l`
-                if path.is_dir() {
-                    print_dir_details(path); // (风格 4)
-                } else {
-                    if let QueryResult::Found(entry) = vault.find_by_path(path)? {
-                        print_file_details(&entry, colors_enabled); // (风格 3)
-                    }
+                match entry {
+                    DirectoryEntry::Directory(path) => print_dir_details(path),
+                    DirectoryEntry::File(file_entry) => print_file_details(file_entry, colors_enabled),
                 }
             } else {
                 // `ls`
-                // (风格 1 + 2)
-                print_shallow_list_item(path, vault, colors_enabled);
+                // 使用新的无查询打印函数
+                print_directory_entry(entry, colors_enabled);
             }
         }
-        if long && !list_paths.is_empty() {
+        if long && !entries.is_empty() {
             println!("----------------------------------------");
         }
     }

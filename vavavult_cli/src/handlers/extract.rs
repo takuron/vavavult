@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use indicatif::{ProgressBar, ProgressStyle};
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{execute_extraction_task_standalone, ExtractionTask, QueryResult, Vault};
+use vavavult::vault::{execute_extraction_task_standalone, DirectoryEntry, ExtractionTask, QueryResult, Vault};
 use rayon::prelude::*;
 use vavavult::common::hash::VaultHash;
 use crate::utils::{confirm_action, determine_output_path, get_all_files_recursively};
@@ -123,7 +123,7 @@ fn handle_extract_single_file(
     Ok(())
 }
 
-/// (V2 新增) 收集文件并分发到单线程或多线程处理器
+/// 收集文件并分发到单线程或多线程处理器
 fn handle_extract_directory(
     vault: Arc<Mutex<Vault>>,
     vault_path: &VaultPath,
@@ -140,12 +140,13 @@ fn handle_extract_directory(
         let vault_guard = vault.lock().unwrap();
         if non_recursive {
             println!("(Non-recursive mode enabled)");
-            // 库 API 已更改
-            let paths = vault_guard.list_by_path(vault_path)?;
-            paths.into_iter()
-                .filter(|p| p.is_file()) // 只保留文件
-                .filter_map(|p| vault_guard.find_by_path(&p).ok()) // 查找 FileEntry
-                .filter_map(|qr| match qr { QueryResult::Found(fe) => Some(fe), _ => None })
+            // 使用新的 list_entries 高效 API，直接获取 FileEntry
+            let entries = vault_guard.list_entries_by_path(vault_path)?;
+            entries.into_iter()
+                .filter_map(|entry| match entry {
+                    DirectoryEntry::File(file_entry) => Some(file_entry),
+                    DirectoryEntry::Directory(_) => None, // 在非递归模式下忽略子目录
+                })
                 .collect()
         } else {
             println!("(Recursive mode enabled)");
@@ -159,6 +160,7 @@ fn handle_extract_directory(
         return Ok(());
     }
 
+    // ... (后续逻辑保持不变) ...
     // --- 2. 确认 (不变) ---
     println!("The following {} files will be extracted to {:?}", files_to_extract.len(), destination);
     for entry in &files_to_extract {
@@ -272,7 +274,7 @@ fn run_directory_extract_single_threaded(
 fn run_directory_extract_parallel(
     vault: Arc<Mutex<Vault>>,
     files_to_extract: Vec<FileEntry>,
-    base_vault_path: &VaultPath, // [V2 修改] 接收 VaultPath
+    base_vault_path: &VaultPath,
     destination: &Path,
     delete: bool
 ) -> Result<(), Box<dyn Error>> {
@@ -321,7 +323,7 @@ fn run_directory_extract_parallel(
                 }
             }
 
-            // [V2 修改] 调用无锁的 standalone 函数
+            // 调用无锁的 standalone 函数
             let result = execute_extraction_task_standalone(&task, &final_path);
 
             if let Err(e) = &result {

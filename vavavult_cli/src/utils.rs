@@ -6,7 +6,7 @@ use std::str::FromStr;
 use chrono::Local;
 use vavavult::common::hash::VaultHash;
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{QueryResult, Vault};
+use vavavult::vault::{DirectoryEntry, QueryResult, Vault};
 use vavavult::utils::time as time_utils;
 
 /// 从标签列表中提取颜色 (例如 "_color:red" -> "red")
@@ -49,36 +49,63 @@ pub fn print_recursive_file_item(entry: &FileEntry, colors_enabled: bool) {
     println!("{:<14} {}", short_hash, display_path);
 }
 
-/// 打印浅层(非递归)列表中的单个条目 (风格 1+2 混合)
-/// 注意：此函数效率较低，因为它需要为每个文件查询数据库以获取哈希值。
-pub fn print_shallow_list_item(path: &VaultPath, vault: &Vault, colors_enabled: bool) {
-    if path.is_dir() {
-        // 风格 2: 目录
-        // 格式: {占位符} {完整路径}
-        println!("--[folder]--   {}", path);
-    } else {
-        // 风格 1: 文件
-        match vault.find_by_path(path) {
-            Ok(QueryResult::Found(entry)) => {
-                let hash_prefix = entry.sha256sum.to_string()[..12].to_string();
+/// 打印目录条目 (用于 ls)
+/// 替代旧的 print_shallow_list_item，不再需要查询数据库
+pub fn print_directory_entry(entry: &DirectoryEntry, colors_enabled: bool) {
+    match entry {
+        DirectoryEntry::Directory(path) => {
+            // 风格 2: 目录
+            // 格式: {占位符} {完整路径}
+            println!("--[folder]--   {}", path);
+        }
+        DirectoryEntry::File(file_entry) => {
+            // 风格 1: 文件
+            // 直接从 file_entry 获取信息，无需再次查询
+            let hash_prefix = &file_entry.sha256sum.to_string()[..12];
 
-                // 处理颜色
-                let mut display_path = path.to_string();
-                if colors_enabled {
-                    if let Some(color) = get_file_color(&entry.tags) {
-                        display_path = colorize_string(&display_path, color);
-                    }
+            // 处理颜色
+            let mut display_path = file_entry.path.to_string();
+            if colors_enabled {
+                if let Some(color) = get_file_color(&file_entry.tags) {
+                    display_path = colorize_string(&display_path, color);
                 }
-
-                println!("{:<14} {}", hash_prefix, display_path);
-            },
-            _ => {
-                // 如果查询失败
-                println!("{:<14} {}", "??[error]??", path);
             }
+
+            println!("{:<14} {}", hash_prefix, display_path);
         }
     }
 }
+
+// 打印浅层(非递归)列表中的单个条目 (风格 1+2 混合)
+// 注意：此函数效率较低，因为它需要为每个文件查询数据库以获取哈希值。
+// pub fn print_shallow_list_item(path: &VaultPath, vault: &Vault, colors_enabled: bool) {
+//     if path.is_dir() {
+//         // 风格 2: 目录
+//         // 格式: {占位符} {完整路径}
+//         println!("--[folder]--   {}", path);
+//     } else {
+//         // 风格 1: 文件
+//         match vault.find_by_path(path) {
+//             Ok(QueryResult::Found(entry)) => {
+//                 let hash_prefix = entry.sha256sum.to_string()[..12].to_string();
+// 
+//                 // 处理颜色
+//                 let mut display_path = path.to_string();
+//                 if colors_enabled {
+//                     if let Some(color) = get_file_color(&entry.tags) {
+//                         display_path = colorize_string(&display_path, color);
+//                     }
+//                 }
+// 
+//                 println!("{:<14} {}", hash_prefix, display_path);
+//             },
+//             _ => {
+//                 // 如果查询失败
+//                 println!("{:<14} {}", "??[error]??", path);
+//             }
+//         }
+//     }
+// }
 
 /// 打印单个文件的详细信息 (风格 3)
 pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {

@@ -14,13 +14,13 @@ pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add_standalone as _encrypt_file_for_add_standalone};
 use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError};
-use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path};
+use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path, list_entries_by_path};
 use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, enable_vault_feature, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
 pub use add::{AddFileError, EncryptedAddingFile};
 pub use config::VaultConfig;
 pub use create::{CreateError, OpenError};
-pub use query::ListResult;
+pub use query::{ListResult,DirectoryEntry};
 pub use query::{QueryError, QueryResult};
 pub use remove::RemoveError;
 pub use update::UpdateError;
@@ -181,6 +181,38 @@ impl Vault {
     // // 如果 `path` 是一个文件路径（例如 "/a.txt"），则返回 `QueryError::NotADirectory`。
     pub fn list_by_path(&self, path: &VaultPath) -> Result<Vec<VaultPath>, QueryError> {
         list_by_path(self, path)
+    }
+
+    /// Lists entries (files or subdirectories) under a given directory path.
+    ///
+    /// Unlike `list_by_path` which only returns paths, this method returns:
+    /// - `DirectoryEntry::File(FileEntry)` for files, providing full metadata (tags, size, time, etc.).
+    /// - `DirectoryEntry::Directory(VaultPath)` for subdirectories.
+    ///
+    /// This is particularly useful for UI/CLI applications that need to display detailed file information
+    /// in a list view without performing N+1 queries.
+    ///
+    /// # Arguments
+    /// * `path` - The directory path to list.
+    ///
+    /// # Errors
+    /// Returns `QueryError::NotADirectory` if `path` is a file path.
+    //
+    // // 列出给定目录路径下的条目（文件或子目录）。
+    // //
+    // // 与仅返回路径的 `list_by_path` 不同，此方法返回：
+    // // - 对于文件，返回 `DirectoryEntry::File(FileEntry)`，提供完整元数据（标签、大小、时间等）。
+    // // - 对于子目录，返回 `DirectoryEntry::Directory(VaultPath)`。
+    // //
+    // // 这对于需要在列表视图中显示详细文件信息而又不希望执行 N+1 次查询的 UI/CLI 应用程序特别有用。
+    // //
+    // // # 参数
+    // // * `path` - 要列出的目录路径。
+    // //
+    // // # 错误
+    // // 如果 `path` 是一个文件路径，则返回 `QueryError::NotADirectory`。
+    pub fn list_entries_by_path(&self, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
+        list_entries_by_path(self, path)
     }
 
     /// Recursively lists all files under a given directory path and returns their `VaultHash`es.
