@@ -607,7 +607,7 @@ fn test_v2_large_file_integrity() {
 #[test]
 fn test_v2_batch_queries() {
     let dir = tempdir().unwrap();
-    let (vault, hash_a, hash_b, hash_c, hash_d) = setup_vault_with_search_data(&dir);
+    let (vault, hash_a, _, hash_c, _) = setup_vault_with_search_data(&dir);
 
     // 1. 测试 find_many_by_hash
     // 查询: hash_a (存在), hash_c (存在), 以及一个随机不存在的哈希
