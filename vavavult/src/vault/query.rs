@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use rusqlite::{params, OptionalExtension, Connection};
+use rusqlite::{params, OptionalExtension, Connection, params_from_iter};
 use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::metadata::MetadataEntry;
 use crate::file::{FileEntry, PathError, VaultPath};
@@ -178,6 +178,73 @@ pub fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, Que
     } else {
         Ok(QueryResult::NotFound)
     }
+}
+
+/// 批量根据哈希查找文件。
+///
+/// 这比循环调用 `check_by_hash` 更高效，因为它减少了对 `files` 主表的查询次数。
+/// 返回的列表顺序不保证与输入的哈希顺序一致。未找到的哈希将被忽略。
+pub fn find_by_hashes(vault: &Vault, hashes: &[VaultHash]) -> Result<Vec<FileEntry>, QueryError> {
+    if hashes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // 1. 动态构建 SQL: "SELECT ... WHERE sha256sum IN (?1, ?2, ...)"
+    let placeholders: Vec<String> = (1..=hashes.len()).map(|i| format!("?{}", i)).collect();
+    let query_sql = format!(
+        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE sha256sum IN ({})",
+        placeholders.join(",")
+    );
+
+    // 2. 准备语句
+    let mut stmt = vault.database_connection.prepare(&query_sql)?;
+
+    // 3. 执行查询并映射结果
+    // params_from_iter 允许我们将 &[VaultHash] 转换为 SQL 参数
+    let rows = stmt.query_map(params_from_iter(hashes), |row| {
+        Ok((
+            row.get::<_, VaultHash>(0)?,
+            row.get::<_, VaultPath>(1)?,
+            row.get::<_, VaultHash>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+
+    // 4. 处理结果 (这里会为每个找到的文件调用 fetch_full_entry 获取 tags/metadata)
+    // 虽然 tags/metadata 仍然是 N+1 查询，但我们节省了 N 次主表查询
+    process_rows_to_entries(vault, rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+///  批量根据路径查找文件。
+///
+/// 返回的列表顺序不保证与输入的路径顺序一致。未找到的路径将被忽略。
+pub fn find_by_paths(vault: &Vault, paths: &[VaultPath]) -> Result<Vec<FileEntry>, QueryError> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // 1. 动态构建 SQL
+    let placeholders: Vec<String> = (1..=paths.len()).map(|i| format!("?{}", i)).collect();
+    let query_sql = format!(
+        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE path IN ({})",
+        placeholders.join(",")
+    );
+
+    // 2. 准备语句
+    let mut stmt = vault.database_connection.prepare(&query_sql)?;
+
+    // 3. 执行查询
+    let rows = stmt.query_map(params_from_iter(paths), |row| {
+        Ok((
+            row.get::<_, VaultHash>(0)?,
+            row.get::<_, VaultPath>(1)?,
+            row.get::<_, VaultHash>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+
+    // 4. 处理结果
+    process_rows_to_entries(vault, rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 /// 根据文件的 *原始* SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。

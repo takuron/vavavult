@@ -14,7 +14,7 @@ pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add_standalone as _encrypt_file_for_add_standalone};
 use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError};
-use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_keyword, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path, list_entries_by_path};
+use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_hashes, find_by_keyword, find_by_paths, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path, list_entries_by_path};
 use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, enable_vault_feature, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
 pub use add::{AddFileError, EncryptedAddingFile};
@@ -126,6 +126,28 @@ impl Vault {
     // // 这个哈希是文件在保险库中的主键。
     pub fn find_by_hash(&self, hash: &VaultHash) -> Result<QueryResult, QueryError> {
         check_by_hash(self, hash)
+    }
+
+    /// Finds multiple file entries by their `VaultHash`es in a single batch query.
+    ///
+    /// Any hashes not found in the vault are simply omitted from the result.
+    //
+    // // 在单个批处理查询中通过 `VaultHash` 查找多个文件条目。
+    // //
+    // // 任何在保险库中未找到的哈希值都将从结果中省略。
+    pub fn find_by_hashes(&self, hashes: &[VaultHash]) -> Result<Vec<FileEntry>, QueryError> {
+        find_by_hashes(self, hashes)
+    }
+
+    /// Finds multiple file entries by their `VaultPath`s in a single batch query.
+    ///
+    /// Any paths not found in the vault are simply omitted from the result.
+    //
+    // // 在单个批处理查询中通过 `VaultPath` 查找多个文件条目。
+    // //
+    // // 任何在保险库中未找到的路径都将从结果中省略。
+    pub fn find_by_paths(&self, paths: &[VaultPath]) -> Result<Vec<FileEntry>, QueryError> {
+        find_by_paths(self, paths)
     }
 
     /// Finds a file entry by the `VaultHash` of its *original* (unencrypted) content.

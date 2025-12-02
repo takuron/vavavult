@@ -601,7 +601,52 @@ fn test_v2_large_file_integrity() {
     println!("SHA512 hashes match. Integrity verified for 32MB file.");
 }
 
-// --- [新增] V2 搜索与列表测试 ---
+// ---  V2 搜索与列表测试 ---
+
+/// 测试批量查询接口 (find_many_by_hash / find_many_by_path)
+#[test]
+fn test_v2_batch_queries() {
+    let dir = tempdir().unwrap();
+    let (vault, hash_a, hash_b, hash_c, hash_d) = setup_vault_with_search_data(&dir);
+
+    // 1. 测试 find_many_by_hash
+    // 查询: hash_a (存在), hash_c (存在), 以及一个随机不存在的哈希
+    let random_hash = VaultHash::new([99u8; 32]);
+    let query_hashes = vec![hash_a.clone(), random_hash.clone(), hash_c.clone()];
+
+    let results_by_hash = vault.find_by_hashes(&query_hashes).unwrap();
+
+    assert_eq!(results_by_hash.len(), 2, "Should find exactly 2 files");
+
+    // 验证结果内容
+    let found_hashes: Vec<VaultHash> = results_by_hash.iter().map(|e| e.sha256sum).collect();
+    assert!(found_hashes.contains(&hash_a));
+    assert!(found_hashes.contains(&hash_c));
+    assert!(!found_hashes.contains(&random_hash)); // 确保不存在的未被返回
+
+    // 2. 测试 find_many_by_path
+    // 查询: /docs/file_B.md (存在), /another_file.txt (存在), /non_existent.txt (不存在)
+    let path_b = VaultPath::from("/docs/file_B.md");
+    let path_d = VaultPath::from("/another_file.txt");
+    let path_x = VaultPath::from("/non_existent.txt");
+
+    let query_paths = vec![path_b.clone(), path_x.clone(), path_d.clone()];
+
+    let results_by_path = vault.find_by_paths(&query_paths).unwrap();
+
+    assert_eq!(results_by_path.len(), 2, "Should find exactly 2 files");
+
+    // 验证结果内容
+    let found_paths: Vec<VaultPath> = results_by_path.iter().map(|e| e.path.clone()).collect();
+    assert!(found_paths.contains(&path_b));
+    assert!(found_paths.contains(&path_d));
+    assert!(!found_paths.contains(&path_x));
+
+    // 验证关联数据是否正确加载 (tags, metadata)
+    // file_B 应该有 "common" 标签
+    let entry_b = results_by_path.iter().find(|e| e.path == path_b).unwrap();
+    assert!(entry_b.tags.contains(&"common".to_string()));
+}
 
 /// 辅助：创建一个包含用于搜索/列表测试的数据的保险库
 ///
