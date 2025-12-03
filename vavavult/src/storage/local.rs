@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 use crate::common::constants::DATA_SUBDIR;
 use crate::common::hash::VaultHash;
-use super::{StagingToken, StorageBackend};
+use super::{ReadSeek, StagingToken, StorageBackend};
 
 /// 本地文件系统的暂存令牌
 /// 它持有 NamedTempFile 的所有权。如果 Token 被 Drop (且未 commit)，
@@ -51,10 +51,10 @@ impl StorageBackend for LocalStorage {
         Ok(self.file_path(hash).exists())
     }
 
-    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn io::Read + Send>> {
+    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn ReadSeek>> {
         let path = self.file_path(hash);
-        // 使用 BufReader 包装 File 以提高读取性能
         let file = File::open(path)?;
+        // BufReader<File> 自动实现了 Read + Seek + Send，所以它也是 ReadSeek
         Ok(Box::new(BufReader::new(file)))
     }
 

@@ -487,8 +487,7 @@ impl Vault {
         task: &ExtractionTask,
         destination_path: &Path,
     ) -> Result<(), ExtractError> {
-        // [修改] 调用 pub(crate) 的 _standalone 函数
-        _execute_extraction_task_standalone(task, destination_path)
+        _execute_extraction_task_standalone(self.storage.as_ref(), task, destination_path)
     }
 
     /// Extracts a file from the vault to a specified destination path.
@@ -863,8 +862,9 @@ pub fn encrypt_file_for_add_standalone(
 // // * `task` - 从 `Vault::prepare_extraction_task()` 获取的任务对象。
 // // * `destination_path` - 用于保存解密文件的完整本地文件系统路径。
 pub fn execute_extraction_task_standalone(
+    storage: &dyn StorageBackend,
     task: &ExtractionTask,
     destination_path: &Path,
 ) -> Result<(), ExtractError> {
-    _execute_extraction_task_standalone(task, destination_path)
+    _execute_extraction_task_standalone(storage, task, destination_path)
 }

@@ -305,6 +305,7 @@ fn run_directory_extract_parallel(
     // ** 锁在此处释放 **
 
     // --- 阶段 2: 并行执行 (无锁) ---
+    let storage = vault.lock().unwrap().storage.clone();
     let fail_count = Arc::new(AtomicUsize::new(0));
 
     let extraction_results: Vec<(FileEntry, Result<(), Box<dyn Error + Send + Sync>>)> = tasks
@@ -324,7 +325,11 @@ fn run_directory_extract_parallel(
             }
 
             // 调用无锁的 standalone 函数
-            let result = execute_extraction_task_standalone(&task, &final_path);
+            let result = execute_extraction_task_standalone(
+                storage.as_ref(), // deref Arc -> &dyn StorageBackend
+                &task,
+                &final_path
+            );
 
             if let Err(e) = &result {
                 pb_clone.println(format!("FAILED to extract {}: {}", entry.path, e));

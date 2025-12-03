@@ -43,6 +43,9 @@ pub enum QueryError {
     #[error("Database error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
+    #[error("Storage I/O error: {0}")]
+    IoError(#[from] std::io::Error),
+
     /// Data inconsistency: A record was found in the database, but the corresponding
     /// encrypted file is missing from the `data/` directory.
     //
@@ -133,8 +136,7 @@ pub fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResult, Que
     }).optional()? {
         let (sha256sum, path, original_sha256sum, encrypt_password) = res;
 
-        let expected_path = vault.root_path.join(crate::common::constants::DATA_SUBDIR).join(sha256sum.to_string());
-        if !expected_path.exists() {
+        if !vault.storage.exists(&sha256sum)? {
             return Err(QueryError::FileMissing(sha256sum.to_string()));
         }
 
@@ -167,8 +169,7 @@ pub fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, Que
         assert_eq!(ret_sha256sum, *hash);
 
         // 检查 data 子目录中的文件
-        let expected_path = vault.root_path.join(crate::common::constants::DATA_SUBDIR).join(hash.to_string());
-        if !expected_path.exists() {
+        if !vault.storage.exists(hash)? {
             return Err(QueryError::FileMissing(hash.to_string()));
         }
 
@@ -267,9 +268,7 @@ pub fn check_by_original_hash(vault: &Vault, original_hash: &VaultHash) -> Resul
         // 确认返回的哈希与查询的哈希一致
         assert_eq!(ret_original_sha256sum, *original_hash);
 
-        // 检查 data 子目录中的文件
-        let expected_path = vault.root_path.join(crate::common::constants::DATA_SUBDIR).join(sha256sum.to_string());
-        if !expected_path.exists() {
+        if !vault.storage.exists(&sha256sum)? {
             return Err(QueryError::FileMissing(sha256sum.to_string()));
         }
 

@@ -1199,11 +1199,16 @@ fn test_v2_parallel_add_and_extract_lifecycle() {
 
     // --- 7. 阶段 2: 并行执行 (EXTRACT) ---
     println!("Testing parallel execution...");
+
+    // [修改] 获取 storage 的引用 (Clone Arc) 用于提取阶段
+    let storage_extract = vault_arc.lock().unwrap().storage.clone();
+
     let extract_results: Vec<_> = tasks
         .par_iter() // <-- 2. 并行 (无锁)
         .map(|(task, dest_path)| {
             // 调用独立的 standalone 函数
-            execute_extraction_task_standalone(task, dest_path)
+            // [修改] 传入 storage
+            execute_extraction_task_standalone(storage_extract.as_ref(), task, dest_path)
         })
         .collect();
 
