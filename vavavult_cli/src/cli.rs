@@ -122,7 +122,7 @@ pub enum ReplCommand {
         /// Mutually exclusive with --path.
         //  要提取的文件的完整 43 字符哈希。
         //  与 --path 互斥。
-        #[arg(short = 'h', long = "hash", group = "source")]
+        #[arg(short = 'H', long = "hash", group = "source")]
         hash: Option<String>,
 
         /// The local destination directory where the file(s) will be saved.
@@ -169,7 +169,7 @@ pub enum ReplCommand {
         /// Mutually exclusive with --path.
         //  要删除的文件的完整 43 字符哈希。
         //  与 --path 互斥。
-        #[arg(short = 'h', long = "hash", group = "source")]
+        #[arg(short = 'H', long = "hash", group = "source")]
         hash: Option<String>,
 
         /// Required to delete a directory (only applies when using --path)
@@ -193,7 +193,7 @@ pub enum ReplCommand {
 
         /// The full 43-character hash of the file to move.
         //  要移动的文件的完整 43 字符哈希。
-        #[arg(short = 'h', long = "hash", group = "source")]
+        #[arg(short = 'H', long = "hash", group = "source")]
         hash: Option<String>,
 
         /// The new destination.
@@ -213,7 +213,7 @@ pub enum ReplCommand {
 
         /// The full 43-character hash of the file to rename.
         //  要重命名的文件的完整 43 字符哈希。
-        #[arg(short = 'h', long = "hash", group = "source")]
+        #[arg(short = 'H', long = "hash", group = "source")]
         hash: Option<String>,
 
         /// The new filename (must not contain path separators '/')
@@ -267,7 +267,7 @@ pub enum TagCommand {
         /// Mutually exclusive with --path.
         //  要标记的文件的完整 43 字符哈希。
         //  与 --path 互斥。
-        #[arg(short = 'h', long = "hash", group = "source")]
+        #[arg(short = 'H', long = "hash", group = "source")]
         hash: Option<String>,
 
         /// One or more tags to add, separated by spaces
@@ -289,7 +289,7 @@ pub enum TagCommand {
         /// Mutually exclusive with --path.
         //  要从中删除标签的文件的完整 43 字符哈希。
         //  与 --path 互斥。
-        #[arg(short = 'h', long = "hash", group = "source")]
+        #[arg(short = 'H', long = "hash", group = "source")]
         hash: Option<String>,
 
         /// One or more tags to remove, separated by spaces
@@ -311,7 +311,7 @@ pub enum TagCommand {
         /// Mutually exclusive with --path.
         //  要清除标签的文件的完整 43 字符哈希。
         //  与 --path 互斥。
-        #[arg(short = 'h', long = "hash", group = "source")]
+        #[arg(short = 'H', long = "hash", group = "source")]
         hash: Option<String>,
     },
     /// Set a display color for a file or directory (Requires 'colorfulTag' feature)
@@ -328,7 +328,7 @@ pub enum TagCommand {
         /// Mutually exclusive with --path.
         //  要设置颜色的文件的完整 43 字符哈希。
         //  与 --path 互斥。
-        #[arg(short = 'h', long = "hash", group = "source")]
+        #[arg(short = 'H', long = "hash", group = "source")]
         hash: Option<String>,
 
         /// The color to set. Allowed values: red, green, yellow, blue, magenta, cyan.
