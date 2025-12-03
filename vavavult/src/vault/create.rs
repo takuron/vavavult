@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use rusqlite::{Connection, params};
 use serde_json::Value;
 use crate::common::constants::{CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
@@ -51,7 +52,7 @@ pub(crate) fn create_vault(
     vault_path: &Path,
     vault_name: &str,
     password: Option<&str>,
-    backend: Box<dyn StorageBackend>
+    backend: Arc<dyn StorageBackend>
 ) -> Result<Vault, CreateError> {
     if vault_path.exists() && fs::read_dir(vault_path)?.next().is_some(){
         return  Err(VaultAlreadyExists(vault_path.to_path_buf()));
@@ -207,7 +208,7 @@ pub enum OpenError {
 pub fn open_vault(
     vault_path: &Path,
     password: Option<&str>,
-    backend: Box<dyn StorageBackend>
+    backend: Arc<dyn StorageBackend>
 ) -> Result<Vault, OpenError> {
     if !vault_path.is_dir() {
         return Err(OpenError::PathNotFound(vault_path.to_path_buf()));

@@ -245,8 +245,7 @@ fn handle_add_directory_parallel(
 
     // 在并行循环 *之前* 获取一次数据目录路径
     // 这是一个快速的只读锁
-    let data_dir_path = vault.lock().unwrap().get_data_dir_path();
-    // (锁在此处立即释放)
+    let storage = vault.lock().unwrap().storage.clone();
 
     let encryption_results: Vec<Result<EncryptedAddingFile, (String, AddFileError)>> = files_to_add
         .into_par_iter() // <-- Rayon 并行迭代
@@ -254,9 +253,9 @@ fn handle_add_directory_parallel(
             let pb_clone = pb.clone();
 
             // 调用无锁的 standalone 加密函数
-            // **这里没有 vault 锁**
+            // **这里没有 vault 锁**，我们使用 clone 来的 storage 后端
             let result = encrypt_file_for_add_standalone(
-                &data_dir_path,
+                storage.as_ref(), // deref Arc -> &dyn StorageBackend
                 &source_path,
                 &target_path,
             );

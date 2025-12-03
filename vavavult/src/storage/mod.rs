@@ -7,7 +7,7 @@ use crate::common::hash::VaultHash;
 
 /// 作为一个不透明的令牌，持有暂存文件的信息（如临时路径、S3 UploadID 等）。
 /// 必须实现 Send + Sync 以支持多线程。
-pub trait StagingToken: Send + Sync {
+pub trait StagingToken: Send + Sync + Debug {
     /// 用于向下转型以获取具体的 Token 结构体 (例如 LocalStagingToken)
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }

@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 mod add;
 mod config;
@@ -27,6 +28,7 @@ pub use update::UpdateError;
 use crate::common::constants::DATA_SUBDIR;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
+use crate::storage::local::LocalStorage;
 use crate::storage::StorageBackend;
 pub use  crate::vault::extract::ExtractionTask;
 use crate::vault::extract::{extract_file, execute_extraction_task_standalone as _execute_extraction_task_standalone, prepare_extraction_task};
@@ -52,8 +54,8 @@ pub struct Vault {
     // // 一个到保险库数据库的打开的连接。
     pub database_connection: Connection,
     /// The abstract storage backend for file content.
-    // 使用 Box<dyn ...> 实现动态分发
-    pub storage: Box<dyn StorageBackend>,
+    // 使用 Arc<dyn ...> 实现动态分发
+    pub storage: Arc<dyn StorageBackend>,
 }
 
 impl Vault {
@@ -86,9 +88,17 @@ impl Vault {
         root_path: &Path,
         vault_name: &str,
         password: Option<&str>,
-        backend: Box<dyn StorageBackend>,
+        backend: Arc<dyn StorageBackend>,
     ) -> Result<Vault, CreateError> {
-        // 将 backend 传递给内部实现
+        create_vault(root_path, vault_name, password, backend)
+    }
+
+    pub fn create_vault_local(
+        root_path: &Path,
+        vault_name: &str,
+        password: Option<&str>,
+    ) -> Result<Vault, CreateError> {
+        let backend = Arc::new(LocalStorage::new(root_path));
         create_vault(root_path, vault_name, password, backend)
     }
 
@@ -114,9 +124,16 @@ impl Vault {
     pub fn open_vault(
         root_path: &Path,
         password: Option<&str>,
-        backend: Box<dyn StorageBackend>,
+        backend: Arc<dyn StorageBackend>,
     ) -> Result<Vault, OpenError> {
-        // 将 backend 传递给内部实现
+        open_vault(root_path, password, backend)
+    }
+
+    pub fn open_vault_local(
+        root_path: &Path,
+        password: Option<&str>,
+    ) -> Result<Vault, OpenError> {
+        let backend = Arc::new(LocalStorage::new(root_path));
         open_vault(root_path, password, backend)
     }
 
@@ -363,8 +380,7 @@ impl Vault {
         source_path: &Path,
         dest_path: &VaultPath,
     ) -> Result<EncryptedAddingFile, AddFileError> {
-        let data_dir = self.get_data_dir_path();
-        encrypt_file_for_add_standalone(&data_dir, source_path, dest_path)
+        _encrypt_file_for_add_standalone(self.storage.as_ref(), source_path, dest_path)
     }
 
     /// Stage 2 (Add): Commits one or more encrypted files to the vault database.
@@ -821,12 +837,12 @@ impl Vault {
 // // * `source_path` - 本地源文件的路径。
 // // * `dest_path` - 目标 `VaultPath`。
 pub fn encrypt_file_for_add_standalone(
-    data_dir_path: &Path,
+    storage: &dyn StorageBackend,
     source_path: &Path,
     dest_path: &VaultPath,
 ) -> Result<EncryptedAddingFile, AddFileError> {
     // [修改] 公开重导出
-    _encrypt_file_for_add_standalone(data_dir_path, source_path, dest_path)
+    _encrypt_file_for_add_standalone(storage, source_path, dest_path)
 }
 
 /// Executes a prepared extraction task.

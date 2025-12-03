@@ -37,8 +37,7 @@ fn test_v2_create_non_encrypted_vault_success() {
     let vault_name = "my-v2-test-vault";
 
     // 2. 执行创建
-    let backend = Box::new(LocalStorage::new(&vault_path));
-    let result = Vault::create_vault(&vault_path, vault_name, None, backend);
+    let result = Vault::create_vault_local(&vault_path, vault_name, None);
     assert!(result.is_ok(), "Vault creation should succeed");
     let vault = result.unwrap();
 
@@ -97,7 +96,7 @@ fn test_v2_create_encrypted_vault_success() {
     let password = "v2-password-!@#";
 
     // 2. 执行创建
-    let backend = Box::new(LocalStorage::new(&vault_path));
+    let backend = Arc::new(LocalStorage::new(&vault_path));
     let result = Vault::create_vault(&vault_path, vault_name, Some(password), backend);
     assert!(result.is_ok(), "Encrypted vault creation should succeed");
     let vault = result.unwrap();
@@ -146,8 +145,7 @@ fn test_v2_create_vault_already_exists_error() {
     fs::write(vault_path.join("dummy.txt"), "content").unwrap();
 
     // 2. 执行创建
-    let backend = Box::new(LocalStorage::new(&vault_path));
-    let result = Vault::create_vault(&vault_path, "test", None, backend);
+    let result = Vault::create_vault_local(&vault_path, "test", None);
 
     // 3. 验证错误
     assert!(result.is_err(), "Creation in non-empty dir should fail");
@@ -167,14 +165,12 @@ fn test_v2_open_and_reopen_vault_cycle() {
 
     // 2. 创建并关闭
     {
-        let backend = Box::new(LocalStorage::new(&vault_path));
-        let vault = Vault::create_vault(&vault_path, vault_name, None, backend).unwrap();
+        let vault = Vault::create_vault_local( &vault_path, vault_name, None).unwrap();
         assert_eq!(vault.config.name, vault_name);
     } // vault 在此被 drop, 连接关闭
 
     // 3. 重新打开
-    let backend = Box::new(LocalStorage::new(&vault_path));
-    let reopen_result = Vault::open_vault(&vault_path, None, backend);
+    let reopen_result = Vault::open_vault_local(&vault_path, None);
     assert!(reopen_result.is_ok(), "Reopening vault should succeed");
     let reopened_vault = reopen_result.unwrap();
 
@@ -192,13 +188,11 @@ fn test_v2_open_encrypted_vault_access_control() {
     let vault_path = dir.path().join("secure-vault");
     let password = "v2-super-secret";
     {
-        let backend = Box::new(LocalStorage::new(&vault_path));
-        Vault::create_vault(&vault_path, "access-control", Some(password), backend).unwrap();
+        Vault::create_vault_local(&vault_path, "access-control", Some(password)).unwrap();
     } // 关闭保险库
 
     // 2. 失败：尝试不带密码打开
-    let backend1 = Box::new(LocalStorage::new(&vault_path));
-    let no_pass_result = Vault::open_vault(&vault_path, None, backend1);
+    let no_pass_result = Vault::open_vault_local(&vault_path, None);
     assert!(
         matches!(
             no_pass_result.unwrap_err(),
@@ -208,8 +202,7 @@ fn test_v2_open_encrypted_vault_access_control() {
     ); //
 
     // 3. 失败：尝试用错误密码打开
-    let backend2 = Box::new(LocalStorage::new(&vault_path));
-    let wrong_pass_result = Vault::open_vault(&vault_path, Some("wrong-password"), backend2);
+    let wrong_pass_result = Vault::open_vault_local(&vault_path, Some("wrong-password"));
     assert!(
         matches!(
             wrong_pass_result.unwrap_err(),
@@ -219,8 +212,7 @@ fn test_v2_open_encrypted_vault_access_control() {
     ); //
 
     // 4. 成功：尝试用正确密码打开
-    let backend3 = Box::new(LocalStorage::new(&vault_path));
-    let correct_pass_result = Vault::open_vault(&vault_path, Some(password), backend3);
+    let correct_pass_result = Vault::open_vault_local(&vault_path, Some(password));
     assert!(
         correct_pass_result.is_ok(),
         "Should succeed with correct password"
@@ -235,8 +227,7 @@ fn test_v2_open_nonexistent_vault() {
     let dir = tempdir().unwrap();
     let non_existent_path = dir.path().join("non-existent-vault");
 
-    let backend = Box::new(LocalStorage::new(&non_existent_path));
-    let result = Vault::open_vault(&non_existent_path, None, backend);
+    let result = Vault::open_vault_local(&non_existent_path, None);
     assert!(
         matches!(result.unwrap_err(), OpenError::PathNotFound(_)),
         "Should fail with PathNotFound"
@@ -248,8 +239,7 @@ fn test_v2_open_nonexistent_vault() {
 /// 辅助：创建一个带密码的 V2 保险库
 fn setup_encrypted_vault(dir: &TempDir) -> (PathBuf, Vault) {
     let vault_path = dir.path().join("test-vault");
-    let backend = Box::new(LocalStorage::new(&vault_path));
-    let vault = Vault::create_vault(&vault_path, "test-vault", Some("v2-password"), backend).unwrap();
+    let vault = Vault::create_vault_local(&vault_path, "test-vault", Some("v2-password")).unwrap();
     (vault_path, vault)
 }
 
@@ -1153,15 +1143,13 @@ fn test_v2_parallel_add_and_extract_lifecycle() {
 
     // --- 2. 阶段 1: 并行加密 (ADD) ---
     println!("Testing parallel encryption...");
-    let data_dir_path = vault_arc.lock().unwrap().get_data_dir_path(); // 1. Lock (快速)
-    // (锁在此处释放)
 
+    let storage = vault_arc.lock().unwrap().storage.clone();
     let encryption_results: Vec<_> = source_and_dest
-        .into_par_iter() // <-- 2. 并行 (无锁)
+        .into_par_iter()
         .map(|(source_path, dest_path)| {
-            // 调用独立的 standalone 函数
             encrypt_file_for_add_standalone(
-                &data_dir_path,
+                storage.as_ref(), // deref Arc -> &dyn StorageBackend
                 &source_path,
                 &dest_path,
             )
@@ -1284,8 +1272,7 @@ fn test_v2_extension_features() {
     let vault_path = vault.root_path.clone();
     drop(vault); // 关闭连接
 
-    let backend = Box::new(LocalStorage::new(&vault_path));
-    let reopened_vault = Vault::open_vault(&vault_path, Some("v2-password"), backend).unwrap();
+    let reopened_vault = Vault::open_vault_local(&vault_path, Some("v2-password")).unwrap();
     assert_eq!(reopened_vault.is_feature_enabled("compression_v1").unwrap(), true);
     assert_eq!(reopened_vault.is_feature_enabled("smart_tags").unwrap(), true);
     assert_eq!(reopened_vault.is_feature_enabled("non_existent").unwrap(), false);

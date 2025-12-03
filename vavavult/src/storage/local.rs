@@ -10,6 +10,7 @@ use super::{StagingToken, StorageBackend};
 /// 本地文件系统的暂存令牌
 /// 它持有 NamedTempFile 的所有权。如果 Token 被 Drop (且未 commit)，
 /// tempfile 库会自动删除磁盘上的临时文件，天然支持 Rollback。
+#[derive(Debug)]
 pub struct LocalStagingToken {
     pub temp_file: Option<NamedTempFile>,
 }
