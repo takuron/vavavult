@@ -2,7 +2,7 @@ pub mod local;
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::io::{self, Read, Seek, Write};
+use std::io::{self, Read, Write};
 use crate::common::hash::VaultHash;
 
 /// 作为一个不透明的令牌，持有暂存文件的信息（如临时路径、S3 UploadID 等）。
@@ -11,12 +11,6 @@ pub trait StagingToken: Send + Sync + Debug {
     /// 用于向下转型以获取具体的 Token 结构体 (例如 LocalStagingToken)
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
-
-// 定义复合特征，合并 Read, Seek 和 Send
-// 这样我们就可以创建 dyn ReadSeek 对象了
-pub trait ReadSeek: Read + Seek + Send {}
-
-impl<T: Read + Seek + Send> ReadSeek for T {}
 
 /// 存储后端特征
 /// 定义了底层的 IO 操作，解耦了业务逻辑与物理存储。
@@ -27,7 +21,7 @@ pub trait StorageBackend: Send + Sync + Debug {
     fn exists(&self, hash: &VaultHash) -> io::Result<bool>;
 
     /// 获取一个读取器，用于读取存储的数据 (对应 extract/restore)
-    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn ReadSeek>>;
+    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn Read + Send>>;
 
     // --- 写操作 (分阶段: Prepare -> Write -> Commit/Rollback) ---
 

@@ -1,4 +1,4 @@
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
 use sha2::{Digest, Sha256};
 use openssl::symm::{Cipher, Crypter, Mode};
 use openssl::rand;
@@ -127,28 +127,27 @@ pub fn stream_encrypt_and_hash(
 }
 
 
-/// 此函数现在以恒定的内存使用量运行，在写入解密数据块的同时计算原始哈希值。
+/// 流式解密
 ///
-/// # Returns
-/// 成功时返回 `VaultHash` (原始文件的 SHA256)。
-/// 失败时 (例如 GCM 认证失败) 返回 `StreamCipherError`。
+/// 使用“滚动缓冲区”策略：
+/// 我们在内存中维护一个缓冲区，始终保留读取到的最后 `TAG_LEN` 字节。
+/// 只有当缓冲区数据超过 `TAG_LEN` 时，才将溢出的部分视为密文进行解密。
+/// 当流结束时，缓冲区中剩余的字节即为 GCM 认证标签 (Tag)。
 pub fn stream_decrypt(
-    mut source: impl Read + Seek,
+    mut source: impl Read, // [修改] 不再需要 + Seek
     mut destination: impl Write,
     password: &str,
 ) -> Result<VaultHash, StreamCipherError> {
-    // --- 读取头部/尾部，派生密钥 ---
+
+    // --- 1. 读取头部 (Salt + IV) ---
+    // 这些位于文件开头，可以直接顺序读取
     let mut salt = [0u8; SALT_LEN];
     source.read_exact(&mut salt)?;
+
     let mut iv = [0u8; IV_LEN];
     source.read_exact(&mut iv)?;
-    let mut tag = [0u8; TAG_LEN];
-    source.seek(SeekFrom::End(-(TAG_LEN as i64)))?;
-    source.read_exact(&mut tag)?;
-    let file_size = source.seek(SeekFrom::End(0))?;
-    let encrypted_content_len = file_size - (SALT_LEN as u64) - (IV_LEN as u64) - (TAG_LEN as u64);
-    source.seek(SeekFrom::Start((SALT_LEN + IV_LEN) as u64))?;
 
+    // --- 2. 派生密钥 ---
     let mut key = [0u8; KEY_LEN];
     pbkdf2_hmac(
         password.as_bytes(),
@@ -158,60 +157,96 @@ pub fn stream_decrypt(
         &mut key,
     )?;
 
-    // --- 4. 初始化解密器 ---
+    // --- 3. 初始化解密器 ---
     let cipher = Cipher::aes_256_gcm();
+    // 注意：这里尚不设置 Tag，因为我们还不知道它是什么
     let mut decrypter = Crypter::new(cipher, Mode::Decrypt, &key, Some(&iv))?;
-    decrypter.set_tag(&tag)?; // 设置期望的 GCM 标签
 
-    // --- 5. 初始化哈希计算器 ---
+    // --- 4. 滚动缓冲区处理循环 ---
     let mut original_hasher = Sha256::new();
-    let mut encrypted_stream = source.take(encrypted_content_len);
-    let mut buffer = [0u8; BUFFER_LEN]; // 加密块的缓冲区
-    let mut decrypted_buffer = vec![0; BUFFER_LEN + cipher.block_size()]; // 解密块的缓冲区
+
+    // 用于从 IO 读取数据的临时缓冲区
+    let mut read_buffer = [0u8; BUFFER_LEN];
+
+    // "滞后缓冲区"：用于暂存数据，直到确认它们不是 Tag
+    // 容量设为 BUFFER_LEN + TAG_LEN 以避免频繁重分配
+    let mut stash: Vec<u8> = Vec::with_capacity(BUFFER_LEN + TAG_LEN);
+
+    // 解密输出缓冲区
+    let mut decrypted_buffer = vec![0u8; BUFFER_LEN + cipher.block_size() + TAG_LEN];
 
     loop {
-        let bytes_read = encrypted_stream.read(&mut buffer)?;
+        let bytes_read = source.read(&mut read_buffer)?;
+
         if bytes_read == 0 {
+            // EOF 到达
             break;
         }
-        let encrypted_chunk = &buffer[..bytes_read];
 
-        // 解密数据块
-        let count = decrypter.update(encrypted_chunk, &mut decrypted_buffer)?;
-        let decrypted_chunk = &decrypted_buffer[..count];
+        // 将新读取的数据追加到滞后缓冲区
+        stash.extend_from_slice(&read_buffer[..bytes_read]);
 
-        // 将解密后的数据块写入目的地 (临时文件)
-        destination.write_all(decrypted_chunk)?;
-        // 更新哈希值
-        original_hasher.update(decrypted_chunk);
+        // 如果滞后缓冲区的数据量超过了 TAG_LEN
+        // 说明超出的部分肯定是密文（因为 Tag 只有最后 16 字节）
+        if stash.len() > TAG_LEN {
+            let process_len = stash.len() - TAG_LEN;
+
+            // 取出这就部分确认为密文的数据
+            let chunk_to_decrypt = &stash[..process_len];
+
+            // 解密
+            let count = decrypter.update(chunk_to_decrypt, &mut decrypted_buffer)?;
+            let plaintext_chunk = &decrypted_buffer[..count];
+
+            // 写入 & 哈希
+            destination.write_all(plaintext_chunk)?;
+            original_hasher.update(plaintext_chunk);
+
+            // 从 stash 中移除已处理的数据
+            // drain(..n) 会移除前 n 个元素，并将剩余元素（即潜在的 Tag）移到前面
+            stash.drain(..process_len);
+        }
     }
 
-    // --- 6. 完成解密与验证 ---
-    // `finalize` 会处理解密器中剩余的数据，并执行 GCM 认证检查
-    // 如果标签不匹配，此步骤将返回 OpenSsl 错误
-    let mut final_chunk = vec![0; cipher.block_size()];
+    // --- 5. 验证与完成 ---
+
+    // 此时 loop 结束，stash 中应该正好剩下 TAG_LEN 字节
+    if stash.len() != TAG_LEN {
+        // 如果剩余不足 16 字节，说明文件被截断或格式错误
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "Stream ended prematurely: missing authentication tag"
+        ).into());
+    }
+
+    // stash 中的这 16 字节就是 Tag
+    let tag = &stash;
+
+    // 告诉 OpenSSL 期望的 Tag 是什么
+    decrypter.set_tag(tag)?;
+
+    // Finalize 会执行 GCM 校验
+    // 如果 Tag 不匹配，OpenSSL 会返回错误，这里会自动转换为 StreamCipherError
+    let mut final_chunk = vec![0u8; cipher.block_size()];
     let count = decrypter.finalize(&mut final_chunk)?;
-    let decrypted_final_chunk = &final_chunk[..count];
 
-    // 写入最后的数据块
-    destination.write_all(decrypted_final_chunk)?;
-    // 更新哈希
-    original_hasher.update(decrypted_final_chunk);
+    // 处理可能剩余的最后一点明文（通常 GCM finalize 不会产生大量数据，但以防万一）
+    if count > 0 {
+        let final_plaintext = &final_chunk[..count];
+        destination.write_all(final_plaintext)?;
+        original_hasher.update(final_plaintext);
+    }
 
-    // --- 7. 认证成功，计算最终哈希 ---
-    // 只有当 finalize() 成功时，代码才会执行到这里
+    // --- 6. 返回哈希 ---
     let original_hash_bytes: [u8; 32] = original_hasher.finalize().into();
-    let original_hash = VaultHash::new(original_hash_bytes);
-
-    // --- 8. 返回计算出的原始哈希 ---
-    Ok(original_hash)
+    Ok(VaultHash::new(original_hash_bytes))
 }
 
 // --- 单元测试 ---
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{Cursor, Seek, SeekFrom};
     // 导入新的编码器
     use sha2::{Digest, Sha256, Sha512};
     use tempfile::NamedTempFile;
