@@ -1424,3 +1424,74 @@ fn test_v2_decoupling_with_in_memory_backend() {
 
     println!("Decoupling test passed: Data stored in memory, metadata stored in DB.");
 }
+
+#[test]
+fn test_v2_decoupling_with_in_memory_backend_persistence() {
+    // 1. 准备环境
+    let dir = tempdir().unwrap();
+    let vault_path = dir.path().join("memory-vault");
+
+    // 初始化内存后端 (Arc 使得它可以在 Vault 销毁后存活)
+    let memory_backend = Arc::new(InMemoryStorage::new());
+
+    // 创建虚拟源文件
+    let source_path = dir.path().join("source.txt");
+    let content = "Data that lives in RAM, but Metadata on Disk!";
+    fs::write(&source_path, content).unwrap();
+    let dest_vault_path = VaultPath::from("/ram_file.txt");
+
+    // --- 阶段 1: 创建库并添加文件 ---
+    println!("Step 1: Creating vault and adding file...");
+    {
+        // 创建 Vault，注入内存后端
+        let mut vault = Vault::create_vault(
+            &vault_path,
+            "memory-test",
+            Some("mem-pass"),
+            memory_backend.clone()
+        ).unwrap();
+
+        // 添加文件
+        let hash = vault.add_file(&source_path, &dest_vault_path).unwrap();
+        println!("File added with hash: {}", hash);
+
+        // 验证内存中是否存在
+        assert!(memory_backend.exists(&hash).unwrap(), "File MUST exist in memory backend immediately");
+
+        // 验证磁盘 data 目录必须为空 (确保没有写错地方)
+        let disk_data_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
+        assert!(!disk_data_path.exists(), "File should NOT exist on disk in data/ directory");
+    } // vault 在此处被 Drop (关闭)
+
+    println!("Vault closed (dropped). Backend data persists in memory.");
+
+    // --- 阶段 2: 重新打开库并提取文件 ---
+    println!("Step 2: Re-opening vault with the same backend...");
+
+    // 使用 *同一个* memory_backend 实例重新打开
+    // (在真实场景中，这可能是重新连接 S3)
+    let vault_reopened = Vault::open_vault(
+        &vault_path,
+        Some("mem-pass"),
+        memory_backend.clone()
+    ).unwrap();
+
+    // 查找文件 (从磁盘 DB 读取元数据)
+    let query_res = vault_reopened.find_by_path(&dest_vault_path).unwrap();
+    let entry = match query_res {
+        QueryResult::Found(e) => e,
+        QueryResult::NotFound => panic!("File metadata lost after reopen!"),
+    };
+
+    println!("Found file metadata: {}", entry.path);
+
+    // 提取文件 (从内存后端读取数据)
+    let extract_path = dir.path().join("extracted.txt");
+    vault_reopened.extract_file(&entry.sha256sum, &extract_path).unwrap();
+
+    // 验证内容
+    let extracted_content = fs::read_to_string(extract_path).unwrap();
+    assert_eq!(extracted_content, content, "Content mismatch after reopen/extract");
+
+    println!("Decoupling verification passed!");
+}
