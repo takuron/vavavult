@@ -1,5 +1,7 @@
+use std::any::Any;
+use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
@@ -20,6 +22,7 @@ use vavavult::vault::{
 use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
 use vavavult::storage::local::LocalStorage;
+use vavavult::storage::{ReadSeek, StagingToken, StorageBackend};
 // 导入新的 API 函数和类型
 use vavavult::vault::{
     encrypt_file_for_add_standalone, execute_extraction_task_standalone, ExtractionTask,
@@ -1283,4 +1286,141 @@ fn test_v2_extension_features() {
     assert_eq!(reopened_vault.is_feature_enabled("non_existent").unwrap(), false);
 
     println!("Extension feature test passed!");
+}
+
+// 检查解耦正确性
+
+// 1. 定义内存存储结构
+#[derive(Debug, Clone)]
+struct InMemoryStorage {
+    // 使用 Arc<Mutex> 实现内部可变性和线程安全
+    // Key: VaultHash, Value: 文件内容的字节数据
+    files: Arc<Mutex<HashMap<VaultHash, Vec<u8>>>>,
+}
+
+impl InMemoryStorage {
+    fn new() -> Self {
+        Self {
+            files: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+// 2. 定义内存暂存 Token
+#[derive(Debug)]
+struct MemoryStagingToken {
+    // 暂存的数据缓冲区
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl StagingToken for MemoryStagingToken {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// 3. 定义一个辅助 Writer，用于写入 Token 中的 buffer
+struct MemoryWriter {
+    buffer: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for MemoryWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut data = self.buffer.lock().unwrap();
+        data.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+
+// 4. 实现 StorageBackend Trait
+impl StorageBackend for InMemoryStorage {
+    fn exists(&self, hash: &VaultHash) -> std::io::Result<bool> {
+        Ok(self.files.lock().unwrap().contains_key(hash))
+    }
+
+    fn reader(&self, hash: &VaultHash) -> std::io::Result<Box<dyn ReadSeek>> {
+        let map = self.files.lock().unwrap();
+        let data = map.get(hash).ok_or(std::io::Error::new(std::io::ErrorKind::NotFound, "File not found in memory"))?;
+        // Cursor<Vec<u8>> 实现了 Read + Seek + Send
+        Ok(Box::new(Cursor::new(data.clone())))
+    }
+
+    fn prepare_write(&self) -> std::io::Result<(Box<dyn Write + Send>, Box<dyn StagingToken>)> {
+        // 创建一个新的缓冲区
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        // Writer 持有它的引用以进行写入
+        let writer = MemoryWriter { buffer: buffer.clone() };
+        // Token 持有它的引用以供提交时提取
+        let token = MemoryStagingToken { buffer };
+
+        Ok((Box::new(writer), Box::new(token)))
+    }
+
+    fn commit_write(&self, mut token: Box<dyn StagingToken>, final_hash: &VaultHash) -> std::io::Result<()> {
+        let mem_token = token.as_any_mut().downcast_mut::<MemoryStagingToken>()
+            .ok_or(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid token"))?;
+
+        // 从 Token 中取出数据
+        let data = mem_token.buffer.lock().unwrap().clone();
+
+        // 存入主 Map
+        self.files.lock().unwrap().insert(final_hash.clone(), data);
+        Ok(())
+    }
+
+    fn rollback_write(&self, _token: Box<dyn StagingToken>) -> std::io::Result<()> {
+        // 内存对象会被自动 Drop，无需操作
+        Ok(())
+    }
+
+    fn delete(&self, hash: &VaultHash) -> std::io::Result<()> {
+        self.files.lock().unwrap().remove(hash);
+        Ok(())
+    }
+}
+
+// 5. 编写测试用例
+#[test]
+fn test_v2_decoupling_with_in_memory_backend() {
+    // 准备
+    let dir = tempdir().unwrap();
+    let vault_path = dir.path().join("memory-vault");
+
+    // 初始化内存后端
+    let memory_backend = Arc::new(InMemoryStorage::new());
+
+    // 创建 Vault，注入内存后端
+    let mut vault = Vault::create_vault(
+        &vault_path,
+        "memory-test",
+        Some("mem-pass"),
+        memory_backend.clone() // 传入后端
+    ).unwrap();
+
+    // 创建虚拟源文件
+    let source_path = dir.path().join("source.txt");
+    fs::write(&source_path, "Content stored in RAM!").unwrap();
+
+    // --- Action: 添加文件 ---
+    let hash = vault.add_file(&source_path, &VaultPath::from("/ram_file.txt")).unwrap();
+
+    // --- Assert 1: 验证物理隔离 ---
+    // 检查磁盘上的 data 目录，应该为空或不存在对应的文件
+    let disk_data_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
+    assert!(!disk_data_path.exists(), "File should NOT exist on disk in data/ directory");
+
+    // --- Assert 2: 验证内存存储 ---
+    // 检查内存后端中是否存在数据
+    assert!(memory_backend.exists(&hash).unwrap(), "File MUST exist in memory backend");
+
+    // --- Action: 提取文件 ---
+    let extract_path = dir.path().join("extracted.txt");
+    vault.extract_file(&hash, &extract_path).unwrap();
+
+    // --- Assert 3: 验证内容 ---
+    let content = fs::read_to_string(extract_path).unwrap();
+    assert_eq!(content, "Content stored in RAM!");
+
+    println!("Decoupling test passed: Data stored in memory, metadata stored in DB.");
 }
