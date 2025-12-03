@@ -27,6 +27,7 @@ pub use update::UpdateError;
 use crate::common::constants::DATA_SUBDIR;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
+use crate::storage::StorageBackend;
 pub use  crate::vault::extract::ExtractionTask;
 use crate::vault::extract::{extract_file, execute_extraction_task_standalone as _execute_extraction_task_standalone, prepare_extraction_task};
 
@@ -50,6 +51,9 @@ pub struct Vault {
     /// An open connection to the vault's database.
     // // 一个到保险库数据库的打开的连接。
     pub database_connection: Connection,
+    /// The abstract storage backend for file content.
+    // 使用 Box<dyn ...> 实现动态分发
+    pub storage: Box<dyn StorageBackend>,
 }
 
 impl Vault {
@@ -82,8 +86,10 @@ impl Vault {
         root_path: &Path,
         vault_name: &str,
         password: Option<&str>,
+        backend: Box<dyn StorageBackend>,
     ) -> Result<Vault, CreateError> {
-        create_vault(root_path, vault_name, password)
+        // 将 backend 传递给内部实现
+        create_vault(root_path, vault_name, password, backend)
     }
 
     /// Opens an existing Vault from the specified path.
@@ -105,8 +111,13 @@ impl Vault {
     // //
     // // # 错误
     // // 如果路径不存在、配置丢失或损坏，或者为加密保险库提供了错误的密码，则返回 `OpenError`。
-    pub fn open_vault(root_path: &Path, password: Option<&str>) -> Result<Vault, OpenError> {
-        open_vault(root_path, password)
+    pub fn open_vault(
+        root_path: &Path,
+        password: Option<&str>,
+        backend: Box<dyn StorageBackend>,
+    ) -> Result<Vault, OpenError> {
+        // 将 backend 传递给内部实现
+        open_vault(root_path, password, backend)
     }
 
     // --- Find APIs ---

@@ -10,6 +10,7 @@ use std::error::Error;
 use std::{env};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
+use vavavult::storage::local::LocalStorage;
 use crate::cli::{Cli, ReplCommand, TagCommand, TopLevelCommands, VaultCommand};
 
 struct AppState {
@@ -73,16 +74,21 @@ fn handle_create_command(path: &PathBuf, vault_name: &str) -> Result<Vault, Box<
     } else {
         None
     };
-    Ok(Vault::create_vault(path, vault_name, password.as_deref())?)
+
+    let storage_backend = Box::new(LocalStorage::new(path));
+    Ok(Vault::create_vault(path, vault_name, password.as_deref(), storage_backend)?)
 }
 
 fn handle_open_command(path: &PathBuf) -> Result<Vault, Box<dyn Error>> {
-    match Vault::open_vault(path, None) {
+    let create_storage = || Box::new(LocalStorage::new(path));
+
+    match Vault::open_vault(path, None, create_storage()) {
         Ok(vault) => Ok(vault),
         Err(OpenError::PasswordRequired) => {
             println!("This vault is encrypted.");
             let password = rpassword::prompt_password("Enter password: ")?;
-            Ok(Vault::open_vault(path, Some(&password))?)
+            // 重试时也需要传入新的 storage backend 实例
+            Ok(Vault::open_vault(path, Some(&password), create_storage())?)
         }
         Err(e) => Err(e.into()),
     }

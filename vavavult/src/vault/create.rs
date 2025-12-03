@@ -4,6 +4,7 @@ use rusqlite::{Connection, params};
 use serde_json::Value;
 use crate::common::constants::{CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
 use crate::file::encrypt::{create_v2_encrypt_check, verify_v2_encrypt_check, EncryptError};
+use crate::storage::StorageBackend;
 use crate::utils::time::now_as_rfc3339_string;
 use crate::vault::config::VaultConfig;
 use crate::vault::create::CreateError::VaultAlreadyExists;
@@ -45,8 +46,13 @@ pub enum CreateError {
     EncryptionError(#[from] EncryptError),
 }
 
-/// 创建一个新的保险库 (V2)。
-pub(crate) fn create_vault(vault_path: &Path, vault_name: &str, password: Option<&str>) -> Result<Vault, CreateError>{
+/// 创建一个新的保险库
+pub(crate) fn create_vault(
+    vault_path: &Path,
+    vault_name: &str,
+    password: Option<&str>,
+    backend: Box<dyn StorageBackend>
+) -> Result<Vault, CreateError> {
     if vault_path.exists() && fs::read_dir(vault_path)?.next().is_some(){
         return  Err(VaultAlreadyExists(vault_path.to_path_buf()));
     } else {
@@ -125,10 +131,11 @@ pub(crate) fn create_vault(vault_path: &Path, vault_name: &str, password: Option
         ],
     )?;
 
-    let vault = Vault{
-        root_path:vault_path.to_path_buf(),
+    let vault = Vault {
+        root_path: vault_path.to_path_buf(),
         config: new_config,
-        database_connection : conn
+        database_connection: conn,
+        storage: backend,
     };
     Ok(vault)
 }
@@ -196,8 +203,12 @@ pub enum OpenError {
     },
 }
 
-/// 打开一个已存在的保险库 (V2)。
-pub fn open_vault(vault_path: &Path, password: Option<&str>) -> Result<Vault, OpenError> {
+/// 打开一个已存在的保险库。
+pub fn open_vault(
+    vault_path: &Path,
+    password: Option<&str>,
+    backend: Box<dyn StorageBackend>
+) -> Result<Vault, OpenError> {
     if !vault_path.is_dir() {
         return Err(OpenError::PathNotFound(vault_path.to_path_buf()));
     }
@@ -256,5 +267,6 @@ pub fn open_vault(vault_path: &Path, password: Option<&str>) -> Result<Vault, Op
         root_path: vault_path.to_path_buf(),
         config,
         database_connection: conn,
+        storage: backend,
     })
 }
