@@ -26,97 +26,104 @@ pub(crate) use crate::vault::Vault;
 #[derive(Debug, thiserror::Error)]
 pub enum AddFileError {
     /// The specified source file does not exist or is not a file.
+    //
     // // 指定的源文件不存在或不是一个文件。
     #[error("Source file not found at {0}")]
     SourceNotFound(PathBuf),
 
     /// An I/O error occurred (reading source or storage backend IO).
+    //
     // // 发生 I/O 错误 (读取源文件或存储后端 IO)。
     #[error("I/O error: {0}")]
-    IoError(#[from] std::io::Error),
+    IoError(#[from] std::io::Error), // [修改] 重命名为更通用的 IoError
 
     /// A database error occurred during the transaction.
+    //
     // // 在事务期间发生数据库错误。
     #[error("Database error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
     /// The target `VaultPath` was a directory path, but a file path was required.
+    //
     // // 目标 `VaultPath` 是一个目录路径，但需要的是文件路径。
     #[error("The provided vault path is invalid: '{0}' (must be a file path, not a directory path)")]
     InvalidFilePath(String),
 
     /// A database query failed during pre-checks.
+    //
     // // 在预检查期间数据库查询失败。
     #[error("Database query error: {0}")]
     QueryError(#[from] query::QueryError),
 
     /// A file with the same target `VaultPath` already exists in the vault or batch.
+    //
     // // 具有相同目标 `VaultPath` 的文件已存在于保险库或批处理中。
     #[error("A file with the same path '{0}' already exists in the vault or in this batch.")]
     DuplicateFileName(String),
 
     /// A file with the same *encrypted* content hash already exists.
+    //
     // // 具有相同 *加密* 内容哈希的文件已存在。
     #[error("A file with the same content (encrypted SHA256: {0}) already exists in the vault.")]
     DuplicateContent(String),
 
     /// A file with the same *original* content hash already exists.
+    //
     // // 具有相同 *原始* 内容哈希的文件已存在。
     #[error("A file with the same original content (Original SHA256: {0}) already exists at path '{1}' or in this batch.")]
     DuplicateOriginalContent (String, String),
 
     /// The source file path has no filename (e.g., ".") and cannot be added to a directory.
+    //
     // // 源文件路径没有文件名 (例如 ".") 并且无法添加到目录中。
     #[error("Source file has no name and cannot be added to a directory path.")]
     SourceFileNameError,
 
     /// An error occurred during file encryption.
+    //
     // // 文件加密期间发生错误。
     #[error("File encryption failed: {0}")]
     EncryptionError(#[from] EncryptError),
 
     /// An error occurred in the underlying stream cipher.
+    //
     // // 底层流加密器发生错误。
     #[error("Stream cipher error: {0}")]
     StreamCipherError(#[from] StreamCipherError),
 
     /// Failed to update the vault's last-modified timestamp.
+    //
     // // 更新保险库的最后修改时间戳失败。
     #[error("Failed to update vault timestamp: {0}")]
     TimestampUpdateError(#[from] UpdateError),
 
     /// An error occurred constructing the final `VaultPath`.
+    //
     // // 构建最终 `VaultPath` 时发生错误。
     #[error("Failed to construct final path: {0}")]
     PathConstructionError(#[from] PathError),
 }
 
-/// Represents a task for adding a file that has passed the encryption stage.
-///
-/// This struct holds the encrypted file entry ready for database insertion
-/// and a staging token for finalizing the storage.
+/// Represents an encrypted file ready to be committed to the vault database.
+/// This struct is returned by `Vault::encrypt_file_for_add` and consumed by `Vault::commit_add_files`.
 //
-// // 代表一个已通过加密阶段的文件添加任务。
-// //
-// // 此结构体持有准备插入数据库的加密文件条目，
-// // 以及用于完成存储的暂存令牌。
+// // 代表一个已加密、准备好提交到保险库数据库的文件。
+// // 此结构由 `Vault::encrypt_file_for_add` 返回，并由 `Vault::commit_add_files` 消费。
 #[derive(Debug)]
-pub struct AdditionTask {
-    /// The `FileEntry` struct to be inserted into the database.
-    // // 将要插入数据库的 `FileEntry` 结构体。
+pub struct EncryptedAddingFile {
+    /// 最终将插入到数据库的 FileEntry 结构。
     pub file_entry: FileEntry,
-    /// The token representing the staged data in the storage backend.
-    // // 代表存储后端中暂存数据的令牌。
+    /// 暂存令牌，这使得存储后端可以是本地文件、S3 或任何其他介质。
     pub staging_token: Box<dyn StagingToken>,
 }
 
 /// 这是新的独立函数 (standalone)，不依赖 Vault。
 /// 它可以被 CLI 无锁调用。
-pub(crate) fn prepare_addition_task_standalone(
+pub(crate) fn encrypt_file_for_add_standalone(
     storage: &dyn StorageBackend,
     source_path: &Path,
     dest_path: &VaultPath
-) -> Result<AdditionTask, AddFileError> {
+) -> Result<EncryptedAddingFile, AddFileError> {
 
     // 1. 验证源文件 (这里仍依赖本地 FS，因为我们是从本地添加)
     if !source_path.is_file() {
@@ -170,16 +177,16 @@ pub(crate) fn prepare_addition_task_standalone(
     };
 
     // 7. 返回 (包含 Token)
-    Ok(AdditionTask {
+    Ok(EncryptedAddingFile {
         file_entry,
         staging_token,
     })
 }
 
 /// 阶段 2: 提交一个文件添加事务 (需要独占访问的自由函数)
-pub fn execute_addition_tasks(
+pub fn commit_add_files(
     vault: &mut Vault,
-    files: Vec<AdditionTask>
+    files: Vec<EncryptedAddingFile>
 ) -> Result<(), AddFileError> {
     if files.is_empty() {
         return Ok(());
@@ -264,19 +271,19 @@ pub fn execute_addition_tasks(
 pub fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<VaultHash, AddFileError> {
     // 阶段 1: 加密
     // 使用 self.storage
-    let file_to_add = prepare_addition_task_standalone(vault.storage.as_ref(), source_path, dest_path)?;
+    let file_to_add = encrypt_file_for_add_standalone(vault.storage.as_ref(), source_path, dest_path)?;
 
     let hash = file_to_add.file_entry.sha256sum.clone();
 
     // 阶段 2: 提交 (批量 API，但只传一个)
-    execute_addition_tasks(vault, vec![file_to_add])?;
+    commit_add_files(vault, vec![file_to_add])?;
 
     Ok(hash)
 }
 
 /// 辅助函数：提交文件到存储后端
 fn commit_storage_files(
-    files: Vec<AdditionTask>, // 接收所有权
+    files: Vec<EncryptedAddingFile>, // 接收所有权
     storage: &dyn StorageBackend,
 ) -> Result<(), AddFileError> {
     for file_to_add in files {
