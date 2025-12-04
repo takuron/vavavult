@@ -1,20 +1,39 @@
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
-/// 代表 `master.json` 配置文件的顶层结构 (V2)。
+/// Represents the top-level structure of the `master.json` configuration file.
+///
+/// This struct holds global settings for the vault, such as its name, version,
+/// encryption status, and the location of the database file.
+//
+// // 代表 `master.json` 配置文件的顶层结构。
+// //
+// // 此结构体保存保险库的全局设置，例如名称、版本、加密状态以及数据库文件的位置。
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultConfig {
-    /// 保险库的名称
+    /// The name of the vault.
+    // // 保险库的名称。
     pub name: String,
-    /// 保险库版本号，对于V2将固定为 2
+
+    /// The vault version number. Fixed at 2 for V2 vaults.
+    // // 保险库版本号。对于 V2 保险库固定为 2。
     pub version: u32,
-    /// 数据库是否加密。
-    /// true 表示 master.db 使用 SQLCipher 加密。
+
+    /// Indicates whether the vault database is encrypted.
+    /// If `true`, `master.db` is encrypted using SQLCipher.
+    // // 指示保险库数据库是否已加密。
+    // // 如果为 `true`，则 `master.db` 使用 SQLCipher 进行加密。
     pub encrypted: bool,
-    /// 用于验证保险库主密码的加密检查数据的字符串，格式为 "raw:encrypt(base64)"
+
+    /// A validation string used to verify the vault's master password.
+    /// Format: "raw:encrypted(base64)".
+    // // 用于验证保险库主密码的校验字符串。
+    // // 格式: "raw:encrypted(base64)"。
     pub encrypt_check: String,
-    /// 数据库文件的路径 (例如 "master.db")
+
+    /// The relative path to the SQLite database file (e.g., "master.db").
+    // // SQLite 数据库文件的相对路径 (例如 "master.db")。
     pub database: PathBuf,
 }
 

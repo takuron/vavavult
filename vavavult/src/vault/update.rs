@@ -78,7 +78,9 @@ pub enum UpdateError {
     #[error("Wrong hash error: {0}")]
     HashParseError(#[from] HashParseError),
 
-    // 功能名称无效错误
+    /// The provided feature name is invalid (e.g., contains spaces or is empty).
+    //
+    // // 提供的功能名称无效 (例如包含空格或为空)。
     #[error("Invalid feature name '{0}': Feature names cannot contain spaces.")]
     InvalidFeatureName(String),
 }

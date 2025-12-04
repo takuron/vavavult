@@ -43,6 +43,9 @@ pub enum QueryError {
     #[error("Database error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
+    /// An I/O error occurred while accessing the storage backend (e.g., checking file existence).
+    //
+    // // 访问存储后端时发生 I/O 错误 (例如检查文件是否存在)。
     #[error("Storage I/O error: {0}")]
     IoError(#[from] std::io::Error),
 
@@ -357,23 +360,23 @@ pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
 //     if !path.is_dir() {
 //         return Err(QueryError::NotADirectory(path.as_str().to_string()));
 //     }
-// 
+//
 //     let mut entries = Vec::new();
 //     let mut seen_subdirs = HashSet::new();
 //     let base_path_str = path.as_str();
-// 
+//
 //     // 2. 查询所有以该路径为前缀的条目
 //     let mut stmt = vault.database_connection.prepare(
 //         "SELECT path FROM files WHERE path LIKE ?1",
 //     )?;
 //     let like_pattern = format!("{}%", base_path_str);
 //     let paths_iter = stmt.query_map(params![like_pattern], |row| row.get::<_, String>(0))?;
-// 
+//
 //     for path_result in paths_iter {
 //         let file_path_str = path_result?; // file_path_str is String
 //         // 3. 计算相对路径
 //         let remainder = file_path_str.strip_prefix(base_path_str).unwrap_or("");
-// 
+//
 //         if remainder.contains('/') {
 //             // 4. 这是一个子目录或更深层的文件
 //             if let Some(subdir_name) = remainder.split('/').next() {
@@ -381,7 +384,7 @@ pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
 //                     // 我们必须将 subdir_name 作为一个目录段 (带斜杠) 来连接
 //                     let subdir_segment = format!("{}/", subdir_name);
 //                     let dir_path = path.join(&subdir_segment)?; // 例如 "/".join("docs/")
-// 
+//
 //                     if seen_subdirs.insert(dir_path.clone()) {
 //                         entries.push(dir_path);
 //                     }
@@ -393,7 +396,7 @@ pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
 //             entries.push(VaultPath::from(file_path_str.as_str()));
 //         }
 //     }
-// 
+//
 //     // 6. 排序
 //     entries.sort();
 //     Ok(entries)

@@ -8,18 +8,44 @@ use tempfile::NamedTempFile;
 use crate::common::hash::VaultHash;
 use crate::utils::random::generate_random_string;
 
+/// Defines errors that can occur during high-level encryption/decryption operations.
+//
+// // 定义在高级加密/解密操作期间可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum EncryptError {
+    /// An I/O error occurred (e.g., file reading/writing failed).
+    //
+    // // 发生 I/O 错误 (例如，文件读取/写入失败)。
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// An error occurred in the underlying stream cipher encryption/decryption.
+    //
+    // // 底层流密码加密/解密过程中发生错误。
     #[error("Stream cipher error: {0}")]
     StreamCipher(#[from] stream_cipher::StreamCipherError),
+
+    /// A string conversion failed because the byte sequence is not valid UTF-8.
+    //
+    // // 字符串转换失败，因为字节序列不是有效的 UTF-8。
     #[error("String is not valid UTF-8: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
+
+    /// Base64 decoding failed (e.g., invalid characters or format).
+    //
+    // // Base64 解码失败 (例如，无效字符或格式)。
     #[error("Base64 decoding error: {0}")]
     Base64(#[from] base64::DecodeError),
+
+    /// An error occurred in the OpenSSL random number generator.
+    //
+    // // OpenSSL 随机数生成器发生错误。
     #[error("OpenSSL rand error: {0}")]
     Rand(#[from] openssl::error::ErrorStack),
+
+    /// Failed to persist a temporary file to its final destination.
+    //
+    // // 无法将临时文件持久化到其最终目标位置。
     #[error("Tempfile persistence error: {0}")]
     TempFilePersist(#[from] tempfile::PersistError),
 }

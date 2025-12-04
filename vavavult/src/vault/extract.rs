@@ -53,9 +53,12 @@ pub enum ExtractError {
         expected: String,
         calculated: String,
     },
+
+    /// An error occurred during the stream decryption process.
+    //
+    // // 流解密过程中发生错误。
     #[error("Stream cipher error: {0}")]
     StreamCipherError(#[from] stream_cipher::StreamCipherError)
-
 }
 
 /// A "ticket" containing all necessary information to perform a file extraction.

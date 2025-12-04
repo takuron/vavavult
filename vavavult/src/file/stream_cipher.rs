@@ -14,11 +14,20 @@ const TAG_LEN: usize = 16;
 const PBKDF2_ROUNDS: usize = 10000;
 const BUFFER_LEN: usize = 8192;
 
-/// 定义我们的自定义错误类型 (保持不变)
+/// Defines errors that can occur during low-level stream cipher operations.
+//
+// // 定义在低级流密码操作期间可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum StreamCipherError {
+    /// An I/O error occurred during stream processing.
+    //
+    // // 流处理期间发生 I/O 错误。
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// An error occurred within the OpenSSL cryptographic library.
+    //
+    // // OpenSSL 加密库内部发生错误。
     #[error("OpenSSL error stack: {0}")]
     OpenSsl(#[from] openssl::error::ErrorStack),
 }
