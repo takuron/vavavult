@@ -121,7 +121,7 @@ fn fetch_full_entry(
 
 
 /// 根据文件路径 (`&str`) 在保险库中查找文件。
-pub fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResult, QueryError> {
+pub(crate) fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResult, QueryError> {
     // VaultPath 已经是规范化的
     let normalized_path = path.as_str();
 
@@ -151,7 +151,7 @@ pub fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResult, Que
 }
 
 /// 根据文件的加密后 SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。
-pub fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, QueryError> { // [修改]
+pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, QueryError> { // [修改]
     // 查询 V2 files 表
     let mut stmt = vault.database_connection.prepare(
         "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE sha256sum = ?1"
@@ -188,7 +188,7 @@ pub fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, Que
 ///
 /// 这比循环调用 `check_by_hash` 更高效，因为它减少了对 `files` 主表的查询次数。
 /// 返回的列表顺序不保证与输入的哈希顺序一致。未找到的哈希将被忽略。
-pub fn find_by_hashes(vault: &Vault, hashes: &[VaultHash]) -> Result<Vec<FileEntry>, QueryError> {
+pub(crate) fn find_by_hashes(vault: &Vault, hashes: &[VaultHash]) -> Result<Vec<FileEntry>, QueryError> {
     if hashes.is_empty() {
         return Ok(Vec::new());
     }
@@ -222,7 +222,7 @@ pub fn find_by_hashes(vault: &Vault, hashes: &[VaultHash]) -> Result<Vec<FileEnt
 ///  批量根据路径查找文件。
 ///
 /// 返回的列表顺序不保证与输入的路径顺序一致。未找到的路径将被忽略。
-pub fn find_by_paths(vault: &Vault, paths: &[VaultPath]) -> Result<Vec<FileEntry>, QueryError> {
+pub(crate) fn find_by_paths(vault: &Vault, paths: &[VaultPath]) -> Result<Vec<FileEntry>, QueryError> {
     if paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -252,7 +252,7 @@ pub fn find_by_paths(vault: &Vault, paths: &[VaultPath]) -> Result<Vec<FileEntry
 }
 
 /// 根据文件的 *原始* SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。
-pub fn check_by_original_hash(vault: &Vault, original_hash: &VaultHash) -> Result<QueryResult, QueryError> { // [修改]
+pub(crate) fn check_by_original_hash(vault: &Vault, original_hash: &VaultHash) -> Result<QueryResult, QueryError> { // [修改]
     let mut stmt = vault.database_connection.prepare(
         "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE original_sha256sum = ?1"
     )?;
@@ -332,7 +332,7 @@ fn process_rows_to_entries(
 }
 
 /// 列出保险库中的所有文件 (返回 FileEntry)。
-pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
+pub(crate) fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
     // [修改] 查询 V2 files 表
     let mut stmt = vault.database_connection.prepare(
         "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files",
@@ -403,7 +403,7 @@ pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
 // }
 
 /// 列出给定目录路径下的条目（文件或子目录），如果是文件则返回详细信息。
-pub(super) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
+pub(crate) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
     // 1. 验证输入是否为目录
     if !path.is_dir() {
         return Err(QueryError::NotADirectory(path.as_str().to_string()));
@@ -475,7 +475,7 @@ pub(super) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<Direct
 }
 
 /// 递归列出一个目录下的所有文件 (返回哈希)。
-pub(super) fn list_all_recursive(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultHash>, QueryError> {
+pub(crate) fn list_all_recursive(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultHash>, QueryError> {
     // 1. 验证输入是否为目录
     if !path.is_dir() {
         return Err(QueryError::NotADirectory(path.as_str().to_string()));
@@ -522,7 +522,7 @@ pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FileEntry>, QueryErro
 }
 
 /// 统一的关键字模糊搜索 (不区分大小写)。
-pub(super) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
+pub(crate) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
     // 1. 准备不区分大小写的 LIKE 模式
     let like_pattern = format!("%{}%", keyword.to_lowercase());
 
@@ -549,7 +549,7 @@ pub(super) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEn
     process_rows_to_entries(vault, rows)
 }
 /// 高效地获取保险库中文件的总数。
-pub(super) fn get_total_file_count(vault: &Vault) -> Result<i64, QueryError> {
+pub(crate) fn get_total_file_count(vault: &Vault) -> Result<i64, QueryError> {
     let count = vault.database_connection.query_row(
         "SELECT COUNT(*) FROM files",
         [],

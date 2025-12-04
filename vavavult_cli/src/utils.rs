@@ -3,11 +3,15 @@ use std::io;
 use std::io::Write;
 use std::path::{PathBuf};
 use std::str::FromStr;
-use chrono::Local;
+use chrono::{DateTime, Local, ParseError, Utc};
 use vavavult::common::hash::VaultHash;
 use vavavult::file::{FileEntry, VaultPath};
 use vavavult::vault::{DirectoryEntry, QueryResult, Vault};
-use vavavult::utils::time as time_utils;
+
+// 本地辅助函数：解析 RFC 3339 字符串
+pub fn parse_rfc3339_string(s: &str) -> Result<DateTime<Utc>, ParseError> {
+    DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc))
+}
 
 /// 从标签列表中提取颜色 (例如 "_color:red" -> "red")
 fn get_file_color(tags: &[String]) -> Option<&str> {
@@ -161,7 +165,7 @@ pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
         for meta in system_meta {
             let pretty_key = meta.key.trim_start_matches("_vavavult_").replace('_', " ");
             let value = if meta.key.ends_with("_time") {
-                time_utils::parse_rfc3339_string(&meta.value)
+                parse_rfc3339_string(&meta.value)
                     .map(|utc_time| {
                         let local_time = utc_time.with_timezone(&Local);
                         local_time.format("%Y-%m-%d %H:%M:%S %Z").to_string()

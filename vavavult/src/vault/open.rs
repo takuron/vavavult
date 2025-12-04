@@ -72,7 +72,7 @@ pub enum OpenError {
 }
 
 /// 打开一个已存在的保险库。
-pub fn open_vault(
+pub(crate) fn open_vault(
     vault_path: &Path,
     password: Option<&str>,
     backend: Arc<dyn StorageBackend>

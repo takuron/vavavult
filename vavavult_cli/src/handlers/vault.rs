@@ -1,8 +1,8 @@
 use std::error::Error;
 use chrono::Local;
 use vavavult::common::constants::{META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
-use vavavult::utils::time as time_utils;
 use vavavult::vault::Vault;
+use crate::utils::parse_rfc3339_string;
 
 /// 处理 vault 重命名命令
 pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), Box<dyn Error>> {
@@ -32,7 +32,7 @@ pub fn handle_status(vault: &Vault) -> Result<(), Box<dyn Error>> {
         // 使用 get_vault_metadata 从数据库获取
         vault.get_vault_metadata(key)
             .ok() // 将 Result 转换为 Option
-            .and_then(|value| time_utils::parse_rfc3339_string(&value).ok()) // 解析为 UTC 时间
+            .and_then(|value| parse_rfc3339_string(&value).ok())
             .map(|utc_time| {
                 // 转换为本地时区并格式化
                 let local_time = utc_time.with_timezone(&Local);

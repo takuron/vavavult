@@ -15,7 +15,7 @@ pub fn now_as_rfc3339_string() -> String {
 ///
 /// # Errors
 /// Returns a `ParseError` if the string is not a valid RFC 3339 timestamp.
-pub fn parse_rfc3339_string(s: &str) -> Result<DateTime<Utc>, ParseError> {
+pub fn _parse_rfc3339_string(s: &str) -> Result<DateTime<Utc>, ParseError> {
     DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc))
 }
 
@@ -31,7 +31,7 @@ mod tests {
 
         // 2. Parse it back to a DateTime object
         let parsed_datetime =
-            parse_rfc3339_string(&now_string).expect("Should parse successfully");
+            _parse_rfc3339_string(&now_string).expect("Should parse successfully");
         println!("Parsed back to DateTime: {:?}", parsed_datetime);
 
         // 3. Convert the parsed object back to a string
@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn test_parse_invalid_string() {
         let invalid_string = "not-a-timestamp";
-        let result = parse_rfc3339_string(invalid_string);
+        let result = _parse_rfc3339_string(invalid_string);
         assert!(result.is_err());
     }
 }

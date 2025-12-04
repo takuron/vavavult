@@ -2,14 +2,13 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
 use vavavult::common::constants::{CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
-use vavavult::crypto::encrypt::verify_v2_encrypt_check;
 use vavavult::storage::local::LocalStorage;
 use vavavult::vault::{CreateError, OpenError, UpdateError, Vault};
 
 // 引入 common 模块
 mod common;
 
-/// 测试：成功创建一个非加密的 V2 保险库。
+/// 测试：成功创建一个非加密的保险库。
 /// 验证点：
 /// 1. 配置文件 (master.json) 正确生成，且 version, name, encrypted 字段正确。
 /// 2. 数据库文件 (master.db) 存在。
@@ -41,7 +40,7 @@ fn test_create_non_encrypted_vault_success() {
     assert_eq!(create_time, update_time);
 }
 
-/// 测试：成功创建一个加密的 V2 保险库。
+/// 测试：成功创建一个加密的保险库。
 /// 验证点：
 /// 1. 配置中 `encrypted` 标志为 true。
 /// 2. 生成了 `encrypt_check` 字符串。
@@ -53,17 +52,30 @@ fn test_create_encrypted_vault_success() {
     let vault_name = "my-v2-secure-vault";
     let password = "v2-password-!@#";
 
+    // 1. 创建
     let backend = Arc::new(LocalStorage::new(&vault_path));
-    let result = Vault::create_vault(&vault_path, vault_name, Some(password), backend);
+    // 注意：我们需要 clone backend，因为 create_vault 会消耗它，
+    // 而我们稍后在 open_vault 测试中还需要用到它 (或者创建新的)。
+    let result = Vault::create_vault(&vault_path, vault_name, Some(password), backend.clone());
     assert!(result.is_ok());
     let vault = result.unwrap();
 
+    // 2. 验证基本配置
     assert!(vault.config.encrypted);
     assert!(!vault.config.encrypt_check.is_empty());
 
-    // 验证密码校验逻辑 (V2 特性)
-    assert!(verify_v2_encrypt_check(&vault.config.encrypt_check, password));
-    assert!(!verify_v2_encrypt_check(&vault.config.encrypt_check, "wrong-password"));
+    // 验证密码逻辑 (不再调用私有函数，而是通过公开 API 验证行为)
+
+    // a. 释放旧的 vault 实例 (模拟关闭，虽然这里不是必须的，但更严谨)
+    drop(vault);
+
+    // b. 尝试使用错误密码打开 -> 应该失败 (InvalidPassword)
+    let open_fail = Vault::open_vault(&vault_path, Some("wrong-password"), backend.clone());
+    assert!(matches!(open_fail.unwrap_err(), OpenError::InvalidPassword));
+
+    // c. 尝试使用正确密码打开 -> 应该成功
+    let open_success = Vault::open_vault(&vault_path, Some(password), backend.clone());
+    assert!(open_success.is_ok(), "Should be able to open vault with correct password");
 }
 
 /// 测试：尝试在非空目录创建保险库应报错。

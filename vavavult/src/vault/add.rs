@@ -19,7 +19,6 @@ use crate::vault::{query, FileEntry};
 use crate::vault::query::QueryResult;
 use crate::storage::{StorageBackend, StagingToken};
 use crate::vault::metadata::MetadataError;
-// [新增]
 pub(crate) use crate::vault::Vault;
 
 /// Defines errors that can occur during the file addition process.
@@ -192,7 +191,7 @@ pub(crate) fn prepare_addition_task_standalone(
 }
 
 /// 阶段 2: 提交一个文件添加事务 (需要独占访问的自由函数)
-pub fn execute_addition_tasks(
+pub(crate) fn execute_addition_tasks(
     vault: &mut Vault,
     files: Vec<AdditionTask>
 ) -> Result<(), AddFileError> {
@@ -276,7 +275,7 @@ pub fn execute_addition_tasks(
 }
 
 /// 快捷函数：添加一个新文件
-pub fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<VaultHash, AddFileError> {
+pub(crate) fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<VaultHash, AddFileError> {
     // 阶段 1: 加密
     // 使用 self.storage
     let file_to_add = prepare_addition_task_standalone(vault.storage.as_ref(), source_path, dest_path)?;
