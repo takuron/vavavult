@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::file::VaultPath;
 use vavavult::vault::{AddFileError, ExtractionTask,  QueryResult};
-use vavavult::vault::{encrypt_file_for_add_standalone, execute_extraction_task_standalone};
+use vavavult::vault::{prepare_addition_task_standalone, execute_extraction_task_standalone};
 
 mod common;
 use common::{create_dummy_file, create_dummy_files, setup_encrypted_vault, setup_vault_with_search_data};
@@ -184,13 +184,13 @@ fn test_parallel_add_and_extract() {
     let encrypted_files: Vec<_> = source_files.par_iter().enumerate()
         .map(|(i, (src, _))| {
             let dest = VaultPath::from(format!("/p_file_{}.txt", i).as_str());
-            encrypt_file_for_add_standalone(storage.as_ref(), src, &dest).unwrap()
+            prepare_addition_task_standalone(storage.as_ref(), src, &dest).unwrap()
         }).collect();
 
     // 快速的批量提交 (持有锁时间很短)
     {
         let mut v = vault_arc.lock().unwrap();
-        v.commit_add_files(encrypted_files).unwrap();
+        v.execute_addition_tasks(encrypted_files).unwrap();
     }
 
     // --- 阶段 2: 并行提取 ---

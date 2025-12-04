@@ -12,13 +12,13 @@ mod update;
 
 use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
-use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add_standalone as _encrypt_file_for_add_standalone};
+use crate::vault::add::{add_file, execute_addition_tasks, prepare_addition_task_standalone as _prepare_addition_task_standalone};
 use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError};
 use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_hashes, find_by_keyword, find_by_paths, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path};
 use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, enable_vault_feature, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
-pub use add::{AddFileError, EncryptedAddingFile};
+pub use add::{AddFileError, AdditionTask};
 pub use config::VaultConfig;
 pub use create::{CreateError, OpenError};
 pub use query::{ListResult,DirectoryEntry};
@@ -599,12 +599,12 @@ impl Vault {
     // //
     // // # 错误
     // // 如果加密失败、发生 IO 错误或源无效，则返回 `AddFileError`。
-    pub fn encrypt_file_for_add(
+    pub fn prepare_addition_task(
         &self,
         source_path: &Path,
         dest_path: &VaultPath,
-    ) -> Result<EncryptedAddingFile, AddFileError> {
-        _encrypt_file_for_add_standalone(self.storage.as_ref(), source_path, dest_path)
+    ) -> Result<AdditionTask, AddFileError> {
+        _prepare_addition_task_standalone(self.storage.as_ref(), source_path, dest_path)
     }
 
     /// Stage 2 (Add): Commits one or more encrypted files to the vault database.
@@ -629,14 +629,14 @@ impl Vault {
     // //
     // // # 错误
     // // 如果数据库事务失败或文件提交失败，则返回 `AddFileError`。
-    pub fn commit_add_files(
+    pub fn execute_addition_tasks(
         &mut self,
-        files: Vec<EncryptedAddingFile>,
+        files: Vec<AdditionTask>,
     ) -> Result<(), AddFileError> {
         if files.is_empty() {
             return Ok(());
         }
-        commit_add_files(self, files)?;
+        execute_addition_tasks(self, files)?;
         touch_vault_update_time(self)?;
         Ok(())
     }
@@ -1151,12 +1151,12 @@ impl Vault {
 // //
 // // # 错误
 // // 如果加密失败、发生 IO 错误或路径无效，则返回 `AddFileError`。
-pub fn encrypt_file_for_add_standalone(
+pub fn prepare_addition_task_standalone(
     storage: &dyn StorageBackend,
     source_path: &Path,
     dest_path: &VaultPath,
-) -> Result<EncryptedAddingFile, AddFileError> {
-    _encrypt_file_for_add_standalone(storage, source_path, dest_path)
+) -> Result<AdditionTask, AddFileError> {
+    _prepare_addition_task_standalone(storage, source_path, dest_path)
 }
 
 /// Executes a prepared extraction task (Standalone).
