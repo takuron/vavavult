@@ -1,6 +1,7 @@
-use crate::vault::{Vault, query, QueryResult, UpdateError};
+use crate::vault::{Vault, query, QueryResult};
 use rusqlite::params;
 use crate::common::hash::{HashParseError, VaultHash};
+use crate::vault::metadata::MetadataError;
 
 /// Defines errors that can occur during the file removal process.
 //
@@ -35,7 +36,7 @@ pub enum RemoveError {
     //
     // // 更新保险库的最后修改时间戳失败。
     #[error("Failed to update vault timestamp: {0}")]
-    TimestampUpdateError(#[from] UpdateError),
+    TimestampUpdateError(#[from] MetadataError),
 
     /// The hash string provided was in an invalid format.
     //

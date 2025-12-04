@@ -2,22 +2,24 @@ use std::fs::{self, File};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
-use crate::file::stream_cipher;
+use crate::crypto::stream_cipher;
 use crate::common::constants::{
     META_FILE_ADD_TIME, META_FILE_SIZE, META_FILE_UPDATE_TIME,
     META_SOURCE_MODIFIED_TIME
 };
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
-use crate::file::encrypt::{EncryptError};
+use crate::crypto::encrypt::{EncryptError};
 use crate::file::path::VaultPath;
 use crate::file::PathError;
-use crate::file::stream_cipher::StreamCipherError;
+use crate::crypto::stream_cipher::StreamCipherError;
 use crate::utils::random::{generate_random_password};
 use crate::utils::time::now_as_rfc3339_string;
-use crate::vault::{query, FileEntry, UpdateError};
+use crate::vault::{query, FileEntry};
 use crate::vault::query::QueryResult;
-use crate::storage::{StorageBackend, StagingToken}; // [新增]
+use crate::storage::{StorageBackend, StagingToken};
+use crate::vault::metadata::MetadataError;
+// [新增]
 pub(crate) use crate::vault::Vault;
 
 /// Defines errors that can occur during the file addition process.
@@ -95,7 +97,7 @@ pub enum AddFileError {
     //
     // // 更新保险库的最后修改时间戳失败。
     #[error("Failed to update vault timestamp: {0}")]
-    TimestampUpdateError(#[from] UpdateError),
+    TimestampUpdateError(#[from] MetadataError),
 
     /// An error occurred constructing the final `VaultPath`.
     //

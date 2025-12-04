@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
 use vavavult::common::constants::{CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
-use vavavult::file::encrypt::verify_v2_encrypt_check;
+use vavavult::crypto::encrypt::verify_v2_encrypt_check;
 use vavavult::storage::local::LocalStorage;
 use vavavult::vault::{CreateError, OpenError, UpdateError, Vault};
 

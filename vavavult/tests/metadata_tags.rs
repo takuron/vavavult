@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use vavavult::common::constants::{META_FILE_UPDATE_TIME};
 use vavavult::common::metadata::MetadataEntry;
 use vavavult::file::VaultPath;
-use vavavult::vault::{QueryResult, UpdateError};
+use vavavult::vault::{MetadataError, QueryResult};
 
 mod common;
 use common::{create_dummy_file, setup_encrypted_vault};
@@ -85,5 +85,5 @@ fn test_vault_metadata_lifecycle() {
     // Remove
     vault.remove_vault_metadata("v_key").unwrap();
     // Verify removal
-    assert!(matches!(vault.get_vault_metadata("v_key").unwrap_err(), UpdateError::MetadataKeyNotFound(_)));
+    assert!(matches!(vault.get_vault_metadata("v_key").unwrap_err(), MetadataError::MetadataKeyNotFound(_)));
 }

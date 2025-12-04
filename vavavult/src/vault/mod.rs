@@ -9,28 +9,37 @@ mod extract;
 mod query;
 mod remove;
 mod update;
+mod open;
+mod tags;
+mod metadata;
 
 use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, execute_addition_tasks, prepare_addition_task_standalone as _prepare_addition_task_standalone};
-use crate::vault::create::{create_vault, open_vault};
+use crate::vault::create::{create_vault};
 pub use crate::vault::extract::{ExtractError};
 use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_hashes, find_by_keyword, find_by_paths, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path};
 use crate::vault::remove::remove_file;
-use crate::vault::update::{add_tag, add_tags, clear_tags, enable_vault_feature, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
+use crate::vault::update::{enable_vault_feature, move_file,  rename_file_inplace,  set_name};
 pub use add::{AddFileError, AdditionTask};
 pub use config::VaultConfig;
-pub use create::{CreateError, OpenError};
+pub use create::{CreateError};
+pub use open::{OpenError};
 pub use query::{ListResult,DirectoryEntry};
 pub use query::{QueryError, QueryResult};
 pub use remove::RemoveError;
 pub use update::UpdateError;
+pub use metadata::MetadataError;
+pub use tags::TagError;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
 use crate::storage::local::LocalStorage;
 use crate::storage::StorageBackend;
 pub use  crate::vault::extract::ExtractionTask;
 use crate::vault::extract::{extract_file, execute_extraction_task_standalone as _execute_extraction_task_standalone, prepare_extraction_task};
+use crate::vault::metadata::{get_vault_metadata, remove_file_metadata, remove_vault_metadata, set_file_metadata, set_vault_metadata, touch_vault_update_time};
+use crate::vault::open::{open_vault};
+use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag, };
 
 /// Represents a vault loaded into memory.
 ///
@@ -771,8 +780,8 @@ impl Vault {
     // // # 错误
     // // 如果名称冲突或文件未找到，返回 `UpdateError`。
     pub fn move_file(&mut self, hash: &VaultHash, target_path: &VaultPath) -> Result<(), UpdateError> {
-        move_file(self, &hash, target_path)?;
-        touch_vault_update_time(self)
+        move_file(self, hash, target_path)?;
+        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
     }
 
     /// Renames a file in its current directory (In-place).
@@ -793,8 +802,8 @@ impl Vault {
     // // # 错误
     // // 如果文件名无效、文件未找到或名称冲突，则返回 `UpdateError`。
     pub fn rename_file_inplace(&mut self, hash: &VaultHash, new_filename: &str) -> Result<(), UpdateError> {
-        rename_file_inplace(self, &hash, new_filename)?;
-        touch_vault_update_time(self)
+        rename_file_inplace(self, hash, new_filename)?;
+        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
     }
 
     // --- Remove API ---
@@ -836,7 +845,7 @@ impl Vault {
     /// * `tag` - The tag string to add.
     ///
     /// # Errors
-    /// Returns `UpdateError` if the file is not found.
+    /// Returns `TagError` if the file is not found.
     //
     // // 为文件添加单个标签。幂等操作。
     // //
@@ -845,10 +854,10 @@ impl Vault {
     // // * `tag` - 要添加的标签字符串。
     // //
     // // # 错误
-    // // 如果文件未找到，则返回 `UpdateError`。
-    pub fn add_tag(&mut self, hash:&VaultHash, tag: &str) -> Result<(), UpdateError> {
+    // // 如果文件未找到，则返回 `TagError`。
+    pub fn add_tag(&mut self, hash: &VaultHash, tag: &str) -> Result<(), TagError> {
         add_tag(self, hash, tag)?;
-        touch_vault_update_time(self)
+        touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
     /// Adds multiple tags to a file in a transaction.
@@ -858,7 +867,7 @@ impl Vault {
     /// * `tags` - A slice of tag strings to add.
     ///
     /// # Errors
-    /// Returns `UpdateError` if the file is not found.
+    /// Returns `TagError` if the file is not found.
     //
     // // 在事务中为文件添加多个标签。
     // //
@@ -867,10 +876,10 @@ impl Vault {
     // // * `tags` - 要添加的标签字符串切片。
     // //
     // // # 错误
-    // // 如果文件未找到，则返回 `UpdateError`。
-    pub fn add_tags(&mut self, hash:&VaultHash, tags: &[&str]) -> Result<(), UpdateError> {
+    // // 如果文件未找到，则返回 `TagError`。
+    pub fn add_tags(&mut self, hash: &VaultHash, tags: &[&str]) -> Result<(), TagError> {
         add_tags(self, hash, tags)?;
-        touch_vault_update_time(self)
+        touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
     /// Removes a single tag from a file.
@@ -880,7 +889,7 @@ impl Vault {
     /// * `tag` - The tag string to remove.
     ///
     /// # Errors
-    /// Returns `UpdateError` if the file is not found.
+    /// Returns `TagError` if the file is not found.
     //
     // // 从文件中移除单个标签。
     // //
@@ -889,10 +898,10 @@ impl Vault {
     // // * `tag` - 要移除的标签字符串。
     // //
     // // # 错误
-    // // 如果文件未找到，则返回 `UpdateError`。
-    pub fn remove_tag(&mut self, hash:&VaultHash, tag: &str) -> Result<(), UpdateError> {
+    // // 如果文件未找到，则返回 `TagError`。
+    pub fn remove_tag(&mut self, hash: &VaultHash, tag: &str) -> Result<(), TagError> {
         remove_tag(self, hash, tag)?;
-        touch_vault_update_time(self)
+        touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
     /// Removes all tags from a file.
@@ -901,7 +910,7 @@ impl Vault {
     /// * `hash` - The hash of the file.
     ///
     /// # Errors
-    /// Returns `UpdateError` if the file is not found.
+    /// Returns `TagError` if the file is not found.
     //
     // // 移除文件的所有标签。
     // //
@@ -909,10 +918,10 @@ impl Vault {
     // // * `hash` - 文件的哈希。
     // //
     // // # 错误
-    // // 如果文件未找到，则返回 `UpdateError`。
-    pub fn clear_tags(&mut self, hash:&VaultHash) -> Result<(), UpdateError> {
+    // // 如果文件未找到，则返回 `TagError`。
+    pub fn clear_tags(&mut self, hash: &VaultHash) -> Result<(), TagError> {
         clear_tags(self, hash)?;
-        touch_vault_update_time(self)
+        touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
     /// Sets (upserts) a metadata key-value pair for a file.
@@ -922,7 +931,7 @@ impl Vault {
     /// * `metadata` - The metadata key-value pair to set.
     ///
     /// # Errors
-    /// Returns `UpdateError` if the file is not found.
+    /// Returns `MetadataError` if the file is not found.
     //
     // // 设置 (更新或插入) 文件的元数据键值对。
     // //
@@ -931,14 +940,12 @@ impl Vault {
     // // * `metadata` - 要设置的元数据键值对。
     // //
     // // # 错误
-    // // 如果文件未找到，则返回 `UpdateError`。
-    pub fn set_file_metadata(
-        &mut self,
-        hash:&VaultHash,
-        metadata: MetadataEntry,
-    ) -> Result<(), UpdateError> {
+    // // 如果文件未找到，则返回 `MetadataError`。
+    pub fn set_file_metadata(&mut self, hash: &VaultHash, metadata: MetadataEntry) -> Result<(), MetadataError> {
         set_file_metadata(self, hash, metadata)?;
-        touch_vault_update_time(self)
+        // 文件元数据变更通常不触发 vault 整体更新时间，除非策略改变
+        // 这里保持原样，只更新文件时间 (内部已做)
+        Ok(())
     }
 
     /// Removes a metadata key-value pair from a file.
@@ -948,7 +955,7 @@ impl Vault {
     /// * `key` - The metadata key to remove.
     ///
     /// # Errors
-    /// Returns `UpdateError` if the file is not found.
+    /// Returns `MetadataError` if the file is not found.
     //
     // // 从文件中移除元数据键值对。
     // //
@@ -957,10 +964,9 @@ impl Vault {
     // // * `key` - 要移除的元数据键。
     // //
     // // # 错误
-    // // 如果文件未找到，则返回 `UpdateError`。
-    pub fn remove_file_metadata(&mut self, hash:&VaultHash, key: &str) -> Result<(), UpdateError> {
-        remove_file_metadata(self, hash, key)?;
-        touch_vault_update_time(self)
+    // // 如果文件未找到，则返回 `MetadataError`。
+    pub fn remove_file_metadata(&mut self, hash: &VaultHash, key: &str) -> Result<(), MetadataError> {
+        remove_file_metadata(self, hash, key)
     }
 
     // --- Vault Management APIs ---
@@ -995,7 +1001,7 @@ impl Vault {
     /// The metadata value string.
     ///
     /// # Errors
-    /// Returns `UpdateError` if key not found.
+    /// Returns `MetadataError` if key not found.
     //
     // // 获取保险库级别的元数据值。
     // //
@@ -1006,8 +1012,8 @@ impl Vault {
     // // 元数据值字符串。
     // //
     // // # 错误
-    // // 如果键未找到，则返回 `UpdateError`。
-    pub fn get_vault_metadata(&self, key: &str) -> Result<String, UpdateError> {
+    // // 如果键未找到，则返回 `MetadataError`。
+    pub fn get_vault_metadata(&self, key: &str) -> Result<String, MetadataError> {
         get_vault_metadata(self, key)
     }
 
@@ -1017,7 +1023,7 @@ impl Vault {
     /// * `metadata` - The metadata key-value pair to set.
     ///
     /// # Errors
-    /// Returns `UpdateError` on database failure.
+    /// Returns `MetadataError` on database failure.
     //
     // // 设置 (更新或插入) 保险库级别的元数据键值对。
     // //
@@ -1025,10 +1031,11 @@ impl Vault {
     // // * `metadata` - 要设置的元数据键值对。
     // //
     // // # 错误
-    // // 如果发生数据库故障，则返回 `UpdateError`。
-    pub fn set_vault_metadata(&mut self, metadata: MetadataEntry) -> Result<(), UpdateError> {
+    // // 如果发生数据库故障，则返回 `MetadataError`。
+    pub fn set_vault_metadata(&mut self, metadata: MetadataEntry) -> Result<(), MetadataError> {
         set_vault_metadata(self, metadata)?;
-        touch_vault_update_time(self)
+        touch_vault_update_time(self)?;
+        Ok(())
     }
 
     /// Removes a vault-level metadata key-value pair.
@@ -1037,7 +1044,7 @@ impl Vault {
     /// * `key` - The metadata key to remove.
     ///
     /// # Errors
-    /// Returns `UpdateError` if key not found.
+    /// Returns `MetadataError` if key not found.
     //
     // // 移除保险库级别的元数据键值对。
     // //
@@ -1045,10 +1052,11 @@ impl Vault {
     // // * `key` - 要移除的元数据键。
     // //
     // // # 错误
-    // // 如果键未找到，则返回 `UpdateError`。
-    pub fn remove_vault_metadata(&mut self, key: &str) -> Result<(), UpdateError> {
+    // // 如果键未找到，则返回 `MetadataError`。
+    pub fn remove_vault_metadata(&mut self, key: &str) -> Result<(), MetadataError> {
         remove_vault_metadata(self, key)?;
-        touch_vault_update_time(self)
+        touch_vault_update_time(self)?;
+        Ok(())
     }
 
     /// Enables a specific extension feature for this vault.

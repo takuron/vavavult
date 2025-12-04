@@ -2,7 +2,7 @@ use std::fs;
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
-use crate::file::stream_cipher;
+use crate::crypto::stream_cipher;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use tempfile::NamedTempFile;
 use crate::common::hash::VaultHash;

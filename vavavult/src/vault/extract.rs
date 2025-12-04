@@ -2,8 +2,8 @@ use std::path::{Path};
 use std::fs;
 use tempfile::NamedTempFile;
 use crate::common::hash::{HashParseError, VaultHash};
-use crate::file::encrypt::EncryptError;
-use crate::file::stream_cipher;
+use crate::crypto::encrypt::EncryptError;
+use crate::crypto::stream_cipher;
 use crate::storage::StorageBackend;
 use crate::vault::{query, QueryResult, Vault};
 
