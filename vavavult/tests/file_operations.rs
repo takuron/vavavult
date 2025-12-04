@@ -159,7 +159,7 @@ fn test_batch_queries_and_search() {
     assert_eq!(vault.list_all().unwrap().len(), 4);
 
     // 4. 目录层级列表
-    let entries = vault.list_entries_by_path(&VaultPath::from("/docs/")).unwrap();
+    let entries = vault.list_by_path(&VaultPath::from("/docs/")).unwrap();
     assert_eq!(entries.len(), 2); // deep/, file_B.md
 }
 

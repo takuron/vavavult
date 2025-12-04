@@ -141,7 +141,7 @@ fn handle_extract_directory(
         if non_recursive {
             println!("(Non-recursive mode enabled)");
             // 使用新的 list_entries 高效 API，直接获取 FileEntry
-            let entries = vault_guard.list_entries_by_path(vault_path)?;
+            let entries = vault_guard.list_by_path(vault_path)?;
             entries.into_iter()
                 .filter_map(|entry| match entry {
                     DirectoryEntry::File(file_entry) => Some(file_entry),

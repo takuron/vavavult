@@ -72,7 +72,7 @@ pub fn handle_list(
 
     } else {
         // --- `ls` (默认，非递归) ---
-        let entries = vault.list_entries_by_path(&target_vault_path)?;
+        let entries = vault.list_by_path(&target_vault_path)?;
 
         if entries.is_empty() {
             println!("(empty)");

@@ -15,7 +15,7 @@ pub use crate::file::FileEntry;
 use crate::vault::add::{add_file, commit_add_files, encrypt_file_for_add_standalone as _encrypt_file_for_add_standalone};
 use crate::vault::create::{create_vault, open_vault};
 pub use crate::vault::extract::{ExtractError};
-use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_hashes, find_by_keyword, find_by_paths, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path, list_entries_by_path};
+use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_hashes, find_by_keyword, find_by_paths, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path};
 use crate::vault::remove::remove_file;
 use crate::vault::update::{add_tag, add_tags, clear_tags, enable_vault_feature, get_vault_metadata, move_file, remove_file_metadata, remove_tag, remove_vault_metadata, rename_file_inplace, set_file_metadata, set_name, set_vault_metadata, touch_vault_update_time};
 pub use add::{AddFileError, EncryptedAddingFile};
@@ -25,7 +25,6 @@ pub use query::{ListResult,DirectoryEntry};
 pub use query::{QueryError, QueryResult};
 pub use remove::RemoveError;
 pub use update::UpdateError;
-use crate::common::constants::DATA_SUBDIR;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
 use crate::storage::local::LocalStorage;
@@ -211,15 +210,15 @@ impl Vault {
         list_all_files(self)
     }
 
-    /// Lists the files and subdirectories directly under a given directory path.
-    /// This is non-recursive.
-    ///
-    /// The returned `Vec` contains:
-    /// - Files: `VaultPath` (e.g., "/docs/file.txt")
-    /// - Subdirectories: `VaultPath` (e.g., "/docs/images/")
-    ///
-    /// # Errors
-    /// Returns `QueryError::NotADirectory` if `path` is a file path (e.g., "/a.txt").
+    // Lists the files and subdirectories directly under a given directory path.
+    // This is non-recursive.
+    //
+    // The returned `Vec` contains:
+    // - Files: `VaultPath` (e.g., "/docs/file.txt")
+    // - Subdirectories: `VaultPath` (e.g., "/docs/images/")
+    //
+    // # Errors
+    // Returns `QueryError::NotADirectory` if `path` is a file path (e.g., "/a.txt").
     //
     // // 仅列出给定目录路径下的文件和子目录（非递归）。
     // //
@@ -229,9 +228,9 @@ impl Vault {
     // //
     // // # 错误
     // // 如果 `path` 是一个文件路径（例如 "/a.txt"），则返回 `QueryError::NotADirectory`。
-    pub fn list_by_path(&self, path: &VaultPath) -> Result<Vec<VaultPath>, QueryError> {
-        list_by_path(self, path)
-    }
+    // pub fn list_by_path(&self, path: &VaultPath) -> Result<Vec<VaultPath>, QueryError> {
+    //     list_by_path(self, path)
+    // }
 
     /// Lists entries (files or subdirectories) under a given directory path.
     ///
@@ -261,8 +260,8 @@ impl Vault {
     // //
     // // # 错误
     // // 如果 `path` 是一个文件路径，则返回 `QueryError::NotADirectory`。
-    pub fn list_entries_by_path(&self, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
-        list_entries_by_path(self, path)
+    pub fn list_by_path(&self, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
+        list_by_path(self, path)
     }
 
     /// Recursively lists all files under a given directory path and returns their `VaultHash`es.
@@ -338,14 +337,14 @@ impl Vault {
         Ok(result)
     }
 
-    /// Gets the path to the internal `data` directory.
-    /// Used for calling `encrypt_file_for_add_standalone` without a `&Vault` lock.
+    // Gets the path to the internal `data` directory.
+    // Used for calling `encrypt_file_for_add_standalone` without a `&Vault` lock.
     //
     // // 获取内部 `data` 目录的路径。
     // // 用于在没有 `&Vault` 锁的情况下调用 `encrypt_file_for_add_standalone`。
-    pub fn get_data_dir_path(&self) -> PathBuf {
-        self.root_path.join(DATA_SUBDIR)
-    }
+    // pub fn get_data_dir_path(&self) -> PathBuf {
+    //     self.root_path.join(DATA_SUBDIR)
+    // }
 
     /// Stage 1 (Add): Encrypts a file and prepares it for a batch commit.
     ///
@@ -840,7 +839,6 @@ pub fn encrypt_file_for_add_standalone(
     source_path: &Path,
     dest_path: &VaultPath,
 ) -> Result<EncryptedAddingFile, AddFileError> {
-    // [修改] 公开重导出
     _encrypt_file_for_add_standalone(storage, source_path, dest_path)
 }
 

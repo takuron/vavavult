@@ -351,56 +351,56 @@ pub fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
     process_rows_to_entries(vault, rows)
 }
 
-/// 仅列出给定目录路径下的文件和子目录 (非递归)。
-pub(super) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultPath>, QueryError> {
-    // 1. 验证输入是否为目录
-    if !path.is_dir() {
-        return Err(QueryError::NotADirectory(path.as_str().to_string()));
-    }
-
-    let mut entries = Vec::new();
-    let mut seen_subdirs = HashSet::new();
-    let base_path_str = path.as_str();
-
-    // 2. 查询所有以该路径为前缀的条目
-    let mut stmt = vault.database_connection.prepare(
-        "SELECT path FROM files WHERE path LIKE ?1",
-    )?;
-    let like_pattern = format!("{}%", base_path_str);
-    let paths_iter = stmt.query_map(params![like_pattern], |row| row.get::<_, String>(0))?;
-
-    for path_result in paths_iter {
-        let file_path_str = path_result?; // file_path_str is String
-        // 3. 计算相对路径
-        let remainder = file_path_str.strip_prefix(base_path_str).unwrap_or("");
-
-        if remainder.contains('/') {
-            // 4. 这是一个子目录或更深层的文件
-            if let Some(subdir_name) = remainder.split('/').next() {
-                if !subdir_name.is_empty() {
-                    // 我们必须将 subdir_name 作为一个目录段 (带斜杠) 来连接
-                    let subdir_segment = format!("{}/", subdir_name);
-                    let dir_path = path.join(&subdir_segment)?; // 例如 "/".join("docs/")
-
-                    if seen_subdirs.insert(dir_path.clone()) {
-                        entries.push(dir_path);
-                    }
-                }
-            }
-        } else if !remainder.is_empty() {
-            // 5. 这是一个直属文件
-            // 将 String 转换为 &str 再调用 from
-            entries.push(VaultPath::from(file_path_str.as_str()));
-        }
-    }
-
-    // 6. 排序
-    entries.sort();
-    Ok(entries)
-}
+// 仅列出给定目录路径下的文件和子目录 (非递归)。
+// pub(super) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultPath>, QueryError> {
+//     // 1. 验证输入是否为目录
+//     if !path.is_dir() {
+//         return Err(QueryError::NotADirectory(path.as_str().to_string()));
+//     }
+// 
+//     let mut entries = Vec::new();
+//     let mut seen_subdirs = HashSet::new();
+//     let base_path_str = path.as_str();
+// 
+//     // 2. 查询所有以该路径为前缀的条目
+//     let mut stmt = vault.database_connection.prepare(
+//         "SELECT path FROM files WHERE path LIKE ?1",
+//     )?;
+//     let like_pattern = format!("{}%", base_path_str);
+//     let paths_iter = stmt.query_map(params![like_pattern], |row| row.get::<_, String>(0))?;
+// 
+//     for path_result in paths_iter {
+//         let file_path_str = path_result?; // file_path_str is String
+//         // 3. 计算相对路径
+//         let remainder = file_path_str.strip_prefix(base_path_str).unwrap_or("");
+// 
+//         if remainder.contains('/') {
+//             // 4. 这是一个子目录或更深层的文件
+//             if let Some(subdir_name) = remainder.split('/').next() {
+//                 if !subdir_name.is_empty() {
+//                     // 我们必须将 subdir_name 作为一个目录段 (带斜杠) 来连接
+//                     let subdir_segment = format!("{}/", subdir_name);
+//                     let dir_path = path.join(&subdir_segment)?; // 例如 "/".join("docs/")
+// 
+//                     if seen_subdirs.insert(dir_path.clone()) {
+//                         entries.push(dir_path);
+//                     }
+//                 }
+//             }
+//         } else if !remainder.is_empty() {
+//             // 5. 这是一个直属文件
+//             // 将 String 转换为 &str 再调用 from
+//             entries.push(VaultPath::from(file_path_str.as_str()));
+//         }
+//     }
+// 
+//     // 6. 排序
+//     entries.sort();
+//     Ok(entries)
+// }
 
 /// 列出给定目录路径下的条目（文件或子目录），如果是文件则返回详细信息。
-pub(super) fn list_entries_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
+pub(super) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
     // 1. 验证输入是否为目录
     if !path.is_dir() {
         return Err(QueryError::NotADirectory(path.as_str().to_string()));
