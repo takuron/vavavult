@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use walkdir::WalkDir;
-use vavavult::vault::{encrypt_file_for_add_standalone, AddFileError, EncryptedAddingFile, Vault};
+use vavavult::vault::{prepare_addition_task_standalone, AddFileError, AdditionTask, Vault};
 use vavavult::file::VaultPath; // [新增] 确保导入
 use crate::utils::confirm_action;
 
@@ -247,14 +247,14 @@ fn handle_add_directory_parallel(
     // 这是一个快速的只读锁
     let storage = vault.lock().unwrap().storage.clone();
 
-    let encryption_results: Vec<Result<EncryptedAddingFile, (String, AddFileError)>> = files_to_add
+    let encryption_results: Vec<Result<AdditionTask, (String, AddFileError)>> = files_to_add
         .into_par_iter() // <-- Rayon 并行迭代
         .map(|(source_path, target_path)| {
             let pb_clone = pb.clone();
 
             // 调用无锁的 standalone 加密函数
             // **这里没有 vault 锁**，我们使用 clone 来的 storage 后端
-            let result = encrypt_file_for_add_standalone(
+            let result = prepare_addition_task_standalone(
                 storage.as_ref(), // deref Arc -> &dyn StorageBackend
                 &source_path,
                 &target_path,
@@ -301,7 +301,7 @@ fn handle_add_directory_parallel(
     {
         // **获取一次性的写锁**
         let mut vault_guard = vault.lock().unwrap();
-        match vault_guard.commit_add_files(files_to_commit) {
+        match vault_guard.execute_addition_tasks(files_to_commit) {
             Ok(_) => {
                 println!("Batch commit successful.");
             }
