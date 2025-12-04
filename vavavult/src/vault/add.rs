@@ -104,26 +104,32 @@ pub enum AddFileError {
     PathConstructionError(#[from] PathError),
 }
 
-/// Represents an encrypted file ready to be committed to the vault database.
-/// This struct is returned by `Vault::encrypt_file_for_add` and consumed by `Vault::commit_add_files`.
+/// Represents a task for adding a file that has passed the encryption stage.
+///
+/// This struct holds the encrypted file entry ready for database insertion
+/// and a staging token for finalizing the storage.
 //
-// // 代表一个已加密、准备好提交到保险库数据库的文件。
-// // 此结构由 `Vault::encrypt_file_for_add` 返回，并由 `Vault::commit_add_files` 消费。
+// // 代表一个已通过加密阶段的文件添加任务。
+// //
+// // 此结构体持有准备插入数据库的加密文件条目，
+// // 以及用于完成存储的暂存令牌。
 #[derive(Debug)]
-pub struct EncryptedAddingFile {
-    /// 最终将插入到数据库的 FileEntry 结构。
+pub struct AdditionTask {
+    /// The `FileEntry` struct to be inserted into the database.
+    // // 将要插入数据库的 `FileEntry` 结构体。
     pub file_entry: FileEntry,
-    /// 暂存令牌，这使得存储后端可以是本地文件、S3 或任何其他介质。
+    /// The token representing the staged data in the storage backend.
+    // // 代表存储后端中暂存数据的令牌。
     pub staging_token: Box<dyn StagingToken>,
 }
 
 /// 这是新的独立函数 (standalone)，不依赖 Vault。
 /// 它可以被 CLI 无锁调用。
-pub(crate) fn encrypt_file_for_add_standalone(
+pub(crate) fn prepare_addition_task_standalone(
     storage: &dyn StorageBackend,
     source_path: &Path,
     dest_path: &VaultPath
-) -> Result<EncryptedAddingFile, AddFileError> {
+) -> Result<AdditionTask, AddFileError> {
 
     // 1. 验证源文件 (这里仍依赖本地 FS，因为我们是从本地添加)
     if !source_path.is_file() {
@@ -177,16 +183,16 @@ pub(crate) fn encrypt_file_for_add_standalone(
     };
 
     // 7. 返回 (包含 Token)
-    Ok(EncryptedAddingFile {
+    Ok(AdditionTask {
         file_entry,
         staging_token,
     })
 }
 
 /// 阶段 2: 提交一个文件添加事务 (需要独占访问的自由函数)
-pub fn commit_add_files(
+pub fn execute_addition_tasks(
     vault: &mut Vault,
-    files: Vec<EncryptedAddingFile>
+    files: Vec<AdditionTask>
 ) -> Result<(), AddFileError> {
     if files.is_empty() {
         return Ok(());
@@ -271,19 +277,19 @@ pub fn commit_add_files(
 pub fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<VaultHash, AddFileError> {
     // 阶段 1: 加密
     // 使用 self.storage
-    let file_to_add = encrypt_file_for_add_standalone(vault.storage.as_ref(), source_path, dest_path)?;
+    let file_to_add = prepare_addition_task_standalone(vault.storage.as_ref(), source_path, dest_path)?;
 
     let hash = file_to_add.file_entry.sha256sum.clone();
 
     // 阶段 2: 提交 (批量 API，但只传一个)
-    commit_add_files(vault, vec![file_to_add])?;
+    execute_addition_tasks(vault, vec![file_to_add])?;
 
     Ok(hash)
 }
 
 /// 辅助函数：提交文件到存储后端
 fn commit_storage_files(
-    files: Vec<EncryptedAddingFile>, // 接收所有权
+    files: Vec<AdditionTask>, // 接收所有权
     storage: &dyn StorageBackend,
 ) -> Result<(), AddFileError> {
     for file_to_add in files {
