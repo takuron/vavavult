@@ -5,14 +5,12 @@ use crate::utils::find_file_entry;
 /// 处理文件重命名命令
 pub fn handle_file_rename(
     vault: &mut Vault,
-    path: Option<String>,
-    hash: Option<String>,
+    target: &str,
     new_name: &str,
 ) -> Result<(), Box<dyn Error>> {
 
     // 1. 查找要重命名的文件
-    // 使用新的 find_file_entry 签名
-    let file_entry = find_file_entry(vault, path, hash)?;
+    let file_entry = find_file_entry(vault, target)?;
     let old_name = file_entry.path.clone();
 
     // 2. 验证 new_name 是纯文件名

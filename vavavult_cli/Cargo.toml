@@ -3,6 +3,11 @@ name = "vavavult_cli"
 version = "0.4.0"
 edition = "2024"
 
+# 显式指定二进制产物的名称和路径
+[[bin]]
+name = "vavavult"
+path = "src/main.rs"
+
 [dependencies]
 
 vavavult = { path = "../vavavult" }

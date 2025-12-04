@@ -8,11 +8,6 @@ use vavavult::common::hash::VaultHash;
 use vavavult::file::{FileEntry, VaultPath};
 use vavavult::vault::{DirectoryEntry, QueryResult, Vault};
 
-// 本地辅助函数：解析 RFC 3339 字符串
-pub fn parse_rfc3339_string(s: &str) -> Result<DateTime<Utc>, ParseError> {
-    DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc))
-}
-
 /// 从标签列表中提取颜色 (例如 "_color:red" -> "red")
 fn get_file_color(tags: &[String]) -> Option<&str> {
     for tag in tags {
@@ -191,29 +186,87 @@ pub fn print_dir_details(path: &VaultPath) {
 
 // --- 辅助函数 ---
 
-/// 根据 path 或 hash 查找文件，返回找到的 FileEntry
-pub fn find_file_entry(
-    vault: &Vault,
-    path: Option<String>,
-    hash: Option<String>,
-) -> Result<FileEntry, Box<dyn Error>> {
-    let query_result = if let Some(p) = path {
-        // 按路径查找
-        vault.find_by_path(&VaultPath::from(p.as_str()))?
-    } else if let Some(h) = hash {
-        // 按哈希查找
-        let vault_hash = VaultHash::from_str(&h)?;
-        vault.find_by_hash(&vault_hash)?
-    } else {
-        // 适应新的参数名
-        return Err("You must provide either a --path (-p) or a --hash (-h).".into());
-    };
+// 本地辅助函数：解析 RFC 3339 字符串
+pub fn parse_rfc3339_string(s: &str) -> Result<DateTime<Utc>, ParseError> {
+    DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc))
+}
 
-    match query_result {
-        QueryResult::Found(entry) => Ok(entry),
-        QueryResult::NotFound => Err("File not found in the vault.".into()),
+// 目标类型枚举
+#[derive(Debug)]
+pub enum Target {
+    Path(VaultPath),
+    Hash(VaultHash),
+}
+
+/// 根据字符串格式自动推断目标类型
+/// 规则：
+/// 1. 以 '/' 开头 -> 路径 (Path)
+/// 2. 长度为 43 -> 哈希 (Hash)
+/// 3. 其他 -> 错误
+pub fn identify_target(target: &str) -> Result<Target, String> {
+    if target.starts_with('/') {
+        Ok(Target::Path(VaultPath::from(target)))
+    } else if target.len() == VaultHash::BASE64_LEN {
+        // 尝试解析哈希以验证字符合法性
+        match VaultHash::from_str(target) {
+            Ok(h) => Ok(Target::Hash(h)),
+            Err(e) => Err(format!("Invalid hash format: {}", e)),
+        }
+    } else {
+        Err(format!(
+            "Invalid target '{}'. Must start with '/' (absolute path) or be 43 characters long (hash).",
+            target
+        ))
     }
 }
+
+/// 查找文件条目，自动推断目标类型
+/// 用于期望找到单个文件的情况 (如 Open, Rename)
+pub fn find_file_entry(
+    vault: &Vault,
+    target: &str,
+) -> Result<FileEntry, Box<dyn Error>> {
+    match identify_target(target)? {
+        Target::Path(p) => {
+            // 如果是路径，查询数据库
+            match vault.find_by_path(&p)? {
+                QueryResult::Found(entry) => Ok(entry),
+                QueryResult::NotFound => Err(format!("File not found at path '{}'.", p).into()),
+            }
+        },
+        Target::Hash(h) => {
+            // 如果是哈希，查询数据库
+            match vault.find_by_hash(&h)? {
+                QueryResult::Found(entry) => Ok(entry),
+                QueryResult::NotFound => Err(format!("File not found with hash '{}'.", h).into()),
+            }
+        }
+    }
+}
+
+// /// 根据 path 或 hash 查找文件，返回找到的 FileEntry
+// pub fn find_file_entry(
+//     vault: &Vault,
+//     path: Option<String>,
+//     hash: Option<String>,
+// ) -> Result<FileEntry, Box<dyn Error>> {
+//     let query_result = if let Some(p) = path {
+//         // 按路径查找
+//         vault.find_by_path(&VaultPath::from(p.as_str()))?
+//     } else if let Some(h) = hash {
+//         // 按哈希查找
+//         let vault_hash = VaultHash::from_str(&h)?;
+//         vault.find_by_hash(&vault_hash)?
+//     } else {
+//         // 适应新的参数名
+//         return Err("You must provide either a --path (-p) or a --hash (-h).".into());
+//     };
+//
+//     match query_result {
+//         QueryResult::Found(entry) => Ok(entry),
+//         QueryResult::NotFound => Err("File not found in the vault.".into()),
+//     }
+// }
 
 /// 确定最终的输出路径
 pub fn determine_output_path(entry: &FileEntry, dest_dir: PathBuf, output_name: Option<String>) -> PathBuf {
@@ -235,7 +288,7 @@ pub fn confirm_action(prompt: &str) -> Result<bool, io::Error> {
     Ok(confirmation.trim().eq_ignore_ascii_case("y") || confirmation.trim().eq_ignore_ascii_case("yes"))
 }
 
-/// 打印 `ListResult` 的辅助函数
+// 打印 `ListResult` 的辅助函数
 // pub fn print_list_result(paths: &[VaultPath]) {
 //     if paths.is_empty() {
 //         println!("(empty)");

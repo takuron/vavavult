@@ -51,8 +51,8 @@ pub enum ReplCommand {
         #[arg(short = 'n', long = "name")]
         name: Option<String>,
 
-        /// (EXPERIMENTAL) Use multiple threads to add files in parallel
-        // (实验性) 使用多线程并行添加文件
+        /// Use multiple threads to add files in parallel
+        // 使用多线程并行添加文件
         #[arg(long)]
         parallel: bool,
     },
@@ -62,7 +62,7 @@ pub enum ReplCommand {
     List {
         /// (Optional) The vault path to list. Defaults to root ("/") if not provided.
         // (可选) 要列出的保险库路径。如果未提供，则默认为根目录 ("/")。
-        #[arg(value_name = "VAULT_PATH")] // [V2 修改] 移除 group = "list_mode"
+        #[arg(value_name = "VAULT_PATH")]
         path: Option<String>,
 
         /// Use long-listing format (show details).
@@ -92,38 +92,20 @@ pub enum ReplCommand {
     /// Open a file from the vault with the default application
     //  使用默认应用程序从保险库中打开一个文件
     Open {
-        /// The path of the file to open (e.g., "/report.txt").
-        /// Mutually exclusive with --hash.
-        //  要打开的文件的路径 (例如 "/report.txt")。
-        //  与 --hash 互斥。
-        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
-        path: Option<String>,
-
-        /// The full 43-character hash of the file to open.
-        /// Mutually exclusive with --path.
-        //  要打开的文件的完整 43 字符哈希。
-        //  与 --path 互斥。
-        #[arg(short = 'h', long = "hash", group = "source")]
-        hash: Option<String>,
+        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
+        //  目标标识符：保险库路径（以 '/' 开头）或哈希（43 个字符）。
+        #[arg(required = true, value_name = "TARGET")]
+        target: String,
     },
 
     /// Extract a file or directory from the vault
     //  从保险库中提取一个文件或目录
     #[command(visible_alias = "get")]
     Extract {
-        /// The path in the vault to extract (e.g., "/docs/" or "/report.txt").
-        /// Mutually exclusive with --hash.
-        //  要提取的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
-        //  与 --hash 互斥。
-        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
-        path: Option<String>,
-
-        /// The full 43-character hash of the file to extract.
-        /// Mutually exclusive with --path.
-        //  要提取的文件的完整 43 字符哈希。
-        //  与 --path 互斥。
-        #[arg(short = 'H', long = "hash", group = "source")]
-        hash: Option<String>,
+        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
+        //  目标标识符：保险库路径（以 '/' 开头）或哈希（43 个字符）。
+        #[arg(required = true, value_name = "TARGET")]
+        target: String,
 
         /// The local destination directory where the file(s) will be saved.
         //  文件将被保存到的本地目标目录。
@@ -131,9 +113,9 @@ pub enum ReplCommand {
         destination: PathBuf,
 
         /// (Optional) Specify a new name for the extracted file.
-        /// Only valid when extracting a single file (using --hash or a file path).
+        /// Only valid when extracting a single file.
         // (可选) 为提取出的文件指定一个新的名称。
-        //  仅在提取单个文件时 (使用 --hash 或文件路径) 有效。
+        //  仅在提取单个文件时有效。
         #[arg(short = 'o', long = "output")]
         output_name: Option<String>,
 
@@ -149,8 +131,8 @@ pub enum ReplCommand {
         #[arg(long)]
         delete: bool,
 
-        /// (EXPERIMENTAL) Use multiple threads to extract files in parallel.
-        // (实验性) 使用多线程并行提取文件。
+        /// Use multiple threads to extract files in parallel.
+        // 使用多线程并行提取文件。
         #[arg(long)]
         parallel: bool,
     },
@@ -158,22 +140,13 @@ pub enum ReplCommand {
     //  从保险库中永久删除一个文件或目录
     #[command(visible_alias = "rm")]
     Remove {
-        /// The path in the vault to delete (e.g., "/docs/" or "/report.txt").
-        /// Mutually exclusive with --hash.
-        //  要删除的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
-        //  与 --hash 互斥。
-        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
-        path: Option<String>,
+        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
+        //  目标标识符：保险库路径（以 '/' 开头）或哈希（43 个字符）。
+        #[arg(required = true, value_name = "TARGET")]
+        target: String,
 
-        /// The full 43-character hash of the file to delete.
-        /// Mutually exclusive with --path.
-        //  要删除的文件的完整 43 字符哈希。
-        //  与 --path 互斥。
-        #[arg(short = 'H', long = "hash", group = "source")]
-        hash: Option<String>,
-
-        /// Required to delete a directory (only applies when using --path)
-        //  删除目录时需要此选项 (仅在使用 --path 时适用)
+        /// Required to delete a directory (only applies when target is a path)
+        //  删除目录时需要此选项 (仅当目标是路径时适用)
         #[arg(short = 'r', long)]
         recursive: bool,
 
@@ -186,15 +159,10 @@ pub enum ReplCommand {
     //  在保险库中移动 (mv) 或重命名一个文件
     #[command(visible_alias = "mv")]
     Move {
-        /// The path of the file to move.
-        //  要移动的文件的路径。
-        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
-        path: Option<String>,
-
-        /// The full 43-character hash of the file to move.
-        //  要移动的文件的完整 43 字符哈希。
-        #[arg(short = 'H', long = "hash", group = "source")]
-        hash: Option<String>,
+        /// The target file to move (path or hash).
+        //  要移动的目标文件（路径或哈希）。
+        #[arg(required = true, value_name = "TARGET")]
+        target: String,
 
         /// The new destination.
         //  新的目标位置。
@@ -206,15 +174,10 @@ pub enum ReplCommand {
     //  在当前目录中就地重命名一个文件
     #[command(visible_alias = "ren")]
     Rename {
-        /// The path of the file to rename.
-        //  要重命名的文件的路径。
-        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
-        path: Option<String>,
-
-        /// The full 43-character hash of the file to rename.
-        //  要重命名的文件的完整 43 字符哈希。
-        #[arg(short = 'H', long = "hash", group = "source")]
-        hash: Option<String>,
+        /// The target file to rename (path or hash).
+        //  要重命名的目标文件（路径或哈希）。
+        #[arg(required = true, value_name = "TARGET")]
+        target: String,
 
         /// The new filename (must not contain path separators '/')
         //  新的文件名 (不能包含路径分隔符 '/')
@@ -228,7 +191,7 @@ pub enum ReplCommand {
     /// Manage the vault itself
     //  管理保险库本身
     #[command(subcommand)]
-    Vault(VaultCommand), // 将之前的 Rename 移到这里
+    Vault(VaultCommand),
     /// Exit the interactive session
     //  退出交互式会话
     Exit,
@@ -246,7 +209,7 @@ pub enum VaultCommand {
         new_name: String,
     },
     Status,
-    // 未来可以添加其他 vault 级别的命令, 例如修改密码等
+
 }
 
 // --- Subcommands for `tag` ---
@@ -256,19 +219,10 @@ pub enum TagCommand {
     /// Add one or more tags to a file or directory
     //  将一个或多个标签添加到一个文件或目录
     Add {
-        /// The path in the vault to tag (e.g., "/docs/" or "/report.txt").
-        /// Mutually exclusive with --hash.
-        //  要标记的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
-        //  与 --hash 互斥。
-        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
-        path: Option<String>,
-
-        /// The full 43-character hash of the file to tag.
-        /// Mutually exclusive with --path.
-        //  要标记的文件的完整 43 字符哈希。
-        //  与 --path 互斥。
-        #[arg(short = 'H', long = "hash", group = "source")]
-        hash: Option<String>,
+        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
+        //  目标标识符。
+        #[arg(required = true, value_name = "TARGET")]
+        target: String,
 
         /// One or more tags to add, separated by spaces
         //  要添加的一个或多个标签，以空格分隔
@@ -278,19 +232,10 @@ pub enum TagCommand {
     /// Remove one or more tags from a file or directory
     //  从一个文件或目录中删除一个或多个标签
     Remove {
-        /// The path in the vault to remove tags from (e.g., "/docs/" or "/report.txt").
-        /// Mutually exclusive with --hash.
-        //  要从中删除标签的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
-        //  与 --hash 互斥。
-        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
-        path: Option<String>,
-
-        /// The full 43-character hash of the file to remove tags from.
-        /// Mutually exclusive with --path.
-        //  要从中删除标签的文件的完整 43 字符哈希。
-        //  与 --path 互斥。
-        #[arg(short = 'H', long = "hash", group = "source")]
-        hash: Option<String>,
+        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
+        //  目标标识符。
+        #[arg(required = true, value_name = "TARGET")]
+        target: String,
 
         /// One or more tags to remove, separated by spaces
         //  要删除的一个或多个标签，以空格分隔
@@ -300,36 +245,18 @@ pub enum TagCommand {
     /// Clear all tags from a file or directory
     //  清除一个文件或目录的所有标签
     Clear {
-        /// The path in the vault to clear tags from (e.g., "/docs/" or "/report.txt").
-        /// Mutually exclusive with --hash.
-        //  要清除标签的保险库内路径 (例如 "/docs/" 或 "/report.txt")。
-        //  与 --hash 互斥。
-        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
-        path: Option<String>,
-
-        /// The full 43-character hash of the file to clear tags from.
-        /// Mutually exclusive with --path.
-        //  要清除标签的文件的完整 43 字符哈希。
-        //  与 --path 互斥。
-        #[arg(short = 'H', long = "hash", group = "source")]
-        hash: Option<String>,
+        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
+        //  目标标识符。
+        #[arg(required = true, value_name = "TARGET")]
+        target: String,
     },
     /// Set a display color for a file or directory (Requires 'colorfulTag' feature)
     //  设置文件或目录的显示颜色 (需要启用 'colorfulTag' 功能)
     Color {
-        /// The path in the vault to color (e.g., "/docs/" or "/report.txt").
-        /// Mutually exclusive with --hash.
-        //  要设置颜色的保险库内路径。
-        //  与 --hash 互斥。
-        #[arg(short = 'p', long = "path", group = "source", required_unless_present = "hash")]
-        path: Option<String>,
-
-        /// The full 43-character hash of the file to color.
-        /// Mutually exclusive with --path.
-        //  要设置颜色的文件的完整 43 字符哈希。
-        //  与 --path 互斥。
-        #[arg(short = 'H', long = "hash", group = "source")]
-        hash: Option<String>,
+        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
+        //  目标标识符。
+        #[arg(required = true, value_name = "TARGET")]
+        target: String,
 
         /// The color to set. Allowed values: red, green, yellow, blue, magenta, cyan.
         /// Use "none" to remove the color.

@@ -1,21 +1,18 @@
 use std::error::Error;
 use std::{fs};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use indicatif::{ProgressBar, ProgressStyle};
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{execute_extraction_task_standalone, DirectoryEntry, ExtractionTask, QueryResult, Vault};
+use vavavult::vault::{execute_extraction_task_standalone, DirectoryEntry, ExtractionTask, Vault};
 use rayon::prelude::*;
-use vavavult::common::hash::VaultHash;
-use crate::utils::{confirm_action, determine_output_path, get_all_files_recursively};
+use crate::utils::{confirm_action, determine_output_path, find_file_entry, get_all_files_recursively, identify_target, Target};
 
 /// 主处理函数，根据新的 CLI 签名分发任务
 pub fn handle_extract(
     vault: Arc<Mutex<Vault>>,
-    path: Option<String>,
-    hash: Option<String>,
+    target: String,
     destination: PathBuf,
     output_name: Option<String>,
     non_recursive: bool,
@@ -23,60 +20,50 @@ pub fn handle_extract(
     parallel: bool,
 ) -> Result<(), Box<dyn Error>> {
 
-    if let Some(h) = hash {
-        // --- Case 1: Extract by Hash ---
-        if non_recursive {
-            println!("Warning: --non-recursive has no effect when extracting by hash.");
-        }
-        if parallel {
-            println!("Warning: --parallel has no effect when extracting a single file.");
-        }
+    let target_obj = identify_target(&target)?;
 
-        // [要求 3] 验证完整的哈希
-        let vault_hash = VaultHash::from_str(&h)?;
-        let file_entry = { // Scoped lock
-            let vault_guard = vault.lock().unwrap();
-            match vault_guard.find_by_hash(&vault_hash)? {
-                QueryResult::Found(entry) => entry,
-                QueryResult::NotFound => return Err("File not found by hash.".into()),
-            }
-        };
-        handle_extract_single_file(vault, file_entry, &destination, output_name, delete)
-
-    } else if let Some(p) = path {
-        // 使用 VaultPath 处理
-        let vault_path = VaultPath::from(p.as_str());
-
-        if vault_path.is_file() {
-            // --- Case 2: Extract by File Path ---
+    match target_obj {
+        Target::Hash(_) => {
+            // --- Case 1: Extract by Hash (Single File) ---
             if non_recursive {
-                println!("Warning: --non-recursive has no effect when extracting a single file.");
+                println!("Warning: --non-recursive has no effect when extracting by hash.");
             }
             if parallel {
                 println!("Warning: --parallel has no effect when extracting a single file.");
             }
-            let file_entry = { // Scoped lock
+
+            // 使用 scoped lock 获取 entry
+            let file_entry = {
                 let vault_guard = vault.lock().unwrap();
-                match vault_guard.find_by_path(&vault_path)? {
-                    QueryResult::Found(entry) => entry,
-                    QueryResult::NotFound => return Err("File not found by path.".into()),
-                }
+                find_file_entry(&vault_guard, &target)?
             };
             handle_extract_single_file(vault, file_entry, &destination, output_name, delete)
-
-        } else {
-            // --- Case 3: Extract by Directory Path ---
-            if output_name.is_some() {
-                return Err("--output (-o) cannot be used when extracting a directory.".into());
-            }
-
-            // 调用目录处理器
-            handle_extract_directory(vault, &vault_path, &destination, non_recursive, delete, parallel)
         }
-    } else {
-        unreachable!("Clap should prevent this state.");
+        Target::Path(vault_path) => {
+            if vault_path.is_file() {
+                // --- Case 2: Extract by File Path ---
+                if non_recursive {
+                    println!("Warning: --non-recursive has no effect when extracting a single file.");
+                }
+                if parallel {
+                    println!("Warning: --parallel has no effect when extracting a single file.");
+                }
+                let file_entry = {
+                    let vault_guard = vault.lock().unwrap();
+                    find_file_entry(&vault_guard, &target)?
+                };
+                handle_extract_single_file(vault, file_entry, &destination, output_name, delete)
+            } else {
+                // --- Case 3: Extract by Directory Path ---
+                if output_name.is_some() {
+                    return Err("--output (-o) cannot be used when extracting a directory.".into());
+                }
+                handle_extract_directory(vault, &vault_path, &destination, non_recursive, delete, parallel)
+            }
+        }
     }
 }
+
 
 /// 处理提取单个文件的逻辑
 /// 此函数现在接收一个 `FileEntry`，而不是自己去查找

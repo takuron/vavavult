@@ -1,62 +1,53 @@
 use std::error::Error;
-use std::str::FromStr;
 use indicatif::{ProgressBar, ProgressStyle};
-use vavavult::common::hash::VaultHash;
-use vavavult::file::{VaultPath};
 use vavavult::vault::{QueryResult, Vault};
-use crate::utils::{confirm_action, get_all_files_recursively};
+use crate::utils::{confirm_action, get_all_files_recursively, identify_target, Target};
 
 /// 处理 'rm' (Remove) 命令
 pub fn handle_remove(
     vault: &mut Vault,
-    path: Option<String>,
-    hash: Option<String>,
+    target: &str,
     recursive: bool,
     force: bool,
 ) -> Result<(), Box<dyn Error>> {
 
-    let (files_to_delete, target_description) = if let Some(h) = hash {
-        // --- 案例 1: 按哈希删除 ---
-        if recursive {
-            println!("Warning: -r (recursive) has no effect when deleting by hash.");
-        }
+    let target_obj = identify_target(target)?;
 
-        let hash_obj = VaultHash::from_str(&h)?;
-        let file_entry = match vault.find_by_hash(&hash_obj)? {
-            QueryResult::Found(entry) => entry,
-            QueryResult::NotFound => return Err("File not found by hash.".into()),
-        };
-        let description = format!("file '{}' (by hash)", file_entry.path);
-        (vec![file_entry], description) // 返回元组
-
-    } else if let Some(p) = path {
-        // --- 案例 2: 按路径删除 ---
-        let vault_path = VaultPath::from(p.as_str());
-
-        if vault_path.is_file() {
-            // 2a: 路径是文件
-            let file_entry = match vault.find_by_path(&vault_path)? {
-                QueryResult::Found(entry) => entry,
-                QueryResult::NotFound => return Err("File not found by path.".into()),
-            };
-            let description = format!("file '{}'", file_entry.path);
-            (vec![file_entry], description) // 返回元组
-
-        } else {
-            // 2b: 路径是目录
-            let description = format!("directory '{}'", vault_path);
-            if !recursive {
-                return Err(format!("Cannot remove '{}': It is a directory. Use -r (recursive) to delete.", vault_path).into());
+    let (files_to_delete, target_description) = match target_obj {
+        Target::Hash(hash) => {
+            // --- 案例 1: 按哈希删除 ---
+            if recursive {
+                println!("Warning: -r (recursive) has no effect when deleting by hash.");
             }
-
-            // 递归获取所有文件
-            println!("Recursively scanning directory '{}'...", vault_path);
-            let files = get_all_files_recursively(vault, vault_path.as_str())?;
-            (files, description) // 返回元组
+            // find_by_hash
+            let file_entry = match vault.find_by_hash(&hash)? {
+                QueryResult::Found(entry) => entry,
+                QueryResult::NotFound => return Err("File not found by hash.".into()),
+            };
+            let description = format!("file '{}' (by hash)", file_entry.path);
+            (vec![file_entry], description)
+        },
+        Target::Path(vault_path) => {
+            // --- 案例 2: 按路径删除 ---
+            if vault_path.is_file() {
+                // 2a: 路径是文件
+                let file_entry = match vault.find_by_path(&vault_path)? {
+                    QueryResult::Found(entry) => entry,
+                    QueryResult::NotFound => return Err("File not found by path.".into()),
+                };
+                let description = format!("file '{}'", file_entry.path);
+                (vec![file_entry], description)
+            } else {
+                // 2b: 路径是目录
+                let description = format!("directory '{}'", vault_path);
+                if !recursive {
+                    return Err(format!("Cannot remove '{}': It is a directory. Use -r (recursive) to delete.", vault_path).into());
+                }
+                println!("Recursively scanning directory '{}'...", vault_path);
+                let files = get_all_files_recursively(vault, vault_path.as_str())?;
+                (files, description)
+            }
         }
-    } else {
-        // Clap 应该阻止这种情况发生
-        unreachable!("Delete command must have either a path or a hash.");
     };
 
     // --- 确认阶段 ---

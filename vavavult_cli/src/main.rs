@@ -150,16 +150,14 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             let vault = vault_arc.lock().unwrap();
             handlers::search::handle_search(&vault, &keyword, long)?;
         }
-        ReplCommand::Open { path, hash } => {
+        ReplCommand::Open { target } => {
             let vault = vault_arc.lock().unwrap();
-            // 传递新的参数
-            handlers::open::handle_open(&vault, path, hash)?;
+            handlers::open::handle_open(&vault, &target)?;
         }
-        ReplCommand::Extract { path, hash, destination, output_name, non_recursive, delete, parallel } => {
+        ReplCommand::Extract { target, destination, output_name, non_recursive, delete, parallel } => {
             handlers::extract::handle_extract(
                 Arc::clone(vault_arc),
-                path,
-                hash,
+                target,
                 destination,
                 output_name,
                 non_recursive,
@@ -167,17 +165,17 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
                 parallel
             )?;
         }
-        ReplCommand::Remove { path, hash, recursive, force } => {
+        ReplCommand::Remove { target, recursive, force } => {
             let mut vault = vault_arc.lock().unwrap();
-            handlers::remove::handle_remove(&mut vault, path, hash, recursive, force)?;
+            handlers::remove::handle_remove(&mut vault, &target, recursive, force)?;
         }
-        ReplCommand::Move { path, hash, destination } => {
+        ReplCommand::Move { target, destination } => {
             let mut vault = vault_arc.lock().unwrap();
-            handlers::move_cl::handle_move(&mut vault, path, hash, destination)?;
+            handlers::move_cl::handle_move(&mut vault, &target, destination)?;
         }
-        ReplCommand::Rename { path, hash, new_name } => {
+        ReplCommand::Rename { target, new_name } => {
             let mut vault = vault_arc.lock().unwrap();
-            handlers::rename::handle_file_rename(&mut vault, path, hash, &new_name)?;
+            handlers::rename::handle_file_rename(&mut vault, &target, &new_name)?;
         }
         ReplCommand::Vault(vault_command) => {
             match vault_command {
@@ -197,17 +195,17 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
         ReplCommand::Tag(tag_command) => {
             let mut vault = vault_arc.lock().unwrap();
             match tag_command {
-                TagCommand::Add { path, hash, tags } => {
-                    handlers::tag::handle_tag_add(&mut vault, path, hash, &tags)?;
+                TagCommand::Add { target, tags } => {
+                    handlers::tag::handle_tag_add(&mut vault, &target, &tags)?;
                 }
-                TagCommand::Remove { path, hash, tags } => {
-                    handlers::tag::handle_tag_remove(&mut vault, path, hash, &tags)?;
+                TagCommand::Remove { target, tags } => {
+                    handlers::tag::handle_tag_remove(&mut vault, &target, &tags)?;
                 }
-                TagCommand::Clear { path, hash } => {
-                    handlers::tag::handle_tag_clear(&mut vault, path, hash)?;
+                TagCommand::Clear { target } => {
+                    handlers::tag::handle_tag_clear(&mut vault, &target)?;
                 }
-                TagCommand::Color { path, hash, color } => {
-                    handlers::tag::handle_tag_color(&mut vault, path, hash, &color)?;
+                TagCommand::Color { target, color } => {
+                    handlers::tag::handle_tag_color(&mut vault, &target, &color)?;
                 }
             }
         }
