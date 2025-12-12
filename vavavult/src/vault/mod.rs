@@ -1163,7 +1163,7 @@ impl Vault {
     /// metadata. It does *not* write the decrypted content to disk.
     ///
     /// # Arguments
-    /// * `path` - The `VaultPath` of the file to verify.
+    /// * `hash` - The `VaultHash` (encrypted content hash) of the file to verify.
     ///
     /// # Returns
     /// - `Ok(())` if the file is intact and the hashes match.
@@ -1175,13 +1175,13 @@ impl Vault {
     // // 与元数据中存储的原始哈希值进行比较。它 **不会** 将解密后的内容写入磁盘。
     // //
     // // # 参数
-    // // * `path` - 要验证的文件的 `VaultPath`。
+    // // * `hash` - 要验证的文件的 `VaultHash` (加密后内容的哈希)。
     // //
     // // # 返回
     // // - 如果文件完好且哈希匹配，返回 `Ok(())`。
     // // - 如果文件未找到、已损坏或发生其他错误，返回 `Err(VerifyError)`。
-    pub fn verify_file_integrity(&self, path: &VaultPath) -> Result<(), VerifyError> {
-        verify(self, path)
+    pub fn verify_file_integrity(&self, hash: &VaultHash) -> Result<(), VerifyError> {
+        verify(self, hash)
     }
 }
 

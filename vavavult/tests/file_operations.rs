@@ -272,7 +272,7 @@ fn test_file_integrity_check() {
     let encrypted_hash = vault.add_file(&dummy_file_path, &dest_path).unwrap();
 
     // 2. Verify integrity of the good file and assert it's OK
-    assert!(vault.verify_file_integrity(&dest_path).is_ok());
+    assert!(vault.verify_file_integrity(&encrypted_hash).is_ok());
 
     // 3. Corrupt the file in storage
     let stored_file_path = vault_path
@@ -285,6 +285,6 @@ fn test_file_integrity_check() {
     file.write_all(b"CORRUPTION").unwrap();
 
     // 4. Verify integrity of the corrupted file and assert it's an error
-    let verification_result = vault.verify_file_integrity(&dest_path);
+    let verification_result = vault.verify_file_integrity(&encrypted_hash);
     assert!(verification_result.is_err());
 }

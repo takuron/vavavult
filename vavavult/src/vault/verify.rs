@@ -1,8 +1,8 @@
 use std::io;
 use thiserror::Error;
 
+use crate::common::hash::VaultHash;
 use crate::crypto::stream_cipher::{StreamCipherError, stream_decrypt};
-use crate::file::path::VaultPath;
 use crate::vault::Vault;
 use crate::vault::query;
 
@@ -11,9 +11,9 @@ use crate::vault::query;
 // // 定义在文件完整性验证过程中可能发生的错误。
 #[derive(Debug, Error)]
 pub enum VerifyError {
-    /// The specified file path was not found in the vault's database.
+    /// The specified file hash was not found in the vault's database.
     //
-    // // 在保险库数据库中未找到指定的文件路径。
+    // // 在保险库数据库中未找到指定的文件哈希。
     #[error("File not found in vault: {0}")]
     NotFound(String),
     /// The calculated hash of the decrypted content does not match the stored original hash.
@@ -44,16 +44,13 @@ pub enum VerifyError {
 /// The internal implementation for verifying a file's integrity.
 //
 // // 用于验证文件完整性的内部实现。
-pub(crate) fn verify(vault: &Vault, path: &VaultPath) -> Result<(), VerifyError> {
-    let file_entry = match query::check_by_path(vault, path)? {
+pub(crate) fn verify(vault: &Vault, hash: &VaultHash) -> Result<(), VerifyError> {
+    let file_entry = match query::check_by_hash(vault, hash)? {
         query::QueryResult::Found(entry) => entry,
-        query::QueryResult::NotFound => {
-            return Err(VerifyError::NotFound(path.as_str().to_string()));
-        }
+        query::QueryResult::NotFound => return Err(VerifyError::NotFound(hash.to_string())),
     };
 
-    let encrypted_hash = &file_entry.sha256sum;
-    let mut reader = vault.storage.reader(encrypted_hash)?;
+    let mut reader = vault.storage.reader(hash)?;
 
     let calculated_hash =
         stream_decrypt(&mut reader, &mut io::sink(), &file_entry.encrypt_password)?;
@@ -63,6 +60,6 @@ pub(crate) fn verify(vault: &Vault, path: &VaultPath) -> Result<(), VerifyError>
     if &calculated_hash == expected_hash {
         Ok(())
     } else {
-        Err(VerifyError::IntegrityMismatch(path.as_str().to_string()))
+        Err(VerifyError::IntegrityMismatch(hash.to_string()))
     }
 }
