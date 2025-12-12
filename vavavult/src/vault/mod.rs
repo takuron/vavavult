@@ -6,40 +6,56 @@ mod add;
 mod config;
 mod create;
 mod extract;
+mod metadata;
+mod open;
 mod query;
 mod remove;
-mod update;
-mod open;
 mod tags;
-mod metadata;
+mod update;
+mod verify;
 
+use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
 pub use crate::file::FileEntry;
-use crate::vault::add::{add_file, execute_addition_tasks, prepare_addition_task_standalone as _prepare_addition_task_standalone};
-use crate::vault::create::{create_vault};
-pub use crate::vault::extract::{ExtractError};
-use crate::vault::query::{check_by_hash, check_by_original_hash, check_by_path, find_by_hashes, find_by_keyword, find_by_paths, find_by_tag, get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path};
+use crate::file::VaultPath;
+use crate::storage::StorageBackend;
+use crate::storage::local::LocalStorage;
+use crate::vault::add::{
+    add_file, execute_addition_tasks,
+    prepare_addition_task_standalone as _prepare_addition_task_standalone,
+};
+use crate::vault::create::create_vault;
+pub use crate::vault::extract::ExtractError;
+pub use crate::vault::extract::ExtractionTask;
+use crate::vault::extract::{
+    execute_extraction_task_standalone as _execute_extraction_task_standalone, extract_file,
+    prepare_extraction_task,
+};
+use crate::vault::metadata::{
+    get_vault_metadata, remove_file_metadata, remove_vault_metadata, set_file_metadata,
+    set_vault_metadata, touch_vault_update_time,
+};
+use crate::vault::open::open_vault;
+use crate::vault::query::{
+    check_by_hash, check_by_original_hash, check_by_path, find_by_hashes, find_by_keyword,
+    find_by_paths, find_by_tag, get_enabled_vault_features, get_total_file_count,
+    is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path,
+};
 use crate::vault::remove::remove_file;
-use crate::vault::update::{enable_vault_feature, move_file,  rename_file_inplace,  set_name};
+use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
+use crate::vault::update::{enable_vault_feature, move_file, rename_file_inplace, set_name};
+use crate::vault::verify::verify;
 pub use add::{AddFileError, AdditionTask};
 pub use config::VaultConfig;
-pub use create::{CreateError};
-pub use open::{OpenError};
-pub use query::{ListResult,DirectoryEntry};
+pub use create::CreateError;
+pub use metadata::MetadataError;
+pub use open::OpenError;
+pub use query::{DirectoryEntry, ListResult};
 pub use query::{QueryError, QueryResult};
 pub use remove::RemoveError;
-pub use update::UpdateError;
-pub use metadata::MetadataError;
 pub use tags::TagError;
-use crate::common::hash::VaultHash;
-use crate::file::VaultPath;
-use crate::storage::local::LocalStorage;
-use crate::storage::StorageBackend;
-pub use  crate::vault::extract::ExtractionTask;
-use crate::vault::extract::{extract_file, execute_extraction_task_standalone as _execute_extraction_task_standalone, prepare_extraction_task};
-use crate::vault::metadata::{get_vault_metadata, remove_file_metadata, remove_vault_metadata, set_file_metadata, set_vault_metadata, touch_vault_update_time};
-use crate::vault::open::{open_vault};
-use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag, };
+pub use update::UpdateError;
+pub use verify::VerifyError;
 
 /// Represents a vault loaded into memory.
 ///
@@ -182,10 +198,7 @@ impl Vault {
     // //
     // // # 错误
     // // 如果路径不存在、配置丢失/损坏，或者密码不正确，则返回 `OpenError`。
-    pub fn open_vault_local(
-        root_path: &Path,
-        password: Option<&str>,
-    ) -> Result<Vault, OpenError> {
+    pub fn open_vault_local(root_path: &Path, password: Option<&str>) -> Result<Vault, OpenError> {
         let backend = Arc::new(LocalStorage::new(root_path));
         open_vault(root_path, password, backend)
     }
@@ -328,7 +341,10 @@ impl Vault {
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_original_hash(&self, original_hash: &VaultHash) -> Result<QueryResult, QueryError> {
+    pub fn find_by_original_hash(
+        &self,
+        original_hash: &VaultHash,
+    ) -> Result<QueryResult, QueryError> {
         check_by_original_hash(self, original_hash)
     }
 
@@ -638,10 +654,7 @@ impl Vault {
     // //
     // // # 错误
     // // 如果数据库事务失败或文件提交失败，则返回 `AddFileError`。
-    pub fn execute_addition_tasks(
-        &mut self,
-        files: Vec<AdditionTask>,
-    ) -> Result<(), AddFileError> {
+    pub fn execute_addition_tasks(&mut self, files: Vec<AdditionTask>) -> Result<(), AddFileError> {
         if files.is_empty() {
             return Ok(());
         }
@@ -717,7 +730,7 @@ impl Vault {
     // // 如果发生数据库故障，则返回 `ExtractError`。
     pub fn prepare_extraction_task(
         &self,
-        hash: &VaultHash
+        hash: &VaultHash,
     ) -> Result<ExtractionTask, ExtractError> {
         prepare_extraction_task(self, hash)
     }
@@ -779,7 +792,11 @@ impl Vault {
     // //
     // // # 错误
     // // 如果名称冲突或文件未找到，返回 `UpdateError`。
-    pub fn move_file(&mut self, hash: &VaultHash, target_path: &VaultPath) -> Result<(), UpdateError> {
+    pub fn move_file(
+        &mut self,
+        hash: &VaultHash,
+        target_path: &VaultPath,
+    ) -> Result<(), UpdateError> {
         move_file(self, hash, target_path)?;
         touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
     }
@@ -801,7 +818,11 @@ impl Vault {
     // //
     // // # 错误
     // // 如果文件名无效、文件未找到或名称冲突，则返回 `UpdateError`。
-    pub fn rename_file_inplace(&mut self, hash: &VaultHash, new_filename: &str) -> Result<(), UpdateError> {
+    pub fn rename_file_inplace(
+        &mut self,
+        hash: &VaultHash,
+        new_filename: &str,
+    ) -> Result<(), UpdateError> {
         rename_file_inplace(self, hash, new_filename)?;
         touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
     }
@@ -941,7 +962,11 @@ impl Vault {
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `MetadataError`。
-    pub fn set_file_metadata(&mut self, hash: &VaultHash, metadata: MetadataEntry) -> Result<(), MetadataError> {
+    pub fn set_file_metadata(
+        &mut self,
+        hash: &VaultHash,
+        metadata: MetadataEntry,
+    ) -> Result<(), MetadataError> {
         set_file_metadata(self, hash, metadata)?;
         // 文件元数据变更通常不触发 vault 整体更新时间，除非策略改变
         // 这里保持原样，只更新文件时间 (内部已做)
@@ -965,7 +990,11 @@ impl Vault {
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `MetadataError`。
-    pub fn remove_file_metadata(&mut self, hash: &VaultHash, key: &str) -> Result<(), MetadataError> {
+    pub fn remove_file_metadata(
+        &mut self,
+        hash: &VaultHash,
+        key: &str,
+    ) -> Result<(), MetadataError> {
         remove_file_metadata(self, hash, key)
     }
 
@@ -1122,6 +1151,37 @@ impl Vault {
     // // 如果发生数据库故障，则返回 `QueryError`。
     pub fn get_enabled_features(&self) -> Result<Vec<String>, QueryError> {
         get_enabled_vault_features(self)
+    }
+
+    // --- Integrity APIs ---
+    // // --- 完整性 API ---
+
+    /// Verifies the integrity of a file in the vault.
+    ///
+    /// This function reads the encrypted file, decrypts it on-the-fly,
+    /// and compares its calculated hash with the original hash stored in the
+    /// metadata. It does *not* write the decrypted content to disk.
+    ///
+    /// # Arguments
+    /// * `path` - The `VaultPath` of the file to verify.
+    ///
+    /// # Returns
+    /// - `Ok(())` if the file is intact and the hashes match.
+    /// - `Err(VerifyError)` if the file is not found, corrupt, or another error occurs.
+    //
+    // // 验证保险库中文件的完整性。
+    // //
+    // // 此函数会读取加密文件，进行流式解密，并将其计算出的哈希值
+    // // 与元数据中存储的原始哈希值进行比较。它 **不会** 将解密后的内容写入磁盘。
+    // //
+    // // # 参数
+    // // * `path` - 要验证的文件的 `VaultPath`。
+    // //
+    // // # 返回
+    // // - 如果文件完好且哈希匹配，返回 `Ok(())`。
+    // // - 如果文件未找到、已损坏或发生其他错误，返回 `Err(VerifyError)`。
+    pub fn verify_file_integrity(&self, path: &VaultPath) -> Result<(), VerifyError> {
+        verify(self, path)
     }
 }
 
