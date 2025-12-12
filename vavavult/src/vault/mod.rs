@@ -12,7 +12,6 @@ mod query;
 mod remove;
 mod tags;
 mod update;
-mod verify;
 
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
@@ -44,7 +43,6 @@ use crate::vault::query::{
 use crate::vault::remove::remove_file;
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
 use crate::vault::update::{enable_vault_feature, move_file, rename_file_inplace, set_name};
-pub use crate::vault::verify::verify_encrypted_file_hash;
 pub use add::{AddFileError, AdditionTask};
 pub use config::VaultConfig;
 pub use create::CreateError;
@@ -55,7 +53,7 @@ pub use query::{QueryError, QueryResult};
 pub use remove::RemoveError;
 pub use tags::TagError;
 pub use update::UpdateError;
-pub use verify::VerifyError;
+pub use update::verify_encrypted_file_hash;
 
 /// Represents a vault loaded into memory.
 ///
@@ -675,9 +673,6 @@ impl Vault {
     /// * `hash` - The `VaultHash` of the file to extract.
     /// * `destination_path` - The full local path where the file will be saved.
     ///
-    /// # Errors
-    /// Returns `ExtractError` if file not found, decryption fails, or IO error occurs.
-    //
     // // 从保险库中提取文件 (同步便捷方法)。
     // //
     // // 在一次调用中处理准备和执行。
@@ -887,9 +882,6 @@ impl Vault {
     /// * `hash` - The hash of the file to tag.
     /// * `tags` - A slice of tag strings to add.
     ///
-    /// # Errors
-    /// Returns `TagError` if the file is not found.
-    //
     // // 在事务中为文件添加多个标签。
     // //
     // // # 参数
@@ -1167,7 +1159,7 @@ impl Vault {
     ///
     /// # Returns
     /// - `Ok(())` if the file exists in the database and its stored data is intact.
-    /// - `Err(VerifyError)` if the file is not found in the DB, or if the stored data is corrupt.
+    /// - `Err(UpdateError)` if the file is not found in the DB, or if the stored data is corrupt.
     //
     // // 验证保险库中文件 *加密* 数据的完整性。
     // //
@@ -1180,12 +1172,12 @@ impl Vault {
     // //
     // // # 返回
     // // - 如果文件存在于数据库中且其存储的数据完好无损，返回 `Ok(())`。
-    // // - 如果在数据库中找不到文件，或存储的数据已损坏，返回 `Err(VerifyError)`。
-    pub fn verify_file_integrity(&self, hash: &VaultHash) -> Result<(), VerifyError> {
+    // // - 如果在数据库中找不到文件，或存储的数据已损坏，返回 `Err(UpdateError)`。
+    pub fn verify_file_integrity(&self, hash: &VaultHash) -> Result<(), UpdateError> {
         // 1. First, ensure the file exists in the database. This is a fast check.
         // // 1. 首先，确保文件存在于数据库中。这是一个快速检查。
         match self.find_by_hash(hash)? {
-            QueryResult::NotFound => return Err(VerifyError::NotFoundInDb(hash.to_string())),
+            QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
             QueryResult::Found(_) => {
                 // File exists, proceed to hash verification.
                 // // 文件存在，继续进行哈希验证。
@@ -1194,7 +1186,7 @@ impl Vault {
 
         // 2. Perform the actual hashing of the stored data. This is I/O-bound.
         // // 2. 对存储的数据执行实际的哈希计算。这是 I/O 密集型操作。
-        verify::verify_encrypted_file_hash(self.storage.as_ref(), hash)
+        verify_encrypted_file_hash(self.storage.as_ref(), hash)
     }
 }
 

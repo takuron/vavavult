@@ -1,11 +1,16 @@
-use std::fs;
-use rusqlite::params;
-use crate::common::constants::{META_VAULT_FEATURES};
+use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
 use crate::file::{PathError, VaultPath};
-use crate::vault::{query, QueryResult, Vault};
+use crate::storage::StorageBackend;
 use crate::vault::metadata::{self, MetadataError};
+use crate::vault::{QueryResult, Vault, query};
+use rusqlite::params;
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::io;
+
+const BUFFER_LEN: usize = 8192;
 
 /// Defines errors that can occur during file path or vault configuration update operations.
 //
@@ -48,11 +53,11 @@ pub enum UpdateError {
     #[error("Invalid new filename '{0}': contains path separators.")]
     InvalidFilename(String),
 
-    /// An I/O error occurred while writing the `master.json` config file.
+    /// An I/O error occurred.
     //
-    // // 写入 `master.json` 配置文件时发生 I/O 错误。
-    #[error("Failed to write configuration file: {0}")]
-    ConfigWriteError(#[from] std::io::Error),
+    // // 发生 I/O 错误。
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
 
     /// Failed to serialize the `master.json` configuration.
     //
@@ -77,13 +82,19 @@ pub enum UpdateError {
     // // 元数据操作失败 (例如更新时间戳)。
     #[error("Metadata operation failed: {0}")]
     MetadataError(#[from] MetadataError),
+
+    /// The calculated hash of the encrypted content does not match its identifier hash.
+    //
+    // // 加密内容的计算哈希与其标识符哈希不匹配。
+    #[error("File is corrupt: integrity check failed for hash {0}")]
+    IntegrityMismatch(String),
 }
 
 /// Moves a file within the vault to a new path.
 pub(crate) fn move_file(
     vault: &Vault,
     hash: &VaultHash,
-    target_path: &VaultPath
+    target_path: &VaultPath,
 ) -> Result<(), UpdateError> {
     // 1. Find original entry
     let original_entry = match query::check_by_hash(vault, hash)? {
@@ -94,7 +105,8 @@ pub(crate) fn move_file(
 
     // 2. Resolve final path
     let final_path = if target_path.is_dir() {
-        let original_filename = original_vault_path.file_name()
+        let original_filename = original_vault_path
+            .file_name()
             .ok_or_else(|| UpdateError::VaultPathError(PathError::JoinToFile))?;
         target_path.join(original_filename)?
     } else {
@@ -104,7 +116,9 @@ pub(crate) fn move_file(
     // 3. Check for duplicates
     if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
         return if existing.sha256sum != *hash {
-            Err(UpdateError::DuplicateTargetPath(final_path.as_str().to_string()))
+            Err(UpdateError::DuplicateTargetPath(
+                final_path.as_str().to_string(),
+            ))
         } else {
             Ok(())
         };
@@ -129,7 +143,7 @@ pub(crate) fn move_file(
 pub(crate) fn rename_file_inplace(
     vault: &Vault,
     hash: &VaultHash,
-    new_filename: &str
+    new_filename: &str,
 ) -> Result<(), UpdateError> {
     if new_filename.contains('/') || new_filename.contains('\\') {
         return Err(UpdateError::InvalidFilename(new_filename.to_string()));
@@ -145,7 +159,9 @@ pub(crate) fn rename_file_inplace(
 
     if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
         if existing.sha256sum != *hash {
-            return Err(UpdateError::DuplicateTargetPath(final_path.as_str().to_string()));
+            return Err(UpdateError::DuplicateTargetPath(
+                final_path.as_str().to_string(),
+            ));
         } else {
             return Ok(());
         }
@@ -173,7 +189,10 @@ pub(crate) fn set_name(vault: &mut Vault, new_name: &str) -> Result<(), UpdateEr
 }
 
 /// Enables a vault extension feature.
-pub(crate) fn enable_vault_feature(vault: &mut Vault, feature_name: &str) -> Result<(), UpdateError> {
+pub(crate) fn enable_vault_feature(
+    vault: &mut Vault,
+    feature_name: &str,
+) -> Result<(), UpdateError> {
     if feature_name.contains(' ') || feature_name.trim().is_empty() {
         return Err(UpdateError::InvalidFeatureName(feature_name.to_string()));
     }
@@ -193,14 +212,13 @@ pub(crate) fn enable_vault_feature(vault: &mut Vault, feature_name: &str) -> Res
     features.push(feature_name);
     let new_value = features.join(" ");
 
-    // This calls set_vault_metadata which updates timestamp implicitly?
-    // Wait, metadata::set_vault_metadata does NOT auto-update vault timestamp (unlike file metadata logic).
-    // But `enable_vault_feature` implies a vault update.
-
-    metadata::set_vault_metadata(vault, MetadataEntry {
-        key: META_VAULT_FEATURES.to_string(),
-        value: new_value,
-    })?;
+    metadata::set_vault_metadata(
+        vault,
+        MetadataEntry {
+            key: META_VAULT_FEATURES.to_string(),
+            value: new_value,
+        },
+    )?;
 
     metadata::touch_vault_update_time(vault)?;
     Ok(())
@@ -212,4 +230,35 @@ fn _save_config(vault: &Vault) -> Result<(), UpdateError> {
     let config_path = vault.root_path.join("master.json");
     fs::write(config_path, config_json.as_bytes())?;
     Ok(())
+}
+
+/// Verifies the integrity of an encrypted file by re-calculating its SHA256 hash
+/// and comparing it to the expected hash (which is also its ID).
+/// This is a fast, I/O-bound operation that does not perform decryption.
+//
+// // 通过重新计算加密文件的 SHA256 哈希并与预期哈希（即其 ID）进行比较，来验证其完整性。
+// // 这是一个快速的、受 I/O 限制的操作，不执行解密。
+pub fn verify_encrypted_file_hash(
+    storage: &dyn StorageBackend,
+    hash: &VaultHash,
+) -> Result<(), UpdateError> {
+    let mut reader = storage.reader(hash)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; BUFFER_LEN];
+
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let calculated_hash = VaultHash::new(hasher.finalize().into());
+
+    if calculated_hash == *hash {
+        Ok(())
+    } else {
+        Err(UpdateError::IntegrityMismatch(hash.to_string()))
+    }
 }
