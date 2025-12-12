@@ -44,7 +44,7 @@ use crate::vault::query::{
 use crate::vault::remove::remove_file;
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
 use crate::vault::update::{enable_vault_feature, move_file, rename_file_inplace, set_name};
-use crate::vault::verify::verify;
+pub use crate::vault::verify::verify_encrypted_file_hash;
 pub use add::{AddFileError, AdditionTask};
 pub use config::VaultConfig;
 pub use create::CreateError;
@@ -1156,32 +1156,45 @@ impl Vault {
     // --- Integrity APIs ---
     // // --- 完整性 API ---
 
-    /// Verifies the integrity of a file in the vault.
+    /// Verifies the integrity of a file's *encrypted* data in the vault.
     ///
-    /// This function reads the encrypted file, decrypts it on-the-fly,
-    /// and compares its calculated hash with the original hash stored in the
-    /// metadata. It does *not* write the decrypted content to disk.
+    /// This is a high-performance check that re-hashes the encrypted file from storage
+    /// and compares it to its known hash ID. It does **not** decrypt the file, but it
+    /// proves that the data in storage has not been altered since it was added.
     ///
     /// # Arguments
     /// * `hash` - The `VaultHash` (encrypted content hash) of the file to verify.
     ///
     /// # Returns
-    /// - `Ok(())` if the file is intact and the hashes match.
-    /// - `Err(VerifyError)` if the file is not found, corrupt, or another error occurs.
+    /// - `Ok(())` if the file exists in the database and its stored data is intact.
+    /// - `Err(VerifyError)` if the file is not found in the DB, or if the stored data is corrupt.
     //
-    // // 验证保险库中文件的完整性。
+    // // 验证保险库中文件 *加密* 数据的完整性。
     // //
-    // // 此函数会读取加密文件，进行流式解密，并将其计算出的哈希值
-    // // 与元数据中存储的原始哈希值进行比较。它 **不会** 将解密后的内容写入磁盘。
+    // // 这是一个高性能的检查，它会从存储中重新计算加密文件的哈希值，
+    // // 并将其与已知的哈希 ID 进行比较。它 **不会** 解密文件，但能证明
+    // // 存储中的数据自添加以来未经更改。
     // //
     // // # 参数
     // // * `hash` - 要验证的文件的 `VaultHash` (加密后内容的哈希)。
     // //
     // // # 返回
-    // // - 如果文件完好且哈希匹配，返回 `Ok(())`。
-    // // - 如果文件未找到、已损坏或发生其他错误，返回 `Err(VerifyError)`。
+    // // - 如果文件存在于数据库中且其存储的数据完好无损，返回 `Ok(())`。
+    // // - 如果在数据库中找不到文件，或存储的数据已损坏，返回 `Err(VerifyError)`。
     pub fn verify_file_integrity(&self, hash: &VaultHash) -> Result<(), VerifyError> {
-        verify(self, hash)
+        // 1. First, ensure the file exists in the database. This is a fast check.
+        // // 1. 首先，确保文件存在于数据库中。这是一个快速检查。
+        match self.find_by_hash(hash)? {
+            QueryResult::NotFound => return Err(VerifyError::NotFoundInDb(hash.to_string())),
+            QueryResult::Found(_) => {
+                // File exists, proceed to hash verification.
+                // // 文件存在，继续进行哈希验证。
+            }
+        }
+
+        // 2. Perform the actual hashing of the stored data. This is I/O-bound.
+        // // 2. 对存储的数据执行实际的哈希计算。这是 I/O 密集型操作。
+        verify::verify_encrypted_file_hash(self.storage.as_ref(), hash)
     }
 }
 

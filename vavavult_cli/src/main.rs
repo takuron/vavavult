@@ -1,16 +1,16 @@
 mod cli;
-mod utils;
 mod handlers;
+mod utils;
 
-use std::path::{PathBuf};
-use clap::{Parser};
-use rustyline::DefaultEditor;
-use vavavult::vault::{OpenError, Vault};
-use std::error::Error;
-use std::{env};
-use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
 use crate::cli::{Cli, ReplCommand, TagCommand, TopLevelCommands, VaultCommand};
+use clap::Parser;
+use rustyline::DefaultEditor;
+use std::env;
+use std::error::Error;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use vavavult::vault::{OpenError, Vault};
 
 struct AppState {
     // --- 修改: 将 Vault 包装在 Arc<Mutex<>> 中 ---
@@ -23,7 +23,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let vault_result: Result<Vault, Box<dyn Error>> = match cli.command {
         TopLevelCommands::Create { path } => {
             let parent_path = path.unwrap_or_else(|| env::current_dir().unwrap());
-            println!("Vault will be created in parent directory: {:?}", parent_path);
+            println!(
+                "Vault will be created in parent directory: {:?}",
+                parent_path
+            );
 
             print!("Please enter a name for the new vault: ");
             io::stdout().flush()?;
@@ -45,9 +48,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     match vault_result {
         Ok(vault) => {
-            println!("Vault '{}' is now open. Entering interactive mode.", vault.config.name);
+            println!(
+                "Vault '{}' is now open. Entering interactive mode.",
+                vault.config.name
+            );
             println!("Type 'help' for commands or 'exit' to quit.");
-            let mut app_state = AppState { active_vault: Some(Arc::new(Mutex::new(vault))) };
+            let mut app_state = AppState {
+                active_vault: Some(Arc::new(Mutex::new(vault))),
+            };
             run_repl(&mut app_state)?;
         }
         Err(e) => {
@@ -74,7 +82,11 @@ fn handle_create_command(path: &PathBuf, vault_name: &str) -> Result<Vault, Box<
         None
     };
 
-    Ok(Vault::create_vault_local(path, vault_name, password.as_deref())?)
+    Ok(Vault::create_vault_local(
+        path,
+        vault_name,
+        password.as_deref(),
+    )?)
 }
 
 fn handle_open_command(path: &PathBuf) -> Result<Vault, Box<dyn Error>> {
@@ -111,13 +123,14 @@ fn run_repl(app_state: &mut AppState) -> Result<(), Box<dyn Error>> {
                         if let Err(e) = handle_repl_command(command, app_state) {
                             eprintln!("Error: {}", e);
                         }
-                    },
+                    }
                     Err(e) => {
                         e.print()?;
                     }
                 }
             }
-            Err(_) => { // Handles Ctrl-C or Ctrl-D
+            Err(_) => {
+                // Handles Ctrl-C or Ctrl-D
                 if let Some(vault_arc) = app_state.active_vault.take() {
                     let vault_name = vault_arc.lock().unwrap().config.name.clone();
                     println!("\nClosing vault '{}'. Goodbye!", vault_name);
@@ -129,9 +142,11 @@ fn run_repl(app_state: &mut AppState) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-
 /// REPL 命令处理器
-fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result<(), Box<dyn Error>> {
+fn handle_repl_command(
+    command: ReplCommand,
+    app_state: &mut AppState,
+) -> Result<(), Box<dyn Error>> {
     // 检查 vault 是否存在。如果命令是 Exit 或 Close，它们会使 active_vault 变为 None，
     // 从而自然地终止 run_repl 中的 while let 循环。
     let Some(vault_arc) = app_state.active_vault.as_mut() else {
@@ -139,10 +154,19 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
     };
 
     match command {
-        ReplCommand::Add { local_path, path, name, parallel } => {
+        ReplCommand::Add {
+            local_path,
+            path,
+            name,
+            parallel,
+        } => {
             handlers::add::handle_add(Arc::clone(vault_arc), &local_path, path, name, parallel)?;
         }
-        ReplCommand::List { path, long, recursive } => {
+        ReplCommand::List {
+            path,
+            long,
+            recursive,
+        } => {
             let vault = vault_arc.lock().unwrap();
             handlers::list::handle_list(&vault, path, long, recursive)?;
         }
@@ -154,7 +178,14 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             let vault = vault_arc.lock().unwrap();
             handlers::open::handle_open(&vault, &target)?;
         }
-        ReplCommand::Extract { target, destination, output_name, non_recursive, delete, parallel } => {
+        ReplCommand::Extract {
+            target,
+            destination,
+            output_name,
+            non_recursive,
+            delete,
+            parallel,
+        } => {
             handlers::extract::handle_extract(
                 Arc::clone(vault_arc),
                 target,
@@ -162,20 +193,30 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
                 output_name,
                 non_recursive,
                 delete,
-                parallel
+                parallel,
             )?;
         }
-        ReplCommand::Remove { target, recursive, force } => {
+        ReplCommand::Remove {
+            target,
+            recursive,
+            force,
+        } => {
             let mut vault = vault_arc.lock().unwrap();
             handlers::remove::handle_remove(&mut vault, &target, recursive, force)?;
         }
-        ReplCommand::Move { target, destination } => {
+        ReplCommand::Move {
+            target,
+            destination,
+        } => {
             let mut vault = vault_arc.lock().unwrap();
             handlers::move_cl::handle_move(&mut vault, &target, destination)?;
         }
         ReplCommand::Rename { target, new_name } => {
             let mut vault = vault_arc.lock().unwrap();
             handlers::rename::handle_file_rename(&mut vault, &target, &new_name)?;
+        }
+        ReplCommand::Verify { targets, parallel } => {
+            handlers::verify::handle_verify(Arc::clone(vault_arc), &targets, parallel)?;
         }
         ReplCommand::Vault(vault_command) => {
             match vault_command {
@@ -187,8 +228,7 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
                 VaultCommand::Status => {
                     let vault = vault_arc.lock().unwrap();
                     handlers::vault::handle_status(&vault)?;
-                }
-                // 未来可以处理 VaultCommand 的其他变体
+                } // 未来可以处理 VaultCommand 的其他变体
             }
         }
         // --- 修改 Tag 命令的处理逻辑 ---
@@ -210,7 +250,15 @@ fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result
             }
         }
         ReplCommand::Exit => {
-            let vault_name = app_state.active_vault.take().unwrap().lock().unwrap().config.name.clone();
+            let vault_name = app_state
+                .active_vault
+                .take()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .config
+                .name
+                .clone();
             println!("Closing vault '{}'. Goodbye!", vault_name);
         }
     }

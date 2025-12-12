@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -192,6 +192,19 @@ pub enum ReplCommand {
     //  管理保险库本身
     #[command(subcommand)]
     Vault(VaultCommand),
+    /// Verify the integrity of files in the vault
+    //  校验保险库中文件的完整性
+    Verify {
+        /// One or more vault paths or hashes to verify.
+        //  一个或多个要验证的保险库路径或哈希。
+        #[arg(required = true, num_args = 1..)]
+        targets: Vec<String>,
+
+        /// Use multiple threads to verify files in parallel.
+        //  使用多线程并行校验文件。
+        #[arg(long)]
+        parallel: bool,
+    },
     /// Exit the interactive session
     //  退出交互式会话
     Exit,
@@ -209,7 +222,6 @@ pub enum VaultCommand {
         new_name: String,
     },
     Status,
-
 }
 
 // --- Subcommands for `tag` ---

@@ -1,9 +1,9 @@
+use chrono::{DateTime, Local, ParseError, Utc};
 use std::error::Error;
 use std::io;
 use std::io::Write;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
-use chrono::{DateTime, Local, ParseError, Utc};
 use vavavult::common::hash::VaultHash;
 use vavavult::file::{FileEntry, VaultPath};
 use vavavult::vault::{DirectoryEntry, QueryResult, Vault};
@@ -87,7 +87,7 @@ pub fn print_directory_entry(entry: &DirectoryEntry, colors_enabled: bool) {
 //         match vault.find_by_path(path) {
 //             Ok(QueryResult::Found(entry)) => {
 //                 let hash_prefix = entry.sha256sum.to_string()[..12].to_string();
-// 
+//
 //                 // 处理颜色
 //                 let mut display_path = path.to_string();
 //                 if colors_enabled {
@@ -95,7 +95,7 @@ pub fn print_directory_entry(entry: &DirectoryEntry, colors_enabled: bool) {
 //                         display_path = colorize_string(&display_path, color);
 //                     }
 //                 }
-// 
+//
 //                 println!("{:<14} {}", hash_prefix, display_path);
 //             },
 //             _ => {
@@ -111,7 +111,11 @@ pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
     println!("----------------------------------------");
 
     // 1. 获取颜色 (如果功能开启)
-    let color_tag = if colors_enabled { get_file_color(&entry.tags) } else { None };
+    let color_tag = if colors_enabled {
+        get_file_color(&entry.tags)
+    } else {
+        None
+    };
 
     // 2. 处理文件名显示 (仅对文件名变色)
     let filename = entry.path.file_name().unwrap_or("?");
@@ -133,7 +137,9 @@ pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
     }
 
     // 过滤掉以 '_' 开头的标签
-    let visible_tags: Vec<&str> = entry.tags.iter()
+    let visible_tags: Vec<&str> = entry
+        .tags
+        .iter()
         .filter(|t| !t.starts_with('_'))
         .map(|t| t.as_str())
         .collect();
@@ -143,10 +149,18 @@ pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
     }
 
     // 系统元数据：保留以 _vavavult_ 开头的
-    let system_meta: Vec<_> = entry.metadata.iter().filter(|m| m.key.starts_with("_vavavult_")).collect();
+    let system_meta: Vec<_> = entry
+        .metadata
+        .iter()
+        .filter(|m| m.key.starts_with("_vavavult_"))
+        .collect();
 
     // 用户元数据：过滤掉所有以 '_' 开头的键
-    let user_meta: Vec<_> = entry.metadata.iter().filter(|m| !m.key.starts_with('_')).collect();
+    let user_meta: Vec<_> = entry
+        .metadata
+        .iter()
+        .filter(|m| !m.key.starts_with('_'))
+        .collect();
 
     if !user_meta.is_empty() {
         println!("  Metadata:");
@@ -177,7 +191,9 @@ pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
 // --- 风格 4: "详细 目录" (用于 ls -l) ---
 /// 打印单个目录的详细信息 (风格 4)
 pub fn print_dir_details(path: &VaultPath) {
-    if !path.is_dir() { return; } // 安全检查
+    if !path.is_dir() {
+        return;
+    } // 安全检查
     println!("----------------------------------------");
     println!("  Name:    {}", path.dir_name().unwrap_or("/"));
     println!("  Type:    Folder");
@@ -222,10 +238,7 @@ pub fn identify_target(target: &str) -> Result<Target, String> {
 
 /// 查找文件条目，自动推断目标类型
 /// 用于期望找到单个文件的情况 (如 Open, Rename)
-pub fn find_file_entry(
-    vault: &Vault,
-    target: &str,
-) -> Result<FileEntry, Box<dyn Error>> {
+pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, Box<dyn Error>> {
     match identify_target(target)? {
         Target::Path(p) => {
             // 如果是路径，查询数据库
@@ -233,7 +246,7 @@ pub fn find_file_entry(
                 QueryResult::Found(entry) => Ok(entry),
                 QueryResult::NotFound => Err(format!("File not found at path '{}'.", p).into()),
             }
-        },
+        }
         Target::Hash(h) => {
             // 如果是哈希，查询数据库
             match vault.find_by_hash(&h)? {
@@ -269,12 +282,14 @@ pub fn find_file_entry(
 // }
 
 /// 确定最终的输出路径
-pub fn determine_output_path(entry: &FileEntry, dest_dir: PathBuf, output_name: Option<String>) -> PathBuf {
+pub fn determine_output_path(
+    entry: &FileEntry,
+    dest_dir: PathBuf,
+    output_name: Option<String>,
+) -> PathBuf {
     let final_filename = output_name.unwrap_or_else(|| {
         // [修改] 使用 VaultPath::file_name() 代替 Path::new()
-        entry.path.file_name()
-            .unwrap_or("unnamed_file")
-            .to_string()
+        entry.path.file_name().unwrap_or("unnamed_file").to_string()
     });
     dest_dir.join(final_filename)
 }
@@ -285,7 +300,8 @@ pub fn confirm_action(prompt: &str) -> Result<bool, io::Error> {
     io::stdout().flush()?;
     let mut confirmation = String::new();
     io::stdin().read_line(&mut confirmation)?;
-    Ok(confirmation.trim().eq_ignore_ascii_case("y") || confirmation.trim().eq_ignore_ascii_case("yes"))
+    Ok(confirmation.trim().eq_ignore_ascii_case("y")
+        || confirmation.trim().eq_ignore_ascii_case("yes"))
 }
 
 // 打印 `ListResult` 的辅助函数
@@ -323,8 +339,10 @@ pub fn confirm_action(prompt: &str) -> Result<bool, io::Error> {
 // }
 
 /// 递归地获取一个 vault 目录下的所有文件
-pub(crate) fn get_all_files_recursively(vault: &Vault, dir_path: &str) -> Result<Vec<FileEntry>, Box<dyn Error>> {
-
+pub(crate) fn get_all_files_recursively(
+    vault: &Vault,
+    dir_path: &str,
+) -> Result<Vec<FileEntry>, Box<dyn Error>> {
     // 1. [修改] 将字符串路径转换为 VaultPath
     let dir_vault_path = VaultPath::from(dir_path);
     if !dir_vault_path.is_dir() {
@@ -349,4 +367,11 @@ pub(crate) fn get_all_files_recursively(vault: &Vault, dir_path: &str) -> Result
         }
     }
     Ok(all_files)
+}
+
+/// A simple heuristic to check if a string looks like a hash.
+//
+// // 一个简单的启发式方法，用于检查字符串是否看起来像一个哈希。
+pub(crate) fn is_hash_like(s: &str) -> bool {
+    s.len() == VaultHash::BASE64_LEN && !s.contains('/')
 }
