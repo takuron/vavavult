@@ -18,6 +18,13 @@ pub fn setup_encrypted_vault(dir: &TempDir) -> (PathBuf, Vault) {
     (vault_path, vault)
 }
 
+/// 辅助函数：创建一个具有指定密码的 V2 加密保险库。
+pub fn setup_encrypted_vault_with_password(dir: &TempDir, password: &str) -> (PathBuf, Vault) {
+    let vault_path = dir.path().join("test-vault");
+    let vault = Vault::create_vault_local(&vault_path, "test-vault", Some(password)).unwrap();
+    (vault_path, vault)
+}
+
 /// 辅助函数：在临时目录中创建一个具有特定内容的虚拟文件。
 ///
 /// 这用于模拟用户本地文件系统上的源文件。
@@ -55,7 +62,13 @@ pub fn create_dummy_files(dir: &TempDir, count: usize, prefix: &str) -> Vec<(Pat
 /// 返回 Vault 实例以及这四个文件的哈希值，方便测试断言。
 pub fn setup_vault_with_search_data(
     dir: &TempDir,
-) -> (Vault, vavavult::common::hash::VaultHash, vavavult::common::hash::VaultHash, vavavult::common::hash::VaultHash, vavavult::common::hash::VaultHash) {
+) -> (
+    Vault,
+    vavavult::common::hash::VaultHash,
+    vavavult::common::hash::VaultHash,
+    vavavult::common::hash::VaultHash,
+    vavavult::common::hash::VaultHash,
+) {
     let (_vault_path, mut vault) = setup_encrypted_vault(dir);
 
     // 1. 创建源文件
@@ -65,10 +78,18 @@ pub fn setup_vault_with_search_data(
     let file_d_path = create_dummy_file(dir, "another_file.txt", "content D");
 
     // 2. 添加文件到保险库
-    let hash_a = vault.add_file(&file_a_path, &VaultPath::from("/file_A.txt")).unwrap();
-    let hash_b = vault.add_file(&file_b_path, &VaultPath::from("/docs/file_B.md")).unwrap();
-    let hash_c = vault.add_file(&file_c_path, &VaultPath::from("/docs/deep/file_C.jpg")).unwrap();
-    let hash_d = vault.add_file(&file_d_path, &VaultPath::from("/another_file.txt")).unwrap();
+    let hash_a = vault
+        .add_file(&file_a_path, &VaultPath::from("/file_A.txt"))
+        .unwrap();
+    let hash_b = vault
+        .add_file(&file_b_path, &VaultPath::from("/docs/file_B.md"))
+        .unwrap();
+    let hash_c = vault
+        .add_file(&file_c_path, &VaultPath::from("/docs/deep/file_C.jpg"))
+        .unwrap();
+    let hash_d = vault
+        .add_file(&file_d_path, &VaultPath::from("/another_file.txt"))
+        .unwrap();
 
     // 3. 为文件打标签，构建丰富的搜索场景
     vault.add_tag(&hash_a, "tag1").unwrap();

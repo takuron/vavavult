@@ -55,6 +55,7 @@ pub use rekey::{RekeyError, RekeyTask};
 pub use remove::RemoveError;
 pub use tags::TagError;
 pub use update::UpdateError;
+pub use update::update_password;
 pub use update::verify_encrypted_file_hash;
 
 /// Represents a vault loaded into memory.

@@ -1,14 +1,18 @@
 use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
+use crate::crypto::encrypt::{EncryptError, create_v2_encrypt_check, verify_v2_encrypt_check};
 use crate::file::{PathError, VaultPath};
 use crate::storage::StorageBackend;
+use crate::vault::config::VaultConfig;
 use crate::vault::metadata::{self, MetadataError};
+use crate::vault::open::OpenError;
 use crate::vault::{QueryResult, Vault, query};
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
+use std::path::Path;
 
 const BUFFER_LEN: usize = 8192;
 
@@ -88,6 +92,18 @@ pub enum UpdateError {
     // // 加密内容的计算哈希与其标识符哈希不匹配。
     #[error("File is corrupt: integrity check failed for hash {0}")]
     IntegrityMismatch(String),
+
+    /// An error occurred while trying to open or read the vault configuration.
+    #[error("Failed to open or read vault configuration: {0}")]
+    Open(#[from] OpenError),
+
+    /// The provided old password was incorrect.
+    #[error("The provided old password is not correct.")]
+    InvalidOldPassword,
+
+    /// An error occurred during the creation of the encryption check string.
+    #[error("Encryption check creation error: {0}")]
+    EncryptCheck(#[from] EncryptError),
 }
 
 /// Moves a file within the vault to a new path.
@@ -261,4 +277,77 @@ pub fn verify_encrypted_file_hash(
     } else {
         Err(UpdateError::IntegrityMismatch(hash.to_string()))
     }
+}
+
+/// Updates the master password for an encrypted vault.
+///
+/// This function performs a "shallow" update:
+/// 1. Verifies the old password.
+/// 2. Generates a new encryption verification marker (`encrypt_check`).
+/// 3. Updates `master.json` with the new marker.
+/// 4. Re-keys the encrypted SQLite database with the new password.
+///
+/// It does **not** re-encrypt the individual files stored within the vault.
+///
+/// # Arguments
+/// * `vault_path` - The path to the vault's root directory.
+/// * `old_password` - The current master password.
+/// * `new_password` - The new master password to set.
+///
+/// # Returns
+/// `Ok(())` on success, or an `UpdateError` on failure.
+pub fn update_password(
+    vault_path: &Path,
+    old_password: &str,
+    new_password: &str,
+) -> Result<(), UpdateError> {
+    // 1. Read and parse the existing configuration
+    let config_path = vault_path.join("master.json");
+    if !config_path.exists() {
+        return Err(UpdateError::Open(OpenError::ConfigNotFound));
+    }
+    let config_content = fs::read_to_string(&config_path)?;
+    let mut config: VaultConfig = serde_json::from_str(&config_content)?;
+
+    // 2. Verify the old password
+    if !config.encrypted {
+        // This operation is only meaningful for encrypted vaults.
+        // For now, we can treat it as a no-op success or return an error.
+        // Let's return success as there's no password to update.
+        return Ok(());
+    }
+
+    if !verify_v2_encrypt_check(&config.encrypt_check, old_password) {
+        return Err(UpdateError::InvalidOldPassword);
+    }
+
+    // 3. Connect to the database with the old password
+    let db_path = vault_path.join(&config.database);
+    let conn = Connection::open(db_path)?;
+    conn.pragma_update(None, "key", old_password)?;
+
+    // Verify connection by making a simple query
+    let verification_query = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='table'",
+        [],
+        |row| row.get::<_, i64>(0),
+    );
+    if verification_query.is_err() {
+        // This could happen if the pragma key failed silently.
+        return Err(UpdateError::InvalidOldPassword);
+    }
+
+    // 4. Re-key the database to the new password
+    let rekey_sql = format!("PRAGMA rekey = '{}'", new_password.replace('\'', "''"));
+    conn.execute_batch(&rekey_sql)?;
+
+    // 5. Generate the new encrypt_check and update the config
+    let new_encrypt_check = create_v2_encrypt_check(new_password)?;
+    config.encrypt_check = new_encrypt_check;
+
+    // 6. Write the updated config back to master.json
+    let new_config_content = serde_json::to_string_pretty(&config)?;
+    fs::write(config_path, new_config_content)?;
+
+    Ok(())
 }
