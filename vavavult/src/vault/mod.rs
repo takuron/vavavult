@@ -9,6 +9,7 @@ mod extract;
 mod metadata;
 mod open;
 mod query;
+mod rekey;
 mod remove;
 mod tags;
 mod update;
@@ -50,6 +51,7 @@ pub use metadata::MetadataError;
 pub use open::OpenError;
 pub use query::{DirectoryEntry, ListResult};
 pub use query::{QueryError, QueryResult};
+pub use rekey::{RekeyError, RekeyTask};
 pub use remove::RemoveError;
 pub use tags::TagError;
 pub use update::UpdateError;
@@ -763,6 +765,71 @@ impl Vault {
         _execute_extraction_task_standalone(self.storage.as_ref(), task, destination_path)
     }
 
+    // --- Rekey APIs ---
+
+    /// Stage 1 (Rekey): Prepares a file for re-keying by re-encrypting it to a temporary location.
+    ///
+    /// This is a thread-safe, memory-efficient method that performs the expensive crypto
+    /// work without locking the vault database. It returns a `RekeyTask` ticket that
+    /// contains all information needed for the atomic commit stage.
+    ///
+    /// # Arguments
+    /// * `file_entry` - The full `FileEntry` of the file to be re-keyed.
+    ///
+    /// # Returns
+    /// A `RekeyTask` object ready to be passed to `execute_rekey_tasks`.
+    ///
+    /// # Errors
+    /// Returns `RekeyError` if I/O or encryption fails.
+    //
+    // // 阶段 1 (Rekey): 准备一个文件用于轮换密钥，将其重加密到临时位置。
+    // //
+    // // 这是一个线程安全的、内存高效的方法，它执行耗时的加密工作而无需锁定保险库数据库。
+    // // 它返回一个 `RekeyTask` 票据，其中包含原子化提交阶段所需的所有信息。
+    // //
+    // // # Arguments
+    // // * `file_entry` - 需要轮换密钥的文件的完整 `FileEntry`。
+    // //
+    // // # Returns
+    // // 一个 `RekeyTask` 对象，准备好传递给 `execute_rekey_tasks`。
+    // //
+    // // # Errors
+    // // 如果 I/O 或加密失败，则返回 `RekeyError`。
+    pub fn prepare_rekey_task(&self, file_entry: &FileEntry) -> Result<RekeyTask, RekeyError> {
+        rekey::prepare_rekey_task(self.storage.as_ref(), file_entry)
+    }
+
+    /// Stage 2 (Rekey): Atomically commits a batch of re-keyed files to the vault.
+    ///
+    /// This method requires exclusive `&mut self` access to perform a transaction.
+    /// It updates the database records, moves the re-encrypted files from temporary
+    /// storage to their final destination, and deletes the old files.
+    ///
+    /// # Arguments
+    /// * `tasks` - A `Vec` of `RekeyTask` objects from stage 1.
+    ///
+    /// # Errors
+    /// Returns `RekeyError` if the database or filesystem commit fails.
+    //
+    // // 阶段 2 (Rekey): 原子化地提交一批已轮换密钥的文件到保险库。
+    // //
+    // // 此方法需要对 `&mut self` 的独占访问权来执行事务。
+    // // 它会更新数据库记录，将被重加密的文件从临时存储移动到最终位置，并删除旧文件。
+    // //
+    // // # Arguments
+    // // * `tasks` - 一个包含来自阶段 1 的 `RekeyTask` 对象的 `Vec`。
+    // //
+    // // # Errors
+    // // 如果数据库或文件系统提交失败，则返回 `RekeyError`。
+    pub fn execute_rekey_tasks(&mut self, tasks: Vec<RekeyTask>) -> Result<(), RekeyError> {
+        if tasks.is_empty() {
+            return Ok(());
+        }
+        rekey::execute_rekey_tasks(self, tasks)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
     // --- Update APIs ---
     // // --- 更新 API ---
 
@@ -1263,4 +1330,41 @@ pub fn execute_extraction_task_standalone(
     destination_path: &Path,
 ) -> Result<(), ExtractError> {
     _execute_extraction_task_standalone(storage, task, destination_path)
+}
+
+/// Prepares a file for re-keying (Standalone).
+///
+/// This is a thread-safe, memory-efficient method that performs the expensive crypto
+/// work without locking the vault database. It returns a `RekeyTask` ticket that
+/// contains all information needed for the atomic commit stage.
+///
+/// # Arguments
+/// * `storage` - The storage backend to use.
+/// * `file_entry` - The full `FileEntry` of the file to be re-keyed.
+///
+/// # Returns
+/// A `RekeyTask` object ready to be passed to `execute_rekey_tasks`.
+///
+/// # Errors
+/// Returns `RekeyError` if I/O or encryption fails.
+//
+// // 准备一个文件用于轮换密钥 (独立函数)。
+// //
+// // 这是一个线程安全的、内存高效的方法，它执行耗时的加密工作而无需锁定保险库数据库。
+// // 它返回一个 `RekeyTask` 票据，其中包含原子化提交阶段所需的所有信息。
+// //
+// // # Arguments
+// // * `storage` - 要使用的存储后端。
+// // * `file_entry` - 需要轮换密钥的文件的完整 `FileEntry`。
+// //
+// // # Returns
+// // 一个 `RekeyTask` 对象，准备好传递给 `execute_rekey_tasks`。
+// //
+// // # Errors
+// // 如果 I/O 或加密失败，则返回 `RekeyError`。
+pub fn prepare_rekey_task_standalone(
+    storage: &dyn StorageBackend,
+    file_entry: &FileEntry,
+) -> Result<RekeyTask, RekeyError> {
+    rekey::prepare_rekey_task(storage, file_entry)
 }

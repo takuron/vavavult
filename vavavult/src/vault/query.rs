@@ -1,10 +1,10 @@
-use std::collections::HashSet;
-use rusqlite::{params, OptionalExtension, Connection, params_from_iter};
 use crate::common::constants::META_VAULT_FEATURES;
+use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
 use crate::file::{FileEntry, PathError, VaultPath};
 use crate::vault::Vault;
-use crate::common::hash::{VaultHash, HashParseError};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use std::collections::HashSet;
 
 /// Represents the result of a query that seeks a single `FileEntry`.
 //
@@ -54,7 +54,9 @@ pub enum QueryError {
     //
     // // 数据不一致：在数据库中找到了记录，但 `data/` 目录中缺少
     // // 相应的加密文件。
-    #[error("Data inconsistency: Record for SHA256 '{0}' found in DB, but file is missing from data store.")]
+    #[error(
+        "Data inconsistency: Record for SHA256 '{0}' found in DB, but file is missing from data store."
+    )]
     FileMissing(String),
 
     /// Failed to deserialize data (e.g., metadata).
@@ -83,29 +85,32 @@ pub enum QueryError {
 }
 
 /// 一个内部辅助函数，用于从数据库中获取一个 V2 文件的完整信息。
-fn fetch_full_entry(
+pub(crate) fn fetch_full_entry(
     conn: &Connection,
     sha256sum: &VaultHash,          // [修改]
-    path: VaultPath,               // 文件路径
+    path: VaultPath,                // 文件路径
     original_sha256sum: &VaultHash, // [修改]
-    encrypt_password: &str    // 文件密码
+    encrypt_password: &str,         // 文件密码
 ) -> Result<FileEntry, QueryError> {
-
     // 查询标签 (外键现在是加密后哈希)
     // `params![sha256sum]` 将自动工作 (ToSql)
     let mut tags_stmt = conn.prepare("SELECT tag FROM tags WHERE file_sha256sum = ?1")?;
-    let tags = tags_stmt.query_map(params![sha256sum], |row| row.get(0))?
+    let tags = tags_stmt
+        .query_map(params![sha256sum], |row| row.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
 
     // 查询元数据 (外键现在是加密后哈希)
     // `params![sha256sum]` 将自动工作 (ToSql)
-    let mut meta_stmt = conn.prepare("SELECT meta_key, meta_value FROM metadata WHERE file_sha256sum = ?1")?;
-    let metadata = meta_stmt.query_map(params![sha256sum], |row| {
-        Ok(MetadataEntry {
-            key: row.get(0)?,
-            value: row.get(1)?,
-        })
-    })?.collect::<Result<Vec<MetadataEntry>, _>>()?;
+    let mut meta_stmt =
+        conn.prepare("SELECT meta_key, meta_value FROM metadata WHERE file_sha256sum = ?1")?;
+    let metadata = meta_stmt
+        .query_map(params![sha256sum], |row| {
+            Ok(MetadataEntry {
+                key: row.get(0)?,
+                value: row.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<MetadataEntry>, _>>()?;
 
     // 构建 V2 FileEntry
     Ok(FileEntry {
@@ -119,31 +124,39 @@ fn fetch_full_entry(
     })
 }
 
-
 /// 根据文件路径 (`&str`) 在保险库中查找文件。
 pub(crate) fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResult, QueryError> {
     // VaultPath 已经是规范化的
     let normalized_path = path.as_str();
 
     let mut stmt = vault.database_connection.prepare(
-        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE path = ?1"
+        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE path = ?1",
     )?;
 
-    if let Some(res) = stmt.query_row(params![normalized_path], |row| {
-        Ok((
-            row.get::<_, VaultHash>(0)?,
-            row.get::<_, VaultPath>(1)?,
-            row.get::<_, VaultHash>(2)?,
-            row.get::<_, String>(3)?,
-        ))
-    }).optional()? {
+    if let Some(res) = stmt
+        .query_row(params![normalized_path], |row| {
+            Ok((
+                row.get::<_, VaultHash>(0)?,
+                row.get::<_, VaultPath>(1)?,
+                row.get::<_, VaultHash>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .optional()?
+    {
         let (sha256sum, path, original_sha256sum, encrypt_password) = res;
 
         if !vault.storage.exists(&sha256sum)? {
             return Err(QueryError::FileMissing(sha256sum.to_string()));
         }
 
-        let entry = fetch_full_entry(&vault.database_connection, &sha256sum, path, &original_sha256sum, &encrypt_password)?;
+        let entry = fetch_full_entry(
+            &vault.database_connection,
+            &sha256sum,
+            path,
+            &original_sha256sum,
+            &encrypt_password,
+        )?;
         Ok(QueryResult::Found(entry))
     } else {
         Ok(QueryResult::NotFound)
@@ -151,21 +164,25 @@ pub(crate) fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResu
 }
 
 /// 根据文件的加密后 SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。
-pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, QueryError> { // [修改]
+pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, QueryError> {
+    // [修改]
     // 查询 V2 files 表
     let mut stmt = vault.database_connection.prepare(
         "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE sha256sum = ?1"
     )?;
 
     // 参数现在是加密后哈希 (ToSql)
-    if let Some(res) = stmt.query_row(params![hash], |row| {
-        Ok((
-            row.get::<_, VaultHash>(0)?,
-            row.get::<_, VaultPath>(1)?,
-            row.get::<_, VaultHash>(2)?,
-            row.get::<_, String>(3)?,
-        ))
-    }).optional()? {
+    if let Some(res) = stmt
+        .query_row(params![hash], |row| {
+            Ok((
+                row.get::<_, VaultHash>(0)?,
+                row.get::<_, VaultPath>(1)?,
+                row.get::<_, VaultHash>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .optional()?
+    {
         // 解构 V2 字段
         let (ret_sha256sum, path, original_sha256sum, encrypt_password) = res;
         // 确认返回的哈希与查询的哈希一致 (虽然理论上应该总是如此)
@@ -177,7 +194,13 @@ pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResu
         }
 
         // 使用 V2 字段调用 fetch_full_entry
-        let entry = fetch_full_entry(&vault.database_connection, hash,path, &original_sha256sum, &encrypt_password)?;
+        let entry = fetch_full_entry(
+            &vault.database_connection,
+            hash,
+            path,
+            &original_sha256sum,
+            &encrypt_password,
+        )?;
         Ok(QueryResult::Found(entry))
     } else {
         Ok(QueryResult::NotFound)
@@ -188,7 +211,10 @@ pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResu
 ///
 /// 这比循环调用 `check_by_hash` 更高效，因为它减少了对 `files` 主表的查询次数。
 /// 返回的列表顺序不保证与输入的哈希顺序一致。未找到的哈希将被忽略。
-pub(crate) fn find_by_hashes(vault: &Vault, hashes: &[VaultHash]) -> Result<Vec<FileEntry>, QueryError> {
+pub(crate) fn find_by_hashes(
+    vault: &Vault,
+    hashes: &[VaultHash],
+) -> Result<Vec<FileEntry>, QueryError> {
     if hashes.is_empty() {
         return Ok(Vec::new());
     }
@@ -222,7 +248,10 @@ pub(crate) fn find_by_hashes(vault: &Vault, hashes: &[VaultHash]) -> Result<Vec<
 ///  批量根据路径查找文件。
 ///
 /// 返回的列表顺序不保证与输入的路径顺序一致。未找到的路径将被忽略。
-pub(crate) fn find_by_paths(vault: &Vault, paths: &[VaultPath]) -> Result<Vec<FileEntry>, QueryError> {
+pub(crate) fn find_by_paths(
+    vault: &Vault,
+    paths: &[VaultPath],
+) -> Result<Vec<FileEntry>, QueryError> {
     if paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -252,20 +281,27 @@ pub(crate) fn find_by_paths(vault: &Vault, paths: &[VaultPath]) -> Result<Vec<Fi
 }
 
 /// 根据文件的 *原始* SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。
-pub(crate) fn check_by_original_hash(vault: &Vault, original_hash: &VaultHash) -> Result<QueryResult, QueryError> { // [修改]
+pub(crate) fn check_by_original_hash(
+    vault: &Vault,
+    original_hash: &VaultHash,
+) -> Result<QueryResult, QueryError> {
+    // [修改]
     let mut stmt = vault.database_connection.prepare(
         "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE original_sha256sum = ?1"
     )?;
 
     // [修改] 参数现在是 *原始* 哈希 (ToSql)
-    if let Some(res) = stmt.query_row(params![original_hash], |row| {
-        Ok((
-            row.get::<_, VaultHash>(0)?, // [修改]
-            row.get::<_, VaultPath>(1)?,
-            row.get::<_, VaultHash>(2)?, // [修改]
-            row.get::<_, String>(3)?,
-        ))
-    }).optional()? {
+    if let Some(res) = stmt
+        .query_row(params![original_hash], |row| {
+            Ok((
+                row.get::<_, VaultHash>(0)?, // [修改]
+                row.get::<_, VaultPath>(1)?,
+                row.get::<_, VaultHash>(2)?, // [修改]
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .optional()?
+    {
         // 解构 V2 字段
         let (sha256sum, path, ret_original_sha256sum, encrypt_password) = res;
         // 确认返回的哈希与查询的哈希一致
@@ -276,7 +312,13 @@ pub(crate) fn check_by_original_hash(vault: &Vault, original_hash: &VaultHash) -
         }
 
         // 使用 V2 字段调用 fetch_full_entry
-        let entry = fetch_full_entry(&vault.database_connection, &sha256sum, path, original_hash, &encrypt_password)?;
+        let entry = fetch_full_entry(
+            &vault.database_connection,
+            &sha256sum,
+            path,
+            original_hash,
+            &encrypt_password,
+        )?;
         Ok(QueryResult::Found(entry))
     } else {
         Ok(QueryResult::NotFound)
@@ -334,9 +376,9 @@ fn process_rows_to_entries(
 /// 列出保险库中的所有文件 (返回 FileEntry)。
 pub(crate) fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
     // [修改] 查询 V2 files 表
-    let mut stmt = vault.database_connection.prepare(
-        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files",
-    )?;
+    let mut stmt = vault
+        .database_connection
+        .prepare("SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files")?;
 
     // [修改] 映射 V2 字段
     let rows = stmt
@@ -403,7 +445,10 @@ pub(crate) fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError
 // }
 
 /// 列出给定目录路径下的条目（文件或子目录），如果是文件则返回详细信息。
-pub(crate) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
+pub(crate) fn list_by_path(
+    vault: &Vault,
+    path: &VaultPath,
+) -> Result<Vec<DirectoryEntry>, QueryError> {
     // 1. 验证输入是否为目录
     if !path.is_dir() {
         return Err(QueryError::NotADirectory(path.as_str().to_string()));
@@ -457,7 +502,7 @@ pub(crate) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<Direct
                 &sha256sum,
                 file_vault_path,
                 &original_sha256sum,
-                &encrypt_password
+                &encrypt_password,
             )?;
 
             entries.push(DirectoryEntry::File(file_entry));
@@ -466,8 +511,14 @@ pub(crate) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<Direct
 
     // 3. 排序 (按路径字符串排序)
     entries.sort_by(|a, b| {
-        let path_a = match a { DirectoryEntry::Directory(p) => p.as_str(), DirectoryEntry::File(f) => f.path.as_str() };
-        let path_b = match b { DirectoryEntry::Directory(p) => p.as_str(), DirectoryEntry::File(f) => f.path.as_str() };
+        let path_a = match a {
+            DirectoryEntry::Directory(p) => p.as_str(),
+            DirectoryEntry::File(f) => f.path.as_str(),
+        };
+        let path_b = match b {
+            DirectoryEntry::Directory(p) => p.as_str(),
+            DirectoryEntry::File(f) => f.path.as_str(),
+        };
         path_a.cmp(path_b)
     });
 
@@ -475,16 +526,19 @@ pub(crate) fn list_by_path(vault: &Vault, path: &VaultPath) -> Result<Vec<Direct
 }
 
 /// 递归列出一个目录下的所有文件 (返回哈希)。
-pub(crate) fn list_all_recursive(vault: &Vault, path: &VaultPath) -> Result<Vec<VaultHash>, QueryError> {
+pub(crate) fn list_all_recursive(
+    vault: &Vault,
+    path: &VaultPath,
+) -> Result<Vec<VaultHash>, QueryError> {
     // 1. 验证输入是否为目录
     if !path.is_dir() {
         return Err(QueryError::NotADirectory(path.as_str().to_string()));
     }
 
     // 2. [修正] 查询 sha256sum 字段
-    let mut stmt = vault.database_connection.prepare(
-        "SELECT sha256sum FROM files WHERE path LIKE ?1",
-    )?;
+    let mut stmt = vault
+        .database_connection
+        .prepare("SELECT sha256sum FROM files WHERE path LIKE ?1")?;
     let like_pattern = format!("{}%", path.as_str());
 
     // 3. [修正] 映射结果为 VaultHash
@@ -550,48 +604,50 @@ pub(crate) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEn
 }
 /// 高效地获取保险库中文件的总数。
 pub(crate) fn get_total_file_count(vault: &Vault) -> Result<i64, QueryError> {
-    let count = vault.database_connection.query_row(
-        "SELECT COUNT(*) FROM files",
-        [],
-        |row| row.get(0),
-    )?;
+    let count = vault
+        .database_connection
+        .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
     Ok(count)
 }
 
 // 获取所有已启用的扩展功能列表。
 pub(crate) fn get_enabled_vault_features(vault: &Vault) -> Result<Vec<String>, QueryError> {
-    let mut stmt = vault.database_connection.prepare(
-        "SELECT meta_value FROM vault_metadata WHERE meta_key = ?1"
-    )?;
+    let mut stmt = vault
+        .database_connection
+        .prepare("SELECT meta_value FROM vault_metadata WHERE meta_key = ?1")?;
 
-    let result: Option<String> = stmt.query_row(params![META_VAULT_FEATURES], |row| {
-        row.get(0)
-    }).optional()?;
+    let result: Option<String> = stmt
+        .query_row(params![META_VAULT_FEATURES], |row| row.get(0))
+        .optional()?;
 
     match result {
-        Some(features_str) => {
-            Ok(features_str.split_whitespace().map(|s| s.to_string()).collect())
-        },
+        Some(features_str) => Ok(features_str
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect()),
         None => Ok(Vec::new()),
     }
 }
 
 /// 检查指定的扩展功能是否已启用。
-pub(crate) fn is_vault_feature_enabled(vault: &Vault, feature_name: &str) -> Result<bool, QueryError> {
+pub(crate) fn is_vault_feature_enabled(
+    vault: &Vault,
+    feature_name: &str,
+) -> Result<bool, QueryError> {
     // 直接查询数据库
-    let mut stmt = vault.database_connection.prepare(
-        "SELECT meta_value FROM vault_metadata WHERE meta_key = ?1"
-    )?;
+    let mut stmt = vault
+        .database_connection
+        .prepare("SELECT meta_value FROM vault_metadata WHERE meta_key = ?1")?;
 
-    let result: Option<String> = stmt.query_row(params![META_VAULT_FEATURES], |row| {
-        row.get(0)
-    }).optional()?;
+    let result: Option<String> = stmt
+        .query_row(params![META_VAULT_FEATURES], |row| row.get(0))
+        .optional()?;
 
     match result {
         Some(features_str) => {
             // 分割并检查
             Ok(features_str.split_whitespace().any(|f| f == feature_name))
-        },
+        }
         None => Ok(false), // 如果元数据不存在，说明没有任何功能被启用
     }
 }
