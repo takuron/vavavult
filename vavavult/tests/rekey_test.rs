@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 use tempfile::tempdir;
 use vavavult::file::VaultPath;
-use vavavult::vault::{OpenError, QueryResult, UpdateError, Vault, update_password};
+use vavavult::vault::{OpenError, QueryResult, UpdateError, Vault};
 
 // 引入 common 模块，它提供了 setup_vault, setup_encrypted_vault 等辅助函数
 mod common;
@@ -84,7 +84,7 @@ fn update_password_e2e() {
     drop(vault);
 
     // 2. Act: 更新密码
-    let result = update_password(&vault_path, "password123", "new_password_456");
+    let result = Vault::update_password(&vault_path, "password123", "new_password_456");
     if let Err(e) = &result {
         panic!("update_password failed with: {:?}", e);
     }
@@ -121,7 +121,7 @@ fn update_password_e2e() {
 
     // e. 使用错误的旧密码更新应该失败
     let update_with_wrong_pass =
-        update_password(&vault_path, "wrong_old_password", "another_password");
+        Vault::update_password(&vault_path, "wrong_old_password", "another_password");
     assert!(matches!(
         update_with_wrong_pass,
         Err(UpdateError::InvalidOldPassword)

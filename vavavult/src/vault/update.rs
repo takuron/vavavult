@@ -281,13 +281,9 @@ pub fn verify_encrypted_file_hash(
 
 /// Updates the master password for an encrypted vault.
 ///
-/// This function performs a "shallow" update:
-/// 1. Verifies the old password.
-/// 2. Generates a new encryption verification marker (`encrypt_check`).
-/// 3. Updates `master.json` with the new marker.
-/// 4. Re-keys the encrypted SQLite database with the new password.
-///
-/// It does **not** re-encrypt the individual files stored within the vault.
+/// This function performs a "shallow" update by re-keying the database and updating the
+/// configuration file with a new password verification marker. It does **not** re-encrypt
+/// the individual files stored within the vault. It is designed to operate on a closed vault.
 ///
 /// # Arguments
 /// * `vault_path` - The path to the vault's root directory.
@@ -296,7 +292,20 @@ pub fn verify_encrypted_file_hash(
 ///
 /// # Returns
 /// `Ok(())` on success, or an `UpdateError` on failure.
-pub fn update_password(
+//
+// // 更新加密保险库的主密码。
+// //
+// // 此函数通过重新加密数据库密钥并使用新的密码验证标记更新配置文件来执行“浅层”更新。
+// // 它 **不会** 重新加密保险库中存储的单个文件。该函数设计用于对关闭的保险库进行操作。
+// //
+// // # 参数
+// // * `vault_path` - 保险库根目录的路径。
+// // * `old_password` - 当前的主密码。
+// // * `new_password` - 要设置的新主密码。
+// //
+// // # 返回
+// // 成功时返回 `Ok(())`，失败时返回 `UpdateError`。
+pub(crate) fn update_password(
     vault_path: &Path,
     old_password: &str,
     new_password: &str,

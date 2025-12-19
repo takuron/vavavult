@@ -20,13 +20,13 @@ pub use crate::file::FileEntry;
 use crate::file::VaultPath;
 use crate::storage::StorageBackend;
 use crate::storage::local::LocalStorage;
+
+//- Internal implementation imports
 use crate::vault::add::{
     add_file, execute_addition_tasks,
     prepare_addition_task_standalone as _prepare_addition_task_standalone,
 };
 use crate::vault::create::create_vault;
-pub use crate::vault::extract::ExtractError;
-pub use crate::vault::extract::ExtractionTask;
 use crate::vault::extract::{
     execute_extraction_task_standalone as _execute_extraction_task_standalone, extract_file,
     prepare_extraction_task,
@@ -43,19 +43,23 @@ use crate::vault::query::{
 };
 use crate::vault::remove::remove_file;
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
-use crate::vault::update::{enable_vault_feature, move_file, rename_file_inplace, set_name};
+use crate::vault::update::{
+    enable_vault_feature, move_file, rename_file_inplace, set_name,
+    update_password as _update_password,
+};
+
+//- Public API type re-exports
 pub use add::{AddFileError, AdditionTask};
 pub use config::VaultConfig;
 pub use create::CreateError;
+pub use extract::{ExtractError, ExtractionTask};
 pub use metadata::MetadataError;
 pub use open::OpenError;
-pub use query::{DirectoryEntry, ListResult};
-pub use query::{QueryError, QueryResult};
+pub use query::{DirectoryEntry, ListResult, QueryError, QueryResult};
 pub use rekey::{RekeyError, RekeyTask};
 pub use remove::RemoveError;
 pub use tags::TagError;
 pub use update::UpdateError;
-pub use update::update_password;
 pub use update::verify_encrypted_file_hash;
 
 /// Represents a vault loaded into memory.
@@ -202,6 +206,44 @@ impl Vault {
     pub fn open_vault_local(root_path: &Path, password: Option<&str>) -> Result<Vault, OpenError> {
         let backend = Arc::new(LocalStorage::new(root_path));
         open_vault(root_path, password, backend)
+    }
+
+    /// Updates the master password for an encrypted vault.
+    ///
+    /// This is a static method that operates on a closed vault. It performs a "shallow"
+    /// update by re-keying the database and updating the configuration file with a new
+    /// password verification marker.
+    ///
+    /// It does **not** re-encrypt the individual files stored within the vault.
+    ///
+    /// # Arguments
+    /// * `vault_path` - The path to the vault's root directory.
+    /// * `old_password` - The current master password.
+    /// * `new_password` - The new master password to set.
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or an `UpdateError` on failure.
+    //
+    // // 更新加密保险库的主密码。
+    // //
+    // // 这是一个对关闭的保险库进行操作的静态方法。它通过重新加密数据库密钥并使用
+    // // 新的密码验证标记更新配置文件来执行“浅层”更新。
+    // //
+    // // 它 **不会** 重新加密保险库中存储的单个文件。
+    // //
+    // // # 参数
+    // // * `vault_path` - 保险库根目录的路径。
+    // // * `old_password` - 当前的主密码。
+    // // * `new_password` - 要设置的新主密码。
+    // //
+    // // # 返回
+    // // 成功时返回 `Ok(())`，失败时返回 `UpdateError`。
+    pub fn update_password(
+        vault_path: &Path,
+        old_password: &str,
+        new_password: &str,
+    ) -> Result<(), UpdateError> {
+        _update_password(vault_path, old_password, new_password)
     }
 
     // --- Find APIs ---
