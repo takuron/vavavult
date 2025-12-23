@@ -4,8 +4,8 @@ use thiserror::Error;
 use vavavult::{
     file::path::PathError,
     vault::{
-        AddFileError, CreateError, ExtractError, OpenError,
-        QueryError, RekeyError, RemoveError, TagError,
+        AddFileError, CreateError, ExtractError, OpenError, QueryError, RekeyError, RemoveError,
+        TagError,
     },
 };
 
@@ -17,11 +17,20 @@ pub enum CliError {
     #[error("A vault is already open at: {0}")]
     VaultAlreadyOpen(String),
 
+    #[error("Invalid command: {0}")]
+    InvalidCommand(String),
+
     #[error("Invalid target path: {0}")]
     InvalidTarget(String),
 
     #[error("The specified entry was not found in the vault: {0}")]
     EntryNotFound(String),
+
+    #[error("Invalid name provided: {0}")]
+    InvalidName(String),
+
+    #[error("Invalid hash format: {0}")]
+    InvalidHashFormat(String),
 
     #[error("The specified tag was not found: {0}")]
     TagNotFound(String),

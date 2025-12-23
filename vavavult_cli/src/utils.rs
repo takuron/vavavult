@@ -1,5 +1,5 @@
+use crate::errors::CliError;
 use chrono::{DateTime, Local, ParseError, Utc};
-use std::error::Error;
 use std::io;
 use std::io::Write;
 use std::path::PathBuf;
@@ -219,39 +219,46 @@ pub enum Target {
 /// 1. 以 '/' 开头 -> 路径 (Path)
 /// 2. 长度为 43 -> 哈希 (Hash)
 /// 3. 其他 -> 错误
-pub fn identify_target(target: &str) -> Result<Target, String> {
+pub fn identify_target(target: &str) -> Result<Target, CliError> {
     if target.starts_with('/') {
         Ok(Target::Path(VaultPath::from(target)))
     } else if target.len() == VaultHash::BASE64_LEN {
         // 尝试解析哈希以验证字符合法性
         match VaultHash::from_str(target) {
             Ok(h) => Ok(Target::Hash(h)),
-            Err(e) => Err(format!("Invalid hash format: {}", e)),
+            Err(e) => Err(CliError::InvalidHashFormat(e.to_string())),
         }
     } else {
-        Err(format!(
-            "Invalid target '{}'. Must start with '/' (absolute path) or be 43 characters long (hash).",
-            target
-        ))
+        Err(CliError::InvalidTarget(format!(
+            "Target '{}' is not a valid format. It must start with '/' for an absolute path or be a {} character hash.",
+            target,
+            VaultHash::BASE64_LEN
+        )))
     }
 }
 
 /// 查找文件条目，自动推断目标类型
 /// 用于期望找到单个文件的情况 (如 Open, Rename)
-pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, Box<dyn Error>> {
+pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, CliError> {
     match identify_target(target)? {
         Target::Path(p) => {
             // 如果是路径，查询数据库
             match vault.find_by_path(&p)? {
                 QueryResult::Found(entry) => Ok(entry),
-                QueryResult::NotFound => Err(format!("File not found at path '{}'.", p).into()),
+                QueryResult::NotFound => Err(CliError::EntryNotFound(format!(
+                    "File not found at path '{}'.",
+                    p
+                ))),
             }
         }
         Target::Hash(h) => {
             // 如果是哈希，查询数据库
             match vault.find_by_hash(&h)? {
                 QueryResult::Found(entry) => Ok(entry),
-                QueryResult::NotFound => Err(format!("File not found with hash '{}'.", h).into()),
+                QueryResult::NotFound => Err(CliError::EntryNotFound(format!(
+                    "File not found with hash '{}'.",
+                    h
+                ))),
             }
         }
     }
@@ -342,7 +349,7 @@ pub fn confirm_action(prompt: &str) -> Result<bool, io::Error> {
 pub(crate) fn get_all_files_recursively(
     vault: &Vault,
     dir_path: &str,
-) -> Result<Vec<FileEntry>, Box<dyn Error>> {
+) -> Result<Vec<FileEntry>, CliError> {
     // 1. [修改] 将字符串路径转换为 VaultPath
     let dir_vault_path = VaultPath::from(dir_path);
     if !dir_vault_path.is_dir() {
