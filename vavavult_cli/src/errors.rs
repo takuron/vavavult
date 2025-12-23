@@ -1,0 +1,79 @@
+use std::io;
+use std::path::PathBuf;
+use thiserror::Error;
+use vavavult::{
+    file::path::PathError,
+    vault::{
+        add::AddFileError, create::CreateError, extract::ExtractError, open::OpenError,
+        query::QueryError, rekey::RekeyError, remove::RemoveError, tags::TagError,
+    },
+};
+
+#[derive(Debug, Error)]
+pub enum CliError {
+    #[error("Vault is not open. Please open or create a vault first.")]
+    VaultNotOpen,
+
+    #[error("A vault is already open at: {0}")]
+    VaultAlreadyOpen(String),
+
+    #[error("Invalid target path: {0}")]
+    InvalidTarget(String),
+
+    #[error("The specified entry was not found in the vault: {0}")]
+    EntryNotFound(String),
+
+    #[error("The specified tag was not found: {0}")]
+    TagNotFound(String),
+
+    #[error("Action was not confirmed by the user.")]
+    ConfirmationFailed,
+
+    #[error("Passwords do not match.")]
+    PasswordMismatch,
+
+    #[error("I/O error")]
+    Io(#[from] io::Error),
+
+    #[error("Invalid path")]
+    Path(#[from] PathError),
+
+    #[error("Failed to create vault")]
+    Create(#[from] CreateError),
+
+    #[error("Failed to open vault")]
+    Open(#[from] OpenError),
+
+    #[error("Failed to add file to vault")]
+    AddFile(#[from] AddFileError),
+
+    #[error("Failed to extract file from vault")]
+    Extract(#[from] ExtractError),
+
+    #[error("Failed to query vault")]
+    Query(#[from] QueryError),
+
+    #[error("Failed to remove from vault")]
+    Remove(#[from] RemoveError),
+
+    #[error("Failed to rekey vault")]
+    Rekey(#[from] RekeyError),
+
+    #[error("Failed to process tag")]
+    Tag(#[from] TagError),
+
+    #[error("Invalid command in REPL: {0}")]
+    InvalidReplCommand(String),
+
+    #[error("Could not find home directory")]
+    NoHomeDir,
+
+    #[error("The provided path is not a file: {0}")]
+    NotAFile(PathBuf),
+
+    #[error("The provided path is not a directory: {0}")]
+    NotADirectory(PathBuf),
+
+    #[error("An unexpected error occurred: {0}")]
+    Unexpected(String),
+}

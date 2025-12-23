@@ -1,4 +1,5 @@
 mod cli;
+pub mod errors;
 mod handlers;
 mod repl;
 mod utils;
