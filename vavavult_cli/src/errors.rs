@@ -4,8 +4,8 @@ use thiserror::Error;
 use vavavult::{
     file::path::PathError,
     vault::{
-        add::AddFileError, create::CreateError, extract::ExtractError, open::OpenError,
-        query::QueryError, rekey::RekeyError, remove::RemoveError, tags::TagError,
+        AddFileError, CreateError, ExtractError, OpenError,
+        QueryError, RekeyError, RemoveError, TagError,
     },
 };
 
