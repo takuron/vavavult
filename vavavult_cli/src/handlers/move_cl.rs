@@ -1,14 +1,10 @@
+use crate::errors::CliError;
 use crate::utils::{Target, get_all_files_recursively, identify_target};
-use std::error::Error;
 use vavavult::file::VaultPath;
 use vavavult::vault::{QueryResult, Vault};
 
 /// 处理 'mv' (Move) 命令
-pub fn handle_move(
-    vault: &mut Vault,
-    target: &str,
-    destination: String,
-) -> Result<(), Box<dyn Error>> {
+pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Result<(), CliError> {
     let source = identify_target(target)?;
     let dest_path = VaultPath::from(destination.as_str());
 
@@ -18,7 +14,10 @@ pub fn handle_move(
             let file_entry = match vault.find_by_hash(&hash)? {
                 QueryResult::Found(entry) => entry,
                 QueryResult::NotFound => {
-                    return Err(format!("File not found with hash '{}'.", hash).into());
+                    return Err(CliError::EntryNotFound(format!(
+                        "File not found with hash '{}'.",
+                        hash
+                    )));
                 }
             };
             println!("Moving file '{}' to '{}'...", file_entry.path, dest_path);
@@ -31,7 +30,10 @@ pub fn handle_move(
             let file_entry = match vault.find_by_path(&source_path)? {
                 QueryResult::Found(entry) => entry,
                 QueryResult::NotFound => {
-                    return Err(format!("File not found at path '{}'.", source_path).into());
+                    return Err(CliError::EntryNotFound(format!(
+                        "File not found at path '{}'.",
+                        source_path
+                    )));
                 }
             };
             println!("Moving file '{}' to '{}'...", source_path, dest_path);
@@ -43,10 +45,10 @@ pub fn handle_move(
         Target::Path(source_path) => {
             //因为上面的卫语句，这里一定是目录
             if dest_path.is_file() {
-                return Err(
+                return Err(CliError::InvalidTarget(
                     "Cannot move a directory to a file path. Destination must be a directory."
-                        .into(),
-                );
+                        .to_string(),
+                ));
             }
 
             println!("Moving directory '{}' to '{}'...", source_path, dest_path);
@@ -68,10 +70,10 @@ pub fn handle_move(
                     .as_str()
                     .strip_prefix(source_path.as_str())
                     .ok_or_else(|| {
-                        format!(
+                        CliError::Unexpected(format!(
                             "Failed to create relative path for '{}' from base '{}'",
                             file_entry.path, source_path
-                        )
+                        ))
                     })?;
 
                 let new_path = dest_path.join(relative_path)?;

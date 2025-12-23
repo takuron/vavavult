@@ -1,21 +1,24 @@
-use std::error::Error;
+use crate::errors::CliError;
+use crate::utils::parse_rfc3339_string;
 use chrono::Local;
 use vavavult::common::constants::{META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
 use vavavult::vault::Vault;
-use crate::utils::parse_rfc3339_string;
 
 /// 处理 vault 重命名命令
-pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), Box<dyn Error>> {
+pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), CliError> {
     let old_name = vault.config.name.clone();
 
     // 调用核心库的 set_name 方法
     vault.set_name(new_name)?;
 
-    println!("Vault successfully renamed from '{}' to '{}'.", old_name, new_name);
+    println!(
+        "Vault successfully renamed from '{}' to '{}'.",
+        old_name, new_name
+    );
     Ok(())
 }
 
-pub fn handle_status(vault: &Vault) -> Result<(), Box<dyn Error>> {
+pub fn handle_status(vault: &Vault) -> Result<(), CliError> {
     // 使用新的高效计数 API
     let file_count = vault.get_file_count()?;
 
@@ -30,7 +33,8 @@ pub fn handle_status(vault: &Vault) -> Result<(), Box<dyn Error>> {
     // 一个辅助函数，用于查找、解析、并格式化时间
     let format_time = |key: &str| -> String {
         // 使用 get_vault_metadata 从数据库获取
-        vault.get_vault_metadata(key)
+        vault
+            .get_vault_metadata(key)
             .ok() // 将 Result 转换为 Option
             .and_then(|value| parse_rfc3339_string(&value).ok())
             .map(|utc_time| {

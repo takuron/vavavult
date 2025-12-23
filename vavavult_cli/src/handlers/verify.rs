@@ -1,8 +1,8 @@
+use crate::errors::CliError;
 use crate::utils::is_hash_like;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,7 +21,7 @@ pub fn handle_verify(
     vault: Arc<Mutex<Vault>>,
     targets: &[String],
     parallel: bool,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), CliError> {
     println!("Collecting files to verify...");
 
     // This tuple will hold the list of (hash, path) for the files to be verified.
@@ -114,13 +114,14 @@ pub fn handle_verify(
 fn verify_sequential(
     vault: Arc<Mutex<Vault>>,
     files: &[(VaultHash, String)],
-) -> Result<(usize, usize), Box<dyn Error>> {
+) -> Result<(usize, usize), CliError> {
     let total_count = files.len();
     let success_count = Arc::new(AtomicUsize::new(0));
     let pb = ProgressBar::new(total_count as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [Verifying] [{bar:40.cyan/blue}] {pos}/{len} {wide_msg}")?
+            .template("{spinner:.green} [Verifying] [{bar:40.cyan/blue}] {pos}/{len} {wide_msg}")
+            .map_err(|e| CliError::Unexpected(e.to_string()))?
             .progress_chars("#>-"),
     );
 
@@ -150,13 +151,14 @@ fn verify_sequential(
 fn verify_parallel(
     vault: Arc<Mutex<Vault>>,
     files: &[(VaultHash, String)],
-) -> Result<(usize, usize), Box<dyn Error>> {
+) -> Result<(usize, usize), CliError> {
     let total_count = files.len();
     let success_count = Arc::new(AtomicUsize::new(0));
     let pb = ProgressBar::new(total_count as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [Verifying] [{bar:40.cyan/blue}] {pos}/{len}")?
+            .template("{spinner:.green} [Verifying] [{bar:40.cyan/blue}] {pos}/{len}")
+            .map_err(|e| CliError::Unexpected(e.to_string()))?
             .progress_chars("#>-"),
     );
 

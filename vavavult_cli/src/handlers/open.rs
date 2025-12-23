@@ -1,17 +1,16 @@
+use crate::errors::CliError;
+use crate::utils::{Target, find_file_entry, identify_target};
 use std::env;
-use std::error::Error;
 use vavavult::vault::Vault;
-use crate::utils::{find_file_entry, identify_target, Target};
 
-pub fn handle_open(vault: &Vault, target: &str) -> Result<(), Box<dyn Error>> {
-
+pub fn handle_open(vault: &Vault, target: &str) -> Result<(), CliError> {
     // 使用 identify_target 进行预检查
     if let Ok(Target::Path(p)) = identify_target(target) {
         if !p.is_file() {
-            return Err(format!(
+            return Err(CliError::InvalidTarget(format!(
                 "Cannot open '{}': Path is a directory, not a file.",
                 p
-            ).into());
+            )));
         }
     }
 
@@ -31,11 +30,14 @@ pub fn handle_open(vault: &Vault, target: &str) -> Result<(), Box<dyn Error>> {
     match opener::open(&temp_path) {
         Ok(_) => {
             println!("Successfully opened '{}'.", file_entry.path);
-            println!("NOTE: You are viewing a temporary copy. Any changes will NOT be saved to the vault.");
+            println!(
+                "NOTE: You are viewing a temporary copy. Any changes will NOT be saved to the vault."
+            );
             Ok(())
         }
-        Err(e) => {
-            Err(format!("Failed to open file with default application: {}", e).into())
-        }
+        Err(e) => Err(CliError::Unexpected(format!(
+            "Failed to open file with default application: {}",
+            e
+        ))),
     }
 }

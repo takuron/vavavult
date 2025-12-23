@@ -2,13 +2,13 @@ pub mod dispatcher;
 pub mod state;
 
 use crate::cli::ReplCommand;
+use crate::errors::CliError;
 use crate::repl::dispatcher::handle_repl_command;
 use crate::repl::state::AppState;
 use clap::Parser;
 use rustyline::DefaultEditor;
-use std::error::Error;
 
-pub fn run_repl(app_state: &mut AppState) -> Result<(), Box<dyn Error>> {
+pub fn run_repl(app_state: &mut AppState) -> Result<(), CliError> {
     let mut rl = DefaultEditor::new()?;
 
     while let Some(vault_arc) = &app_state.active_vault {

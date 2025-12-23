@@ -5,7 +5,7 @@ use vavavult::{
     file::path::PathError,
     vault::{
         AddFileError, CreateError, ExtractError, OpenError, QueryError, RekeyError, RemoveError,
-        TagError,
+        TagError, UpdateError,
     },
 };
 
@@ -44,6 +44,9 @@ pub enum CliError {
     #[error("I/O error")]
     Io(#[from] io::Error),
 
+    #[error("REPL Readline error")]
+    Readline(#[from] rustyline::error::ReadlineError),
+
     #[error("Invalid path")]
     Path(#[from] PathError),
 
@@ -70,6 +73,9 @@ pub enum CliError {
 
     #[error("Failed to process tag")]
     Tag(#[from] TagError),
+
+    #[error("Failed to update vault")]
+    Update(#[from] UpdateError),
 
     #[error("Invalid command in REPL: {0}")]
     InvalidReplCommand(String),

@@ -1,14 +1,13 @@
-use std::error::Error;
-use vavavult::vault::Vault;
+use crate::errors::CliError;
 use crate::utils::{print_file_details, print_recursive_file_item};
+use vavavult::vault::Vault;
 
 /// 处理 'search' (或 'find') 命令
 pub fn handle_search(
     vault: &Vault,
     keyword: &str,
     long: bool, // -l
-) -> Result<(), Box<dyn Error>> {
-
+) -> Result<(), CliError> {
     let found_files = vault.find_by_keyword(keyword)?;
 
     if found_files.is_empty() {

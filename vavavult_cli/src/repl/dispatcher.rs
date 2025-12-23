@@ -1,14 +1,11 @@
 use crate::cli::{ReplCommand, TagCommand, VaultCommand};
+use crate::errors::CliError;
 use crate::handlers;
 use crate::repl::state::AppState;
-use std::error::Error;
 use std::sync::Arc;
 
 /// REPL 命令处理器
-pub fn handle_repl_command(
-    command: ReplCommand,
-    app_state: &mut AppState,
-) -> Result<(), Box<dyn Error>> {
+pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result<(), CliError> {
     // 检查 vault 是否存在。如果命令是 Exit 或 Close，它们会使 active_vault 变为 None，
     // 从而自然地终止 run_repl 中的 while let 循环。
     let Some(vault_arc) = app_state.active_vault.as_mut() else {
