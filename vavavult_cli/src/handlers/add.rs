@@ -9,7 +9,7 @@ use vavavult::file::VaultPath; // [新增] 确保导入
 use vavavult::vault::{AddFileError, AdditionTask, Vault, prepare_addition_task_standalone};
 use walkdir::WalkDir;
 
-/// [V2 重构] 根据新的 CLI 规则构建最终的 VaultPath (用于单文件添加)
+/// 根据新的 CLI 规则构建最终的 VaultPath (用于单文件添加)
 ///
 /// 优先级:
 /// 1. `-n name` (如果提供) 总是决定最终的文件名。
