@@ -26,6 +26,14 @@ pub enum TopLevelCommands {
         #[arg(value_name = "VAULT_PATH")]
         path: Option<PathBuf>,
     },
+    /// Change the vault password
+    // 修改保险库密码
+    Passwd {
+        /// The path to the vault
+        //  保险库的路径
+        #[arg(value_name = "VAULT_PATH", required = true)]
+        path: PathBuf,
+    },
 }
 
 // --- REPL (Interactive) Commands ---

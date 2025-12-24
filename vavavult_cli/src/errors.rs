@@ -11,6 +11,9 @@ use vavavult::{
 
 #[derive(Debug, Error)]
 pub enum CliError {
+    #[error("Vault not found at path: {0}")]
+    VaultNotFound(PathBuf),
+
     #[error("Vault is not open. Please open or create a vault first.")]
     VaultNotOpen,
 

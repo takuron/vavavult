@@ -7,6 +7,7 @@ pub mod ui;
 
 use crate::cli::{Cli, TopLevelCommands};
 use crate::errors::CliError;
+use crate::handlers::passwd;
 use crate::repl::run_repl;
 use crate::repl::state::AppState;
 use clap::Parser;
@@ -45,6 +46,7 @@ fn main() -> Result<(), CliError> {
             println!("Opening vault at: {:?}", effective_path);
             handle_open_command(&effective_path)
         }
+        TopLevelCommands::Passwd { path } => passwd::handle_passwd(&path),
     };
 
     match vault_result {

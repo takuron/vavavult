@@ -3,6 +3,7 @@ pub(crate) mod extract;
 pub(crate) mod list;
 pub(crate) mod move_cl;
 pub(crate) mod open;
+pub(crate) mod passwd;
 pub(crate) mod remove;
 pub(crate) mod rename;
 pub(crate) mod search;
