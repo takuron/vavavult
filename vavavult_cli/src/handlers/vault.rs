@@ -1,11 +1,12 @@
 use crate::core::helpers::parse_rfc3339_string;
 use crate::errors::CliError;
+use crate::ui::printer::print_status;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 use vavavult::common::constants::{META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
 use vavavult::vault::Vault;
 
-/// Contains the data for the vault status, to be processed by a view/printer.
+// This struct is a DTO for the printer
 pub struct VaultStatus {
     pub name: String,
     pub path: PathBuf,
@@ -31,8 +32,8 @@ pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), CliE
     Ok(())
 }
 
-/// Gathers vault status information and returns it as a struct.
-pub fn handle_status(vault: &Vault) -> Result<VaultStatus, CliError> {
+/// Gathers vault status information and prints it.
+pub fn handle_status(vault: &Vault) -> Result<(), CliError> {
     let file_count = vault.get_file_count()?;
     let features = vault.get_enabled_features()?;
 
@@ -43,17 +44,18 @@ pub fn handle_status(vault: &Vault) -> Result<VaultStatus, CliError> {
             .and_then(|value| parse_rfc3339_string(&value).ok())
     };
 
-    let created_at = get_time(META_VAULT_CREATE_TIME);
-    let updated_at = get_time(META_VAULT_UPDATE_TIME);
-
-    Ok(VaultStatus {
+    let status = VaultStatus {
         name: vault.config.name.clone(),
         path: vault.root_path.clone(),
         version: vault.config.version.to_string(),
         features,
         encrypted: vault.config.encrypted,
         file_count,
-        created_at,
-        updated_at,
-    })
+        created_at: get_time(META_VAULT_CREATE_TIME),
+        updated_at: get_time(META_VAULT_UPDATE_TIME),
+    };
+
+    print_status(&status);
+
+    Ok(())
 }

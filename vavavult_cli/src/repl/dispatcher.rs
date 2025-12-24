@@ -27,43 +27,11 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
             recursive,
         } => {
             let vault = vault_arc.lock().unwrap();
-            // 1. 从 handler 获取数据
-            let (list_result, target_path) = handlers::list::handle_list(&vault, path, recursive)?;
-
-            // 2. 获取显示选项
-            let colors_enabled = vault.is_feature_enabled("colorfulTag").unwrap_or(false);
-
-            // 3. 将数据传递给 printer
-            crate::ui::printer::print_list_result(&list_result, long, colors_enabled, &target_path);
+            handlers::list::handle_list(&vault, path, long, recursive)?;
         }
         ReplCommand::Search { keyword, long } => {
             let vault = vault_arc.lock().unwrap();
-            let found_files = handlers::search::handle_search(&vault, &keyword)?;
-
-            if found_files.is_empty() {
-                println!("No files found matching '{}' (in name or tags).", keyword);
-            } else {
-                println!(
-                    "Found {} file(s) matching '{}' (in name or tags):",
-                    found_files.len(),
-                    keyword
-                );
-
-                let colors_enabled = vault.is_feature_enabled("colorfulTag").unwrap_or(false);
-
-                if long {
-                    for file in &found_files {
-                        crate::ui::printer::print_file_details(file, colors_enabled);
-                    }
-                    if !found_files.is_empty() {
-                        println!("----------------------------------------");
-                    }
-                } else {
-                    for file in &found_files {
-                        crate::ui::printer::print_recursive_file_item(file, colors_enabled);
-                    }
-                }
-            }
+            handlers::search::handle_search(&vault, &keyword, long)?;
         }
         ReplCommand::Open { target } => {
             let vault = vault_arc.lock().unwrap();
@@ -117,8 +85,7 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
             }
             VaultCommand::Status => {
                 let vault = vault_arc.lock().unwrap();
-                let status = handlers::vault::handle_status(&vault)?;
-                crate::ui::printer::print_status(&status);
+                handlers::vault::handle_status(&vault)?;
             }
         },
         ReplCommand::Tag(tag_command) => {
