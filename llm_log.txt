@@ -1,0 +1,1 @@
+- 生成了项目的llm_readme.txt技术说明和LLM编码规范。
