@@ -1,5 +1,7 @@
 # Vavavult Technical Overview for LLM
 
+!!! IMPORTANT: YOU MUST FOLLOW THE CODING SPECIFICATIONS IN SECTION 4 FOR EVERY RESPONSE. !!!
+
 ## 1. Project Structure
 
 Vavavult is a Rust workspace composed of two main crates: a core library (`vavavult`) and a command-line interface (`vavavult_cli`).
