@@ -1,8 +1,21 @@
+use crate::core::helpers::parse_rfc3339_string;
 use crate::errors::CliError;
-use crate::utils::parse_rfc3339_string;
-use chrono::Local;
+use chrono::{DateTime, Utc};
+use std::path::PathBuf;
 use vavavult::common::constants::{META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
 use vavavult::vault::Vault;
+
+/// Contains the data for the vault status, to be processed by a view/printer.
+pub struct VaultStatus {
+    pub name: String,
+    pub path: PathBuf,
+    pub version: String,
+    pub features: Vec<String>,
+    pub encrypted: bool,
+    pub file_count: i64,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
 
 /// 处理 vault 重命名命令
 pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), CliError> {
@@ -18,53 +31,29 @@ pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), CliE
     Ok(())
 }
 
-pub fn handle_status(vault: &Vault) -> Result<(), CliError> {
-    // 使用新的高效计数 API
+/// Gathers vault status information and returns it as a struct.
+pub fn handle_status(vault: &Vault) -> Result<VaultStatus, CliError> {
     let file_count = vault.get_file_count()?;
-
-    // 获取已启用的功能列表
     let features = vault.get_enabled_features()?;
-    let features_display = if features.is_empty() {
-        "None".to_string()
-    } else {
-        features.join(", ")
-    };
 
-    // 一个辅助函数，用于查找、解析、并格式化时间
-    let format_time = |key: &str| -> String {
-        // 使用 get_vault_metadata 从数据库获取
+    let get_time = |key: &str| -> Option<DateTime<Utc>> {
         vault
             .get_vault_metadata(key)
-            .ok() // 将 Result 转换为 Option
+            .ok()
             .and_then(|value| parse_rfc3339_string(&value).ok())
-            .map(|utc_time| {
-                // 转换为本地时区并格式化
-                let local_time = utc_time.with_timezone(&Local);
-                local_time.format("%Y-%m-%d %H:%M:%S %Z").to_string()
-            })
-            .unwrap_or_else(|| "N/A".to_string()) // 如果失败则返回 "N/A"
     };
 
-    let create_time_local = format_time(META_VAULT_CREATE_TIME);
-    let update_time_local = format_time(META_VAULT_UPDATE_TIME);
+    let created_at = get_time(META_VAULT_CREATE_TIME);
+    let updated_at = get_time(META_VAULT_UPDATE_TIME);
 
-    // 检查布尔值
-    let encryption_status = if vault.config.encrypted {
-        "Enabled"
-    } else {
-        "Disabled"
-    };
-
-    println!("--- Vault Status ---");
-    println!("  Name:           {}", vault.config.name);
-    println!("  Path:           {:?}", vault.root_path);
-    println!("  Version:        {}", vault.config.version);
-    println!("  Features:       {}", features_display);
-    println!("  Encryption:     {}", encryption_status);
-    println!("  Total Files:    {}", file_count);
-    println!("  Created At:     {}", create_time_local);
-    println!("  Last Updated:   {}", update_time_local);
-    println!("--------------------");
-
-    Ok(())
+    Ok(VaultStatus {
+        name: vault.config.name.clone(),
+        path: vault.root_path.clone(),
+        version: vault.config.version.to_string(),
+        features,
+        encrypted: vault.config.encrypted,
+        file_count,
+        created_at,
+        updated_at,
+    })
 }

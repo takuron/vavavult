@@ -1,8 +1,9 @@
 mod cli;
+pub mod core;
 pub mod errors;
 mod handlers;
 mod repl;
-mod utils;
+pub mod ui;
 
 use crate::cli::{Cli, TopLevelCommands};
 use crate::errors::CliError;

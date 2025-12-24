@@ -1,5 +1,5 @@
+use crate::core::helpers::{Target, get_all_files_recursively, identify_target};
 use crate::errors::CliError;
-use crate::utils::{Target, get_all_files_recursively, identify_target};
 use vavavult::file::VaultPath;
 use vavavult::vault::{QueryResult, Vault};
 

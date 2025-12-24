@@ -1,5 +1,5 @@
+use crate::core::helpers::is_hash_like;
 use crate::errors::CliError;
-use crate::utils::is_hash_like;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};

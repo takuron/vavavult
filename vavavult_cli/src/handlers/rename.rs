@@ -1,5 +1,5 @@
+use crate::core::helpers::find_file_entry;
 use crate::errors::CliError;
-use crate::utils::find_file_entry;
 use vavavult::vault::Vault;
 
 /// 处理文件重命名命令

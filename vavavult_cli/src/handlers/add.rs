@@ -1,5 +1,5 @@
 use crate::errors::CliError;
-use crate::utils::confirm_action;
+use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};

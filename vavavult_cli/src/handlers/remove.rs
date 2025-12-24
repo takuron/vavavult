@@ -1,5 +1,6 @@
+use crate::core::helpers::{Target, get_all_files_recursively, identify_target};
 use crate::errors::CliError;
-use crate::utils::{Target, confirm_action, get_all_files_recursively, identify_target};
+use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
 use vavavult::vault::{QueryResult, Vault};
 

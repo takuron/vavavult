@@ -1,8 +1,8 @@
-use crate::errors::CliError;
-use crate::utils::{
-    Target, confirm_action, determine_output_path, find_file_entry, get_all_files_recursively,
-    identify_target,
+use crate::core::helpers::{
+    Target, determine_output_path, find_file_entry, get_all_files_recursively, identify_target,
 };
+use crate::errors::CliError;
+use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::fs;
