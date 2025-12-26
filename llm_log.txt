@@ -1,2 +1,3 @@
 - 生成了项目的llm_readme.txt技术说明和LLM编码规范。
 - 为 `vavavult_cli` 添加了 `passwd` 命令，用于修改保险库的主密码。该命令会提示用户输入旧密码和新密码进行验证，成功后将打开保险库进入交互模式。
+- [BUGFIX] 更新了 vavavult_cli::errors::CliError 以显示详细的源错误信息。

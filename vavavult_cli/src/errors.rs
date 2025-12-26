@@ -44,40 +44,40 @@ pub enum CliError {
     #[error("Passwords do not match.")]
     PasswordMismatch,
 
-    #[error("I/O error")]
+    #[error("I/O error: {0}")]
     Io(#[from] io::Error),
 
-    #[error("REPL Readline error")]
+    #[error("REPL Readline error: {0}")]
     Readline(#[from] rustyline::error::ReadlineError),
 
-    #[error("Invalid path")]
+    #[error("Invalid path: {0}")]
     Path(#[from] PathError),
 
-    #[error("Failed to create vault")]
+    #[error("Failed to create vault: {0}")]
     Create(#[from] CreateError),
 
-    #[error("Failed to open vault")]
+    #[error("Failed to open vault: {0}")]
     Open(#[from] OpenError),
 
-    #[error("Failed to add file to vault")]
+    #[error("Failed to add file to vault: {0}")]
     AddFile(#[from] AddFileError),
 
-    #[error("Failed to extract file from vault")]
+    #[error("Failed to extract file from vault: {0}")]
     Extract(#[from] ExtractError),
 
-    #[error("Failed to query vault")]
+    #[error("Failed to query vault: {0}")]
     Query(#[from] QueryError),
 
-    #[error("Failed to remove from vault")]
+    #[error("Failed to remove from vault: {0}")]
     Remove(#[from] RemoveError),
 
-    #[error("Failed to rekey vault")]
+    #[error("Failed to rekey vault: {0}")]
     Rekey(#[from] RekeyError),
 
-    #[error("Failed to process tag")]
+    #[error("Failed to process tag: {0}")]
     Tag(#[from] TagError),
 
-    #[error("Failed to update vault")]
+    #[error("Failed to update vault: {0}")]
     Update(#[from] UpdateError),
 
     #[error("Invalid command in REPL: {0}")]
