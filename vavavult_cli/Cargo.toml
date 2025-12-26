@@ -31,4 +31,6 @@ rusqlite = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.21.0"
-
+assert_cmd = "2.0"
+predicates = "3.1"
+anyhow = "1.0"

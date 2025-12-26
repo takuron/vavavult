@@ -78,6 +78,14 @@ A user-facing CLI application for interacting with `vavavult` vaults.
     *   **Path:** `vavavult_cli/src/cli.rs`
     *   **Description:** Defines the command-line interface structure using `clap`. It specifies all available commands, subcommands, and their arguments.
 
+### 3.3. Testing
+*   **Path:** `vavavult_cli/tests/`
+*   **Description:** Integration tests for the CLI are built using the `assert_cmd` and `predicates` crates, providing a robust way to test command execution and output.
+*   **Framework:**
+    *   `tests/common/mod.rs`: A shared helper module that provides utilities to simplify testing.
+    *   `TestContext`: A key struct within the common module that creates a fully isolated environment for each test. `TestContext::new()` handles the creation of a temporary directory and a new vault inside it, ready for testing.
+*   **Usage:** To write a new test, you typically start by creating a `TestContext`, then use `assert_cmd::Command` to run `vavavult` commands (either top-level or REPL commands via stdin), and finally use `predicates` to assert that the `stdout` or `stderr` contains the expected output.
+
 ## 4. LLM Coding Specification
 
 To ensure consistency and maintainability when using an LLM for development, the following rules must be strictly followed.
