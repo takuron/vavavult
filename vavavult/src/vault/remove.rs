@@ -1,8 +1,7 @@
-use crate::common::constants::DATA_SUBDIR;
-use crate::vault::{Vault, query, QueryResult, UpdateError};
+use crate::vault::{Vault, query, QueryResult};
 use rusqlite::params;
-use std::fs as std_fs;
 use crate::common::hash::{HashParseError, VaultHash};
+use crate::vault::metadata::MetadataError;
 
 /// Defines errors that can occur during the file removal process.
 //
@@ -37,7 +36,7 @@ pub enum RemoveError {
     //
     // // 更新保险库的最后修改时间戳失败。
     #[error("Failed to update vault timestamp: {0}")]
-    TimestampUpdateError(#[from] UpdateError),
+    TimestampUpdateError(#[from] MetadataError),
 
     /// The hash string provided was in an invalid format.
     //
@@ -56,16 +55,14 @@ pub enum RemoveError {
 /// * `vault` - 一个 Vault 实例。
 /// * `sha256sum` - 要删除的文件的加密后内容的 Base64 哈希。
 pub(crate) fn remove_file(vault: &Vault, sha256sum: &VaultHash) -> Result<(), RemoveError> {
-    // 1. 确认文件存在于数据库中 (query::check_by_hash 已更新为 V2)
+    // 1. 确认文件存在于数据库中
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(RemoveError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 2. [V2 修改] 从文件系统中删除物理文件 (在 data/ 子目录下)
-    let file_path = vault.root_path.join(DATA_SUBDIR).join(sha256sum.to_string());
-    if file_path.exists() {
-        std_fs::remove_file(file_path)?;
-    } // 如果文件不存在，也继续，目标是确保数据库记录被删除
+    // 2. 从存储后端删除物理文件
+    // 后端实现通常是幂等的（如果文件不存在则不报错），但我们已经检查了数据库存在
+    vault.storage.delete(sha256sum)?;
 
     // 3. 从数据库中删除记录 (SQL 语句不变，外键级联删除)
     let rows_affected = vault.database_connection.execute(

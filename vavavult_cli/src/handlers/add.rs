@@ -1,15 +1,15 @@
-use std::error::Error;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::errors::CliError;
+use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use walkdir::WalkDir;
-use vavavult::vault::{encrypt_file_for_add_standalone, AddFileError, EncryptedAddingFile, Vault};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use vavavult::file::VaultPath; // [新增] 确保导入
-use crate::utils::confirm_action;
+use vavavult::vault::{AddFileError, AdditionTask, Vault, prepare_addition_task_standalone};
+use walkdir::WalkDir;
 
-/// [V2 重构] 根据新的 CLI 规则构建最终的 VaultPath (用于单文件添加)
+/// 根据新的 CLI 规则构建最终的 VaultPath (用于单文件添加)
 ///
 /// 优先级:
 /// 1. `-n name` (如果提供) 总是决定最终的文件名。
@@ -25,7 +25,7 @@ fn build_target_vault_path(
     source_filename: &str,
     path: Option<String>,
     name: Option<String>,
-) -> Result<VaultPath, Box<dyn Error>> {
+) -> Result<VaultPath, CliError> {
     let base_path_str = path.unwrap_or_else(|| "/".to_string());
     let base_path = VaultPath::from(base_path_str.as_str());
 
@@ -34,7 +34,10 @@ fn build_target_vault_path(
 
         // [要求 1] 验证 --name 不包含路径分隔符
         if filename.contains('/') || filename.contains('\\') {
-            return Err(format!("Invalid filename provided with --name: '{}'. Filename cannot contain path separators.", filename).into());
+            return Err(CliError::InvalidName(format!(
+                "Filename '{}' cannot contain path separators.",
+                filename
+            )));
         }
 
         // 将 base_path 视为目标目录
@@ -68,23 +71,31 @@ pub fn handle_add(
     path: Option<String>,
     name: Option<String>,
     parallel: bool,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), CliError> {
     if !local_path.exists() {
-        return Err(format!("Local path does not exist: {:?}", local_path).into());
+        return Err(CliError::InvalidTarget(format!(
+            "Local path does not exist: {:?}",
+            local_path
+        )));
     }
 
     if local_path.is_dir() {
         // --- 处理目录添加 ---
         if name.is_some() {
             // 当添加目录时，不允许使用 --name
-            return Err("The --name (-n) option cannot be used when adding a directory.".into());
+            return Err(CliError::InvalidCommand(
+                "The --name (-n) option cannot be used when adding a directory.".to_string(),
+            ));
         }
 
         // 目标路径（如果提供）必须是目录
         let dest_dir_path = VaultPath::from(path.unwrap_or_else(|| "/".to_string()).as_str());
         if dest_dir_path.is_file() {
             // 目标路径必须是目录
-            return Err(format!("When adding a directory, the target path ('{}') must be a directory (e.g., end with '/'), not a file.", dest_dir_path.as_str()).into());
+            return Err(CliError::InvalidTarget(format!(
+                "When adding a directory, the target path ('{}') must be a directory (e.g., end with '/'), not a file.",
+                dest_dir_path.as_str()
+            )));
         }
 
         // `dest_dir_path` 此时保证是一个目录 (例如 /docs/ 或 /)
@@ -100,7 +111,11 @@ pub fn handle_add(
         // 1. 获取源文件名
         let source_filename = local_path
             .file_name()
-            .ok_or("Cannot add file without a filename (e.g., './').")?
+            .ok_or_else(|| {
+                CliError::InvalidTarget(
+                    "Cannot add file without a filename (e.g., './').".to_string(),
+                )
+            })?
             .to_string_lossy();
 
         // 2. [V2 重构] 调用新的路径构建逻辑
@@ -115,16 +130,19 @@ pub fn handle_add(
 fn handle_add_file(
     vault: Arc<Mutex<Vault>>,
     local_path: &Path,
-    dest_vault_path: VaultPath
-) -> Result<(), Box<dyn Error>> {
+    dest_vault_path: VaultPath,
+) -> Result<(), CliError> {
     // 库的 `add_file` 会正确处理 (因为 dest_vault_path.is_dir() 为 false)
-    println!("Adding file {:?} as '{}'...", local_path, dest_vault_path.as_str());
+    println!(
+        "Adding file {:?} as '{}'...",
+        local_path,
+        dest_vault_path.as_str()
+    );
     let mut vault_guard = vault.lock().unwrap();
 
-    match vault_guard.add_file(local_path, &dest_vault_path) {
-        Ok(hash) => println!("Successfully added file. Hash: {}", hash),
-        Err(e) => eprintln!("Error adding file: {}", e),
-    }
+    let hash = vault_guard.add_file(local_path, &dest_vault_path)?;
+    println!("Successfully added file. Hash: {}", hash);
+
     Ok(())
 }
 
@@ -132,8 +150,8 @@ fn handle_add_file(
 fn handle_add_directory_single_threaded(
     vault: Arc<Mutex<Vault>>,
     local_path: &Path,
-    dest_dir_path: VaultPath
-) -> Result<(), Box<dyn Error>> {
+    dest_dir_path: VaultPath,
+) -> Result<(), CliError> {
     println!("Scanning directory {:?}...", local_path);
 
     // 1. 收集所有待添加的文件
@@ -144,7 +162,9 @@ fn handle_add_directory_single_threaded(
         .map(|entry| {
             let source_path = entry.into_path();
             let relative_path = source_path.strip_prefix(local_path).unwrap();
-            let vault_path = dest_dir_path.join(relative_path.to_string_lossy().replace('\\', "/").as_ref()).unwrap();
+            let vault_path = dest_dir_path
+                .join(relative_path.to_string_lossy().replace('\\', "/").as_ref())
+                .unwrap();
             (source_path, vault_path)
         })
         .collect();
@@ -168,9 +188,14 @@ fn handle_add_directory_single_threaded(
 
     // 3. 带进度条的单线程执行
     let pb = ProgressBar::new(files_to_add.len() as u64);
-    pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
-        .progress_chars("#>-"));
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .map_err(|e| CliError::Unexpected(e.to_string()))?
+            .progress_chars("#>-"),
+    );
 
     let mut success_count = 0;
     let mut fail_count = 0;
@@ -199,8 +224,8 @@ fn handle_add_directory_single_threaded(
 fn handle_add_directory_parallel(
     vault: Arc<Mutex<Vault>>,
     local_path: &Path,
-    dest_dir_path: VaultPath
-) -> Result<(), Box<dyn Error>> {
+    dest_dir_path: VaultPath,
+) -> Result<(), CliError> {
     println!("Scanning directory {:?} (parallel mode)...", local_path);
 
     // 1. 收集任务 (同单线程)
@@ -211,7 +236,9 @@ fn handle_add_directory_parallel(
         .map(|entry| {
             let source_path = entry.into_path();
             let relative_path = source_path.strip_prefix(local_path).unwrap();
-            let vault_path = dest_dir_path.join(relative_path.to_string_lossy().replace('\\', "/").as_ref()).unwrap();
+            let vault_path = dest_dir_path
+                .join(relative_path.to_string_lossy().replace('\\', "/").as_ref())
+                .unwrap();
             (source_path, vault_path)
         })
         .collect();
@@ -235,9 +262,12 @@ fn handle_add_directory_parallel(
 
     // 进度条和原子计数器
     let pb = ProgressBar::new(total_files_count as u64);
-    pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [Encrypting] [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
-        .progress_chars("#>-"));
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [Encrypting] [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .map_err(|e| CliError::Unexpected(e.to_string()))?
+            .progress_chars("#>-"),
+    );
 
     let fail_count = Arc::new(AtomicUsize::new(0));
 
@@ -245,18 +275,17 @@ fn handle_add_directory_parallel(
 
     // 在并行循环 *之前* 获取一次数据目录路径
     // 这是一个快速的只读锁
-    let data_dir_path = vault.lock().unwrap().get_data_dir_path();
-    // (锁在此处立即释放)
+    let storage = vault.lock().unwrap().storage.clone();
 
-    let encryption_results: Vec<Result<EncryptedAddingFile, (String, AddFileError)>> = files_to_add
+    let encryption_results: Vec<Result<AdditionTask, (String, AddFileError)>> = files_to_add
         .into_par_iter() // <-- Rayon 并行迭代
         .map(|(source_path, target_path)| {
             let pb_clone = pb.clone();
 
             // 调用无锁的 standalone 加密函数
-            // **这里没有 vault 锁**
-            let result = encrypt_file_for_add_standalone(
-                &data_dir_path,
+            // **这里没有 vault 锁**，我们使用 clone 来的 storage 后端
+            let result = prepare_addition_task_standalone(
+                storage.as_ref(), // deref Arc -> &dyn StorageBackend
                 &source_path,
                 &target_path,
             );
@@ -293,16 +322,22 @@ fn handle_add_directory_parallel(
         println!("\nNo files encrypted successfully. Nothing to commit.");
         let failures = fail_count.load(Ordering::SeqCst);
         let successes = total_files_count - failures;
-        println!("\nBatch add complete. {} succeeded, {} failed.", successes, failures);
+        println!(
+            "\nBatch add complete. {} succeeded, {} failed.",
+            successes, failures
+        );
         return Ok(());
     }
 
     // --- 阶段 3: 批量提交 (一次性短时锁) ---
-    println!("Committing {} encrypted files to database...", files_to_commit.len());
+    println!(
+        "Committing {} encrypted files to database...",
+        files_to_commit.len()
+    );
     {
         // **获取一次性的写锁**
         let mut vault_guard = vault.lock().unwrap();
-        match vault_guard.commit_add_files(files_to_commit) {
+        match vault_guard.execute_addition_tasks(files_to_commit) {
             Ok(_) => {
                 println!("Batch commit successful.");
             }
@@ -310,7 +345,9 @@ fn handle_add_directory_parallel(
                 // 如果批量提交失败 (例如，重复)，所有文件都算失败
                 fail_count.fetch_add(encrypted_success_count, Ordering::SeqCst);
                 eprintln!("FATAL: Batch commit failed: {}", e);
-                eprintln!("This usually means one or more files already exist in the vault (e.g., duplicate content or path).");
+                eprintln!(
+                    "This usually means one or more files already exist in the vault (e.g., duplicate content or path)."
+                );
             }
         }
     } // **写锁在此处释放**
@@ -319,7 +356,10 @@ fn handle_add_directory_parallel(
     let failures = fail_count.load(Ordering::SeqCst);
     let successes = total_files_count - failures;
 
-    println!("\nBatch add complete. {} succeeded, {} failed.", successes, failures);
+    println!(
+        "\nBatch add complete. {} succeeded, {} failed.",
+        successes, failures
+    );
     Ok(())
 }
 
@@ -330,12 +370,7 @@ mod tests {
     use vavavult::file::VaultPath;
 
     // 辅助函数，使断言更简洁
-    fn assert_path(
-        source: &str,
-        path: Option<&str>,
-        name: Option<&str>,
-        expected: &str
-    ) {
+    fn assert_path(source: &str, path: Option<&str>, name: Option<&str>, expected: &str) {
         let path_opt = path.map(|s| s.to_string());
         let name_opt = name.map(|s| s.to_string());
         let result = build_target_vault_path(source, path_opt, name_opt).unwrap();
@@ -343,11 +378,7 @@ mod tests {
     }
 
     // 辅助函数，用于测试错误情况
-    fn assert_path_err(
-        source: &str,
-        path: Option<&str>,
-        name: Option<&str>
-    ) {
+    fn assert_path_err(source: &str, path: Option<&str>, name: Option<&str>) {
         let path_opt = path.map(|s| s.to_string());
         let name_opt = name.map(|s| s.to_string());
         let result = build_target_vault_path(source, path_opt, name_opt);
@@ -363,17 +394,32 @@ mod tests {
         assert_path("local.txt", Some("/docs/"), None, "/docs/local.txt");
 
         // 场景 3: add local.txt -p /docs/report.txt -> /docs/report.txt
-        assert_path("local.txt", Some("/docs/report.txt"), None, "/docs/report.txt");
+        assert_path(
+            "local.txt",
+            Some("/docs/report.txt"),
+            None,
+            "/docs/report.txt",
+        );
 
         // 场景 4: add local.txt -n new.txt -> /new.txt
         assert_path("local.txt", None, Some("new.txt"), "/new.txt");
 
         // 场景 5: add local.txt -p /docs/ -n new.txt -> /docs/new.txt
-        assert_path("local.txt", Some("/docs/"), Some("new.txt"), "/docs/new.txt");
+        assert_path(
+            "local.txt",
+            Some("/docs/"),
+            Some("new.txt"),
+            "/docs/new.txt",
+        );
 
         // 场景 6: add local.txt -p /docs/report.txt -n new.txt -> /docs/new.txt
         // ( -n 优先级最高，-p 的文件名被忽略，只取目录)
-        assert_path("local.txt", Some("/docs/report.txt"), Some("new.txt"), "/docs/new.txt");
+        assert_path(
+            "local.txt",
+            Some("/docs/report.txt"),
+            Some("new.txt"),
+            "/docs/new.txt",
+        );
 
         // 场景 7: add local.txt -p / -n new.txt -> /new.txt
         assert_path("local.txt", Some("/"), Some("new.txt"), "/new.txt");

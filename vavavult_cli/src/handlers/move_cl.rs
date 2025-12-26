@@ -1,45 +1,92 @@
-use std::error::Error;
+use crate::core::helpers::{Target, get_all_files_recursively, identify_target};
+use crate::errors::CliError;
 use vavavult::file::VaultPath;
-use vavavult::vault::Vault;
-use crate::utils::find_file_entry;
+use vavavult::vault::{QueryResult, Vault};
 
 /// 处理 'mv' (Move) 命令
-pub fn handle_move(
-    vault: &mut Vault,
-    path: Option<String>,
-    hash: Option<String>,
-    destination: String,
-) -> Result<(), Box<dyn Error>> {
+pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Result<(), CliError> {
+    let source = identify_target(target)?;
+    let dest_path = VaultPath::from(destination.as_str());
 
-    // 1. 查找源文件
-    let file_entry = find_file_entry(vault, path, hash)?;
-    let old_path = file_entry.path.clone();
+    match source {
+        // --- 情况1：源是通过哈希值的单个文件 ---
+        Target::Hash(hash) => {
+            let file_entry = match vault.find_by_hash(&hash)? {
+                QueryResult::Found(entry) => entry,
+                QueryResult::NotFound => {
+                    return Err(CliError::EntryNotFound(format!(
+                        "File not found with hash '{}'.",
+                        hash
+                    )));
+                }
+            };
+            println!("Moving file '{}' to '{}'...", file_entry.path, dest_path);
+            vault.move_file(&file_entry.sha256sum, &dest_path)?;
+            println!("File successfully moved.");
+        }
 
-    // 2. 检查目标是“纯文件名”还是“路径”
-    if !destination.contains('/') && !destination.contains('\\') {
-        // --- 案例 A: 纯文件名 (e.g., "new.txt") ---
-        // 这是“就地重命名”
-        println!("Renaming (in-place) '{}' to '{}'...", old_path, destination);
+        // --- 情况2：源是文件路径 ---
+        Target::Path(source_path) if source_path.is_file() => {
+            let file_entry = match vault.find_by_path(&source_path)? {
+                QueryResult::Found(entry) => entry,
+                QueryResult::NotFound => {
+                    return Err(CliError::EntryNotFound(format!(
+                        "File not found at path '{}'.",
+                        source_path
+                    )));
+                }
+            };
+            println!("Moving file '{}' to '{}'...", source_path, dest_path);
+            vault.move_file(&file_entry.sha256sum, &dest_path)?;
+            println!("File successfully moved.");
+        }
 
-        // 调用 `rename_file_inplace`
-        vault.rename_file_inplace(&file_entry.sha256sum, &destination)?;
+        // --- 情况3：源是目录路径 ---
+        Target::Path(source_path) => {
+            //因为上面的卫语句，这里一定是目录
+            if dest_path.is_file() {
+                return Err(CliError::InvalidTarget(
+                    "Cannot move a directory to a file path. Destination must be a directory."
+                        .to_string(),
+                ));
+            }
 
-        println!("File successfully renamed.");
+            println!("Moving directory '{}' to '{}'...", source_path, dest_path);
 
-    } else {
-        // --- 案例 B: 路径 (e.g., "/docs/" or "/docs/new.txt") ---
-        // 这是“移动”
+            let files_to_move = get_all_files_recursively(vault, source_path.as_str())?;
 
-        // 将目标字符串转换为 `VaultPath`
-        let target_vault_path = VaultPath::from(destination.as_str());
+            if files_to_move.is_empty() {
+                println!(
+                    "Source directory '{}' is empty or does not exist. Nothing to move.",
+                    source_path
+                );
+                return Ok(());
+            }
 
-        println!("Moving '{}' to '{}'...", old_path, target_vault_path);
+            let mut moved_count = 0;
+            for file_entry in &files_to_move {
+                let relative_path = file_entry
+                    .path
+                    .as_str()
+                    .strip_prefix(source_path.as_str())
+                    .ok_or_else(|| {
+                        CliError::Unexpected(format!(
+                            "Failed to create relative path for '{}' from base '{}'",
+                            file_entry.path, source_path
+                        ))
+                    })?;
 
-        // 调用 `move_file`
-        // 库 API 会自动处理目标是目录还是文件
-        vault.move_file(&file_entry.sha256sum, &target_vault_path)?;
+                let new_path = dest_path.join(relative_path)?;
 
-        println!("File successfully moved.");
+                vault.move_file(&file_entry.sha256sum, &new_path)?;
+                moved_count += 1;
+            }
+
+            println!(
+                "Successfully moved {} files from '{}'.",
+                moved_count, source_path
+            );
+        }
     }
 
     Ok(())

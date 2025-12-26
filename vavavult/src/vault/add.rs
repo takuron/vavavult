@@ -1,25 +1,24 @@
-use std::{fs};
+use std::fs::{self, File};
 use std::collections::{HashMap, HashSet};
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
-use rusqlite::Transaction;
-use tempfile::NamedTempFile;
-use crate::file::stream_cipher;
+use crate::crypto::stream_cipher;
 use crate::common::constants::{
     META_FILE_ADD_TIME, META_FILE_SIZE, META_FILE_UPDATE_TIME,
-    META_SOURCE_MODIFIED_TIME, DATA_SUBDIR
+    META_SOURCE_MODIFIED_TIME
 };
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
-use crate::file::encrypt::{EncryptError};
+use crate::crypto::encrypt::{EncryptError};
 use crate::file::path::VaultPath;
 use crate::file::PathError;
-use crate::file::stream_cipher::StreamCipherError;
+use crate::crypto::stream_cipher::StreamCipherError;
 use crate::utils::random::{generate_random_password};
 use crate::utils::time::now_as_rfc3339_string;
-use crate::vault::{query, FileEntry, UpdateError};
+use crate::vault::{query, FileEntry};
 use crate::vault::query::QueryResult;
+use crate::storage::{StorageBackend, StagingToken};
+use crate::vault::metadata::MetadataError;
 pub(crate) use crate::vault::Vault;
 
 /// Defines errors that can occur during the file addition process.
@@ -33,11 +32,11 @@ pub enum AddFileError {
     #[error("Source file not found at {0}")]
     SourceNotFound(PathBuf),
 
-    /// An I/O error occurred while reading the source file or writing the encrypted file.
+    /// An I/O error occurred (reading source or storage backend IO).
     //
-    // // 在读取源文件或写入加密文件时发生 I/O 错误。
-    #[error("Failed to read source file: {0}")]
-    ReadError(#[from] std::io::Error),
+    // // 发生 I/O 错误 (读取源文件或存储后端 IO)。
+    #[error("I/O error: {0}")]
+    IoError(#[from] std::io::Error), // [修改] 重命名为更通用的 IoError
 
     /// A database error occurred during the transaction.
     //
@@ -97,57 +96,43 @@ pub enum AddFileError {
     //
     // // 更新保险库的最后修改时间戳失败。
     #[error("Failed to update vault timestamp: {0}")]
-    TimestampUpdateError(#[from] UpdateError),
+    TimestampUpdateError(#[from] MetadataError),
 
     /// An error occurred constructing the final `VaultPath`.
     //
     // // 构建最终 `VaultPath` 时发生错误。
     #[error("Failed to construct final path: {0}")]
     PathConstructionError(#[from] PathError),
-
 }
 
-/// Represents a prepared file addition (V2 - Deprecated by EncryptedAddingFile).
+/// Represents a task for adding a file that has passed the encryption stage.
+///
+/// This struct holds the encrypted file entry ready for database insertion
+/// and a staging token for finalizing the storage.
 //
-// // 代表一个准备好的文件添加 (V2 - 已被 EncryptedAddingFile 取代)。
-// #[derive(Debug)]
-// pub struct AddTransaction {
-//     /// 加密后内容的 Base64(unpadded) 哈希 (43 字节)
-//     pub encrypted_sha256sum: VaultHash,
-//     /// 原始文件内容的 Base64(unpadded) 哈希 (43 字节)
-//     pub original_sha256sum: VaultHash,
-//     /// 指向临时加密文件的路径 (在 `temp/` 目录下)
-//     pub temp_path: PathBuf,
-//     /// 用于此文件加密的随机密码
-//     pub per_file_password: String,
-//     /// 原始文件大小
-//     pub file_size: u64,
-//     /// 原始文件修改时间
-//     pub source_modified_time: DateTime<Utc>,
-// }
-
-/// Represents an encrypted file ready to be committed to the vault database.
-/// This struct is returned by `Vault::encrypt_file_for_add` and consumed by `Vault::commit_add_files`.
-//
-// // 代表一个已加密、准备好提交到保险库数据库的文件。
-// // 此结构由 `Vault::encrypt_file_for_add` 返回，并由 `Vault::commit_add_files` 消费。
+// // 代表一个已通过加密阶段的文件添加任务。
+// //
+// // 此结构体持有准备插入数据库的加密文件条目，
+// // 以及用于完成存储的暂存令牌。
 #[derive(Debug)]
-pub struct EncryptedAddingFile {
-    /// 最终将插入到数据库的 FileEntry 结构。
+pub struct AdditionTask {
+    /// The `FileEntry` struct to be inserted into the database.
+    // // 将要插入数据库的 `FileEntry` 结构体。
     pub file_entry: FileEntry,
-    /// 指向临时文件句柄。
-    temp_file: NamedTempFile,
+    /// The token representing the staged data in the storage backend.
+    // // 代表存储后端中暂存数据的令牌。
+    pub staging_token: Box<dyn StagingToken>,
 }
 
 /// 这是新的独立函数 (standalone)，不依赖 Vault。
 /// 它可以被 CLI 无锁调用。
-pub(crate) fn encrypt_file_for_add_standalone(
-    data_dir_path: &Path, // [修改] 只接收 data_dir_path
+pub(crate) fn prepare_addition_task_standalone(
+    storage: &dyn StorageBackend,
     source_path: &Path,
     dest_path: &VaultPath
-) -> Result<EncryptedAddingFile, AddFileError> {
+) -> Result<AdditionTask, AddFileError> {
 
-    // 1. 验证源文件
+    // 1. 验证源文件 (这里仍依赖本地 FS，因为我们是从本地添加)
     if !source_path.is_file() {
         return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
     }
@@ -157,26 +142,29 @@ pub(crate) fn encrypt_file_for_add_standalone(
         return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
     }
     // 3. 获取元数据
-    let source_metadata = fs::metadata(source_path)?;
+    let source_metadata = fs::metadata(source_path).map_err(AddFileError::IoError)?;
     let file_size = source_metadata.len();
-    let source_modified_time: DateTime<Utc> = source_metadata.modified()?.into();
+    let source_modified_time: DateTime<Utc> = source_metadata.modified()
+        .map_err(AddFileError::IoError)?.into();
 
-    // 4. 准备 IO 句柄
-    fs::create_dir_all(data_dir_path)?;
-    let mut source_file = File::open(source_path)?;
-    let mut temp_file = tempfile::Builder::new()
-        .prefix(".vava-add-")
-        .suffix(".tmp")
-        .tempfile_in(data_dir_path)?;
+    // 4. 调用存储后端准备写入
+    // 这将返回一个写入器 (Writer) 和一个令牌 (Token)
+    let (mut staging_writer, staging_token) = storage.prepare_write()
+        .map_err(AddFileError::IoError)?;
+
+    // 打开源文件
+    let mut source_file = File::open(source_path).map_err(AddFileError::IoError)?;
 
     // 5. 调用 stream_cipher
+    // 直接写入到 storage 提供的 writer 中
     let per_file_password = generate_random_password(16);
     let (encrypted_sha256sum, original_sha256sum) =
         stream_cipher::stream_encrypt_and_hash(
             &mut source_file,
-            &mut temp_file,
+            &mut staging_writer,
             &per_file_password
         )?;
+
     // 6. 构建 FileEntry
     let now = now_as_rfc3339_string();
     let metadata = vec![
@@ -194,86 +182,18 @@ pub(crate) fn encrypt_file_for_add_standalone(
         tags: Vec::new(),
         metadata,
     };
-    // 7. 返回
-    Ok(EncryptedAddingFile {
+
+    // 7. 返回 (包含 Token)
+    Ok(AdditionTask {
         file_entry,
-        temp_file,
+        staging_token,
     })
 }
 
-// /// 阶段 1: 准备一个文件添加事务 (线程安全的自由函数)
-// pub fn encrypt_file_for_add(vault: &Vault, source_path: &Path,dest_path: &VaultPath) -> Result<EncryptedAddingFile, AddFileError> {
-//     // 验证源文件
-//     if !source_path.is_file() {
-//         return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
-//     }
-//
-//     // 解析最终的文件路径
-//     let final_dest_path = resolve_final_path(source_path, dest_path)?;
-//
-//     // 在执行昂贵的加密操作 *之前* 检查无效的文件路径
-//     if !final_dest_path.is_file() {
-//         return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
-//     }
-//
-//     // --- 1. 获取文件元数据  ---
-//     let source_metadata = fs::metadata(source_path)?;
-//     let file_size = source_metadata.len();
-//     let source_modified_time: DateTime<Utc> = source_metadata.modified()?.into();
-//
-//     // --- [修改] 2. 准备 IO 句柄 ---
-//     let data_dir_path = vault.root_path.join(DATA_SUBDIR);
-//     fs::create_dir_all(&data_dir_path)?;
-//
-//     // 打开源文件用于读取
-//     let mut source_file = File::open(source_path)?;
-//
-//     // 直接在 data 目录中创建临时文件
-//     let mut temp_file = tempfile::Builder::new()
-//         .prefix(".vava-add-")
-//         .suffix(".tmp")
-//         .tempfile_in(&data_dir_path)?;
-//
-//     // --- [修改] 3. 直接调用 stream_cipher ---
-//     let per_file_password = generate_random_password(16);
-//
-//     // 将 &mut source_file 和 &mut temp_file 直接传递给流式加密器
-//     let (encrypted_sha256sum, original_sha256sum) =
-//         stream_cipher::stream_encrypt_and_hash(
-//             &mut source_file,
-//             &mut temp_file, // <-- 传递可写句柄
-//             &per_file_password
-//         )?; // <-- 错误现在是 StreamCipherError，会被 AddFileError::from 捕获
-//
-//     // --- 4. 构建完整的 FileEntry (不变) ---
-//     let now = now_as_rfc3339_string();
-//     let metadata = vec![
-//         MetadataEntry { key: META_FILE_ADD_TIME.to_string(), value: now.clone() },
-//         MetadataEntry { key: META_FILE_UPDATE_TIME.to_string(), value: now },
-//         MetadataEntry { key: META_FILE_SIZE.to_string(), value: file_size.to_string() },
-//         MetadataEntry { key: META_SOURCE_MODIFIED_TIME.to_string(), value: source_modified_time.to_rfc3339() },
-//     ];
-//
-//     let file_entry = FileEntry {
-//         path: final_dest_path,
-//         sha256sum: encrypted_sha256sum,
-//         original_sha256sum,
-//         encrypt_password: per_file_password,
-//         tags: Vec::new(),
-//         metadata,
-//     };
-//
-//     // --- 5. 返回封装的对象 (不变) ---
-//     Ok(EncryptedAddingFile {
-//         file_entry,
-//         temp_file,
-//     })
-// }
-
 /// 阶段 2: 提交一个文件添加事务 (需要独占访问的自由函数)
-pub fn commit_add_files(
+pub(crate) fn execute_addition_tasks(
     vault: &mut Vault,
-    files: Vec<EncryptedAddingFile>
+    files: Vec<AdditionTask>
 ) -> Result<(), AddFileError> {
     if files.is_empty() {
         return Ok(());
@@ -282,6 +202,9 @@ pub fn commit_add_files(
     // --- 1. 预检查 (数据库读取和批内检查) ---
     let mut paths_in_batch = HashSet::new();
     let mut originals_in_batch = HashMap::new();
+
+    // 如果在此处返回错误，`files` 将被 drop。
+    // StagingToken 的 Drop 实现负责回滚/清理暂存文件。
 
     for file_to_add in &files {
         let entry = &file_to_add.file_entry;
@@ -310,10 +233,11 @@ pub fn commit_add_files(
         }
     }
 
-    // --- 2. 提交 (数据库写入和文件移动) ---
-    let data_dir_path = vault.root_path.join(DATA_SUBDIR);
+    // --- 2. 提交 (数据库写入和文件 Commit) ---
 
+    // 开启数据库事务
     let tx = vault.database_connection.transaction()?;
+
     {
         let mut file_stmt = tx.prepare(
             "INSERT INTO files (sha256sum, path, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3, ?4)"
@@ -322,6 +246,7 @@ pub fn commit_add_files(
             "INSERT INTO metadata (file_sha256sum, meta_key, meta_value) VALUES (?1, ?2, ?3)"
         )?;
 
+        // 插入所有记录
         for file_to_add in &files {
             let entry = &file_to_add.file_entry;
 
@@ -337,49 +262,47 @@ pub fn commit_add_files(
             }
         }
 
-        move_temp_files_to_data(files, &data_dir_path, &tx)?;
+        // 提交物理文件 (Storage Commit)
+        // 这一步必须在 DB 插入之后，但在 DB Commit 之前。
+        // 如果这里失败，DB 事务将回滚，StagingToken drop 清理文件。
+        commit_storage_files(files, vault.storage.as_ref())?;
     }
+
+    // 提交数据库事务
     tx.commit()?;
 
     Ok(())
 }
 
 /// 快捷函数：添加一个新文件
-pub fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<VaultHash, AddFileError> {
+pub(crate) fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<VaultHash, AddFileError> {
     // 阶段 1: 加密
-    let data_dir = vault.root_path.join(DATA_SUBDIR);
-    let file_to_add = encrypt_file_for_add_standalone(&data_dir, source_path, dest_path)?;
+    // 使用 self.storage
+    let file_to_add = prepare_addition_task_standalone(vault.storage.as_ref(), source_path, dest_path)?;
 
     let hash = file_to_add.file_entry.sha256sum.clone();
 
     // 阶段 2: 提交 (批量 API，但只传一个)
-    commit_add_files(vault, vec![file_to_add])?;
+    execute_addition_tasks(vault, vec![file_to_add])?;
 
     Ok(hash)
 }
 
-/// 辅助函数：移动文件（在事务中调用）
-fn move_temp_files_to_data(
-    files: Vec<EncryptedAddingFile>, // 接收所有权
-    data_dir_path: &Path,
-    _tx: &Transaction,
+/// 辅助函数：提交文件到存储后端
+fn commit_storage_files(
+    files: Vec<AdditionTask>, // 接收所有权
+    storage: &dyn StorageBackend,
 ) -> Result<(), AddFileError> {
     for file_to_add in files {
-        let final_path = data_dir_path.join(&file_to_add.file_entry.sha256sum.to_string());
-
-        file_to_add.temp_file.persist(final_path)
-            .map_err(|persist_error| {
-                AddFileError::ReadError(persist_error.error)
-            })?;
+        // 调用后端的 commit_write
+        // 这通常会将暂存文件重命名/移动到最终位置
+        storage.commit_write(file_to_add.staging_token, &file_to_add.file_entry.sha256sum)
+            .map_err(AddFileError::IoError)?;
     }
     Ok(())
 }
 
-/// 辅助函数：根据源路径和目标路径解析最终的文件路径。
-///
-/// - `source_path` = "local/file.txt"
-/// - `dest_path` = "/vault/docs/" -> Ok("/vault/docs/file.txt")
-/// - `dest_path` = "/vault/report.txt" -> Ok("/vault/report.txt")
+/// 辅助函数：根据源路径和目标路径解析最终的文件路径。 (保持不变)
 fn resolve_final_path(source_path: &Path, dest_path: &VaultPath) -> Result<VaultPath, AddFileError> {
     if dest_path.is_dir() {
         // 目标是目录，附加源文件名

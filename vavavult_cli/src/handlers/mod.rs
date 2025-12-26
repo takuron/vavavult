@@ -1,10 +1,12 @@
 pub(crate) mod add;
-pub(crate) mod list;
-pub(crate) mod open;
 pub(crate) mod extract;
+pub(crate) mod list;
+pub(crate) mod move_cl;
+pub(crate) mod open;
+pub(crate) mod passwd;
 pub(crate) mod remove;
 pub(crate) mod rename;
+pub(crate) mod search;
 pub(crate) mod tag;
 pub(crate) mod vault;
-pub(crate) mod search;
-pub(crate) mod move_cl;
+pub(crate) mod verify;

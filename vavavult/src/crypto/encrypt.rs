@@ -2,24 +2,50 @@ use std::fs;
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
-use crate::file::stream_cipher;
+use crate::crypto::stream_cipher;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use tempfile::NamedTempFile;
 use crate::common::hash::VaultHash;
 use crate::utils::random::generate_random_string;
 
+/// Defines errors that can occur during high-level encryption/decryption operations.
+//
+// // 定义在高级加密/解密操作期间可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum EncryptError {
+    /// An I/O error occurred (e.g., file reading/writing failed).
+    //
+    // // 发生 I/O 错误 (例如，文件读取/写入失败)。
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// An error occurred in the underlying stream cipher encryption/decryption.
+    //
+    // // 底层流密码加密/解密过程中发生错误。
     #[error("Stream cipher error: {0}")]
     StreamCipher(#[from] stream_cipher::StreamCipherError),
+
+    /// A string conversion failed because the byte sequence is not valid UTF-8.
+    //
+    // // 字符串转换失败，因为字节序列不是有效的 UTF-8。
     #[error("String is not valid UTF-8: {0}")]
     Utf8(#[from] std::string::FromUtf8Error),
+
+    /// Base64 decoding failed (e.g., invalid characters or format).
+    //
+    // // Base64 解码失败 (例如，无效字符或格式)。
     #[error("Base64 decoding error: {0}")]
     Base64(#[from] base64::DecodeError),
+
+    /// An error occurred in the OpenSSL random number generator.
+    //
+    // // OpenSSL 随机数生成器发生错误。
     #[error("OpenSSL rand error: {0}")]
     Rand(#[from] openssl::error::ErrorStack),
+
+    /// Failed to persist a temporary file to its final destination.
+    //
+    // // 无法将临时文件持久化到其最终目标位置。
     #[error("Tempfile persistence error: {0}")]
     TempFilePersist(#[from] tempfile::PersistError),
 }
@@ -43,7 +69,7 @@ pub fn create_v2_encrypt_check(password: &str) -> Result<String, EncryptError> {
     Ok(format!("{}:{}", raw_check_string, encrypted_base64))
 }
 
-/// V2: 验证加密检查字符串 (此函数无需更改)
+/// V2: 验证加密检查字符串
 ///
 /// # Arguments
 /// * `check_string` - "raw:encrypted_base64" 格式的字符串
@@ -69,17 +95,15 @@ pub fn verify_v2_encrypt_check(check_string: &str, password: &str) -> bool {
 // --- 文件加解密 (保持不变) ---
 
 /// 加密一个文件。
-/// [注意] V2 中，此函数需要更新以返回 (encrypted_sha256, original_sha256)
-/// 我们将在稍后修改 'stream_cipher.rs' 时更新它。
-pub fn encrypt_file(
+/// 此函数需要更新以返回 (encrypted_sha256, original_sha256)
+pub fn _encrypt_file(
     source_path: &Path,
     dest_path: &Path,
     password: &str,
-) -> Result<(VaultHash, VaultHash), EncryptError> { // [修改] 返回值
+) -> Result<(VaultHash, VaultHash), EncryptError> {
     let mut source_file = File::open(source_path)?;
     let mut dest_file = File::create(dest_path)?;
 
-    // [修改] stream_encrypt_and_hash 现在返回两个哈希值
     let (encrypted_sha256, original_sha256) = stream_cipher::stream_encrypt_and_hash(
         &mut source_file,
         &mut dest_file,
@@ -89,7 +113,7 @@ pub fn encrypt_file(
 }
 
 /// 解密一个文件，并返回解密后内容的 SHA256 哈希。
-pub fn decrypt_file(
+pub fn _decrypt_file(
     source_path: &Path,
     dest_path: &Path,
     password: &str,

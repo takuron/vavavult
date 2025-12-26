@@ -1,80 +1,79 @@
-use std::error::Error;
-use std::{fs};
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::core::helpers::{
+    Target, determine_output_path, find_file_entry, get_all_files_recursively, identify_target,
+};
+use crate::errors::CliError;
+use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
-use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{execute_extraction_task_standalone, DirectoryEntry, ExtractionTask, QueryResult, Vault};
 use rayon::prelude::*;
-use vavavult::common::hash::VaultHash;
-use crate::utils::{confirm_action, determine_output_path, get_all_files_recursively};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use vavavult::file::{FileEntry, VaultPath};
+use vavavult::vault::{DirectoryEntry, ExtractionTask, Vault, execute_extraction_task_standalone};
 
 /// 主处理函数，根据新的 CLI 签名分发任务
 pub fn handle_extract(
     vault: Arc<Mutex<Vault>>,
-    path: Option<String>,
-    hash: Option<String>,
+    target: String,
     destination: PathBuf,
     output_name: Option<String>,
     non_recursive: bool,
     delete: bool,
     parallel: bool,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), CliError> {
+    let target_obj = identify_target(&target)?;
 
-    if let Some(h) = hash {
-        // --- Case 1: Extract by Hash ---
-        if non_recursive {
-            println!("Warning: --non-recursive has no effect when extracting by hash.");
-        }
-        if parallel {
-            println!("Warning: --parallel has no effect when extracting a single file.");
-        }
-
-        // [要求 3] 验证完整的哈希
-        let vault_hash = VaultHash::from_str(&h)?;
-        let file_entry = { // Scoped lock
-            let vault_guard = vault.lock().unwrap();
-            match vault_guard.find_by_hash(&vault_hash)? {
-                QueryResult::Found(entry) => entry,
-                QueryResult::NotFound => return Err("File not found by hash.".into()),
-            }
-        };
-        handle_extract_single_file(vault, file_entry, &destination, output_name, delete)
-
-    } else if let Some(p) = path {
-        // 使用 VaultPath 处理
-        let vault_path = VaultPath::from(p.as_str());
-
-        if vault_path.is_file() {
-            // --- Case 2: Extract by File Path ---
+    match target_obj {
+        Target::Hash(_) => {
+            // --- Case 1: Extract by Hash (Single File) ---
             if non_recursive {
-                println!("Warning: --non-recursive has no effect when extracting a single file.");
+                println!("Warning: --non-recursive has no effect when extracting by hash.");
             }
             if parallel {
                 println!("Warning: --parallel has no effect when extracting a single file.");
             }
-            let file_entry = { // Scoped lock
+
+            // 使用 scoped lock 获取 entry
+            let file_entry = {
                 let vault_guard = vault.lock().unwrap();
-                match vault_guard.find_by_path(&vault_path)? {
-                    QueryResult::Found(entry) => entry,
-                    QueryResult::NotFound => return Err("File not found by path.".into()),
-                }
+                find_file_entry(&vault_guard, &target)?
             };
             handle_extract_single_file(vault, file_entry, &destination, output_name, delete)
-
-        } else {
-            // --- Case 3: Extract by Directory Path ---
-            if output_name.is_some() {
-                return Err("--output (-o) cannot be used when extracting a directory.".into());
-            }
-
-            // 调用目录处理器
-            handle_extract_directory(vault, &vault_path, &destination, non_recursive, delete, parallel)
         }
-    } else {
-        unreachable!("Clap should prevent this state.");
+        Target::Path(vault_path) => {
+            if vault_path.is_file() {
+                // --- Case 2: Extract by File Path ---
+                if non_recursive {
+                    println!(
+                        "Warning: --non-recursive has no effect when extracting a single file."
+                    );
+                }
+                if parallel {
+                    println!("Warning: --parallel has no effect when extracting a single file.");
+                }
+                let file_entry = {
+                    let vault_guard = vault.lock().unwrap();
+                    find_file_entry(&vault_guard, &target)?
+                };
+                handle_extract_single_file(vault, file_entry, &destination, output_name, delete)
+            } else {
+                // --- Case 3: Extract by Directory Path ---
+                if output_name.is_some() {
+                    return Err(CliError::InvalidCommand(
+                        "--output (-o) cannot be used when extracting a directory.".to_string(),
+                    ));
+                }
+                handle_extract_directory(
+                    vault,
+                    &vault_path,
+                    &destination,
+                    non_recursive,
+                    delete,
+                    parallel,
+                )
+            }
+        }
     }
 }
 
@@ -86,7 +85,7 @@ fn handle_extract_single_file(
     destination: &Path,
     output_name: Option<String>,
     delete: bool,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), CliError> {
     // 目标路径现在是目录，文件名从 -o 或原始文件名推断
     let final_path = determine_output_path(&file_entry, destination.to_path_buf(), output_name);
 
@@ -131,18 +130,22 @@ fn handle_extract_directory(
     non_recursive: bool,
     delete: bool,
     parallel: bool,
-) -> Result<(), Box<dyn Error>> {
-
-    println!("Scanning vault directory '{}' for extraction...", vault_path);
+) -> Result<(), CliError> {
+    println!(
+        "Scanning vault directory '{}' for extraction...",
+        vault_path
+    );
 
     // --- 1. 收集文件 (加锁) ---
-    let files_to_extract = { // Scoped lock
+    let files_to_extract = {
+        // Scoped lock
         let vault_guard = vault.lock().unwrap();
         if non_recursive {
             println!("(Non-recursive mode enabled)");
             // 使用新的 list_entries 高效 API，直接获取 FileEntry
-            let entries = vault_guard.list_entries_by_path(vault_path)?;
-            entries.into_iter()
+            let entries = vault_guard.list_by_path(vault_path)?;
+            entries
+                .into_iter()
                 .filter_map(|entry| match entry {
                     DirectoryEntry::File(file_entry) => Some(file_entry),
                     DirectoryEntry::Directory(_) => None, // 在非递归模式下忽略子目录
@@ -162,10 +165,16 @@ fn handle_extract_directory(
 
     // ... (后续逻辑保持不变) ...
     // --- 2. 确认 (不变) ---
-    println!("The following {} files will be extracted to {:?}", files_to_extract.len(), destination);
+    println!(
+        "The following {} files will be extracted to {:?}",
+        files_to_extract.len(),
+        destination
+    );
     for entry in &files_to_extract {
         // 计算相对路径
-        let relative_path = entry.path.as_str()
+        let relative_path = entry
+            .path
+            .as_str()
             .strip_prefix(vault_path.as_str())
             .unwrap_or_else(|| entry.path.as_str().trim_start_matches('/'));
 
@@ -175,7 +184,9 @@ fn handle_extract_directory(
     }
 
     if delete {
-        println!("WARNING: The original files will be PERMANENTLY DELETED from the vault after extraction.");
+        println!(
+            "WARNING: The original files will be PERMANENTLY DELETED from the vault after extraction."
+        );
     }
     if !confirm_action("Do you want to proceed?")? {
         println!("Operation cancelled.");
@@ -186,7 +197,13 @@ fn handle_extract_directory(
     if parallel {
         run_directory_extract_parallel(vault, files_to_extract, vault_path, destination, delete)
     } else {
-        run_directory_extract_single_threaded(vault, files_to_extract, vault_path, destination, delete)
+        run_directory_extract_single_threaded(
+            vault,
+            files_to_extract,
+            vault_path,
+            destination,
+            delete,
+        )
     }
 }
 
@@ -196,13 +213,17 @@ fn run_directory_extract_single_threaded(
     files_to_extract: Vec<FileEntry>,
     base_vault_path: &VaultPath,
     destination: &Path,
-    delete: bool
-) -> Result<(), Box<dyn Error>> {
-
+    delete: bool,
+) -> Result<(), CliError> {
     let pb = ProgressBar::new(files_to_extract.len() as u64);
-    pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
-        .progress_chars("#>-"));
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .map_err(|e| CliError::Unexpected(e.to_string()))?
+            .progress_chars("#>-"),
+    );
 
     let mut success_count = 0;
     let mut fail_count = 0;
@@ -210,7 +231,9 @@ fn run_directory_extract_single_threaded(
 
     for entry in &files_to_extract {
         // [V2 修改] 计算相对路径
-        let relative_path_str = entry.path.as_str()
+        let relative_path_str = entry
+            .path
+            .as_str()
             .strip_prefix(base_vault_path.as_str())
             .unwrap_or_else(|| entry.path.as_str().trim_start_matches('/'));
 
@@ -218,7 +241,10 @@ fn run_directory_extract_single_threaded(
 
         if let Some(parent) = final_path.parent() {
             if let Err(e) = fs::create_dir_all(parent) {
-                pb.println(format!("FAILED to create local directory for {}: {}", entry.path, e));
+                pb.println(format!(
+                    "FAILED to create local directory for {}: {}",
+                    entry.path, e
+                ));
                 fail_count += 1;
                 pb.inc(1);
                 continue;
@@ -252,9 +278,14 @@ fn run_directory_extract_single_threaded(
         }
 
         let pb_delete = ProgressBar::new(success_count as u64);
-        pb_delete.set_style(ProgressStyle::default_bar()
-            .template("{spinner:.green} [Deleting] [{elapsed_precise}] [{bar:40.red/yellow}] {pos}/{len}")?
-            .progress_chars("#>-"));
+        pb_delete.set_style(
+            ProgressStyle::default_bar()
+                .template(
+                    "{spinner:.green} [Deleting] [{elapsed_precise}] [{bar:40.red/yellow}] {pos}/{len}",
+                )
+                .map_err(|e| CliError::Unexpected(e.to_string()))?
+                .progress_chars("#>-"),
+        );
 
         for entry in successfully_extracted {
             let mut vault_guard = vault.lock().unwrap();
@@ -276,63 +307,63 @@ fn run_directory_extract_parallel(
     files_to_extract: Vec<FileEntry>,
     base_vault_path: &VaultPath,
     destination: &Path,
-    delete: bool
-) -> Result<(), Box<dyn Error>> {
-
+    delete: bool,
+) -> Result<(), CliError> {
     let total_count = files_to_extract.len();
     let pb = ProgressBar::new(total_count as u64);
-    pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [Extracting] [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
-        .progress_chars("#>-"));
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [Extracting] [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+            )
+            .map_err(|e| CliError::Unexpected(e.to_string()))?
+            .progress_chars("#>-"),
+    );
 
     // --- 阶段 1: 准备任务 (加锁) ---
-    // (在一个锁块中准备所有任务)
     let tasks: Vec<(ExtractionTask, PathBuf, FileEntry)> = {
         let vault_guard = vault.lock().unwrap();
-        files_to_extract.into_iter().map(|entry| {
-            // 准备任务
-            let task = vault_guard.prepare_extraction_task(&entry.sha256sum).unwrap();
-
-            // 计算路径
-            let relative_path_str = entry.path.as_str()
-                .strip_prefix(base_vault_path.as_str())
-                .unwrap_or_else(|| entry.path.as_str().trim_start_matches('/'));
-            let final_path = destination.join(relative_path_str);
-
-            (task, final_path, entry)
-        }).collect()
+        files_to_extract
+            .into_iter()
+            .map(|entry| {
+                let task = vault_guard.prepare_extraction_task(&entry.sha256sum)?;
+                let relative_path_str = entry
+                    .path
+                    .as_str()
+                    .strip_prefix(base_vault_path.as_str())
+                    .unwrap_or_else(|| entry.path.as_str().trim_start_matches('/'));
+                let final_path = destination.join(relative_path_str);
+                Ok((task, final_path, entry))
+            })
+            .collect::<Result<Vec<_>, CliError>>()?
     };
     // ** 锁在此处释放 **
 
     // --- 阶段 2: 并行执行 (无锁) ---
+    let storage = vault.lock().unwrap().storage.clone();
     let fail_count = Arc::new(AtomicUsize::new(0));
 
-    let extraction_results: Vec<(FileEntry, Result<(), Box<dyn Error + Send + Sync>>)> = tasks
+    let extraction_results: Vec<(FileEntry, Result<(), CliError>)> = tasks
         .into_par_iter()
         .map(|(task, final_path, entry)| {
             let pb_clone = pb.clone();
             let fail_count_clone = Arc::clone(&fail_count);
 
-            // 确保目录存在 (此操作是幂等的，并行安全)
-            if let Some(parent) = final_path.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    pb_clone.println(format!("FAILED to create local directory for {}: {}", entry.path, e));
-                    fail_count_clone.fetch_add(1, Ordering::SeqCst);
-                    pb_clone.inc(1);
-                    return (entry, Err(Box::new(e) as Box<dyn Error + Send + Sync>));
+            let execution_result = (|| -> Result<(), CliError> {
+                if let Some(parent) = final_path.parent() {
+                    fs::create_dir_all(parent)?;
                 }
-            }
+                execute_extraction_task_standalone(storage.as_ref(), &task, &final_path)?;
+                Ok(())
+            })();
 
-            // 调用无锁的 standalone 函数
-            let result = execute_extraction_task_standalone(&task, &final_path);
-
-            if let Err(e) = &result {
+            if let Err(e) = &execution_result {
                 pb_clone.println(format!("FAILED to extract {}: {}", entry.path, e));
                 fail_count_clone.fetch_add(1, Ordering::SeqCst);
             }
 
             pb_clone.inc(1);
-            (entry, result.map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>))
+            (entry, execution_result)
         })
         .collect();
 
@@ -356,9 +387,14 @@ fn run_directory_extract_parallel(
         }
 
         let pb_delete = ProgressBar::new(successes as u64);
-        pb_delete.set_style(ProgressStyle::default_bar()
-            .template("{spinner:.green} [Deleting] [{elapsed_precise}] [{bar:40.red/yellow}] {pos}/{len}")?
-            .progress_chars("#>-"));
+        pb_delete.set_style(
+            ProgressStyle::default_bar()
+                .template(
+                    "{spinner:.green} [Deleting] [{elapsed_precise}] [{bar:40.red/yellow}] {pos}/{len}",
+                )
+                .map_err(|e| CliError::Unexpected(e.to_string()))?
+                .progress_chars("#>-"),
+        );
 
         for entry in successfully_extracted {
             let mut vault_guard = vault.lock().unwrap();

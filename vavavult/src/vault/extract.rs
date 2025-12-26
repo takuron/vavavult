@@ -1,8 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::fs;
-use crate::common::constants::DATA_SUBDIR;
+use tempfile::NamedTempFile;
 use crate::common::hash::{HashParseError, VaultHash};
-use crate::file::encrypt::EncryptError;
+use crate::crypto::encrypt::EncryptError;
+use crate::crypto::stream_cipher;
+use crate::storage::StorageBackend;
 use crate::vault::{query, QueryResult, Vault};
 
 /// Defines errors that can occur during the file extraction process.
@@ -50,7 +52,13 @@ pub enum ExtractError {
         path: String,
         expected: String,
         calculated: String,
-    }
+    },
+
+    /// An error occurred during the stream decryption process.
+    //
+    // // 流解密过程中发生错误。
+    #[error("Stream cipher error: {0}")]
+    StreamCipherError(#[from] stream_cipher::StreamCipherError)
 }
 
 /// A "ticket" containing all necessary information to perform a file extraction.
@@ -60,21 +68,9 @@ pub enum ExtractError {
 // // 由 `Vault::prepare_extraction_task` 返回，并且是线程安全的。
 #[derive(Debug, Clone)]
 pub struct ExtractionTask {
-    /// The path to the encrypted file within the `data/` directory.
-    //
-    // // `data/` 目录中加密文件的路径。
-    pub internal_path: PathBuf,
-    /// The password required to decrypt this specific file.
-    //
-    // // 解密此特定文件所需的密码。
+    pub file_hash: VaultHash,
     pub password: String,
-    /// The expected hash of the *original* (decrypted) content.
-    //
-    // // *原始* (解密后) 内容的预期哈希值。
     pub expected_original_hash: VaultHash,
-    /// The original vault path of the file (used for logging).
-    //
-    // // 文件的原始保险库路径 (仅用于日志记录)。
     pub original_vault_path: String,
 }
 
@@ -92,15 +88,14 @@ pub(crate) fn prepare_extraction_task(
         }
     };
 
-    // 2. 确定源文件路径
-    let internal_path = vault.root_path.join(DATA_SUBDIR).join(sha256sum.to_string());
-    if !internal_path.exists() {
+    // 2. 检查存储后端是否存在该文件
+    if !vault.storage.exists(sha256sum)? {
         return Err(ExtractError::FileNotFound(sha256sum.to_string()));
     }
 
     // 3. 打包为 "工作票据"
     Ok(ExtractionTask {
-        internal_path,
+        file_hash: sha256sum.clone(), // 保存哈希
         password: file_entry.encrypt_password,
         expected_original_hash: file_entry.original_sha256sum,
         original_vault_path: file_entry.path.to_string(),
@@ -110,6 +105,7 @@ pub(crate) fn prepare_extraction_task(
 /// (阶段 2) 执行一个已准备好的提取任务。
 /// 这是一个缓慢的、线程安全的函数（无 `&Vault` 锁）。
 pub(crate) fn execute_extraction_task_standalone(
+    storage: &dyn StorageBackend, // [新增]
     task: &ExtractionTask,
     destination_path: &Path,
 ) -> Result<(), ExtractError> {
@@ -118,14 +114,22 @@ pub(crate) fn execute_extraction_task_standalone(
         fs::create_dir_all(parent_dir)?;
     }
 
-    // 2. 执行解密 (缓慢的操作)
-    let calculated_original_hash = crate::file::encrypt::decrypt_file(
-        &task.internal_path,
-        destination_path,
-        &task.password,
-    )?;
+    // 2. 从存储后端获取读取器
+    let mut encrypted_reader = storage.reader(&task.file_hash)?;
 
-    // 3. 比较哈希 (完整性检查)
+    // 3. 准备原子写入 (写入同目录下的临时文件)
+    // 这里的逻辑复用了原 decrypt_file 中的思路
+    let parent_dir = destination_path.parent().unwrap_or(Path::new("."));
+    let mut temp_file = NamedTempFile::new_in(parent_dir)?;
+
+    // 4. 执行解密 (直接调用 stream_cipher)
+    let calculated_original_hash = stream_cipher::stream_decrypt(
+        &mut encrypted_reader,
+        &mut temp_file,
+        &task.password,
+    )?; // 会自动转换为 ExtractError (需确保 StreamCipherError 实现了 Into)
+
+    // 5. 比较哈希 (完整性检查)
     if calculated_original_hash != task.expected_original_hash {
         return Err(ExtractError::IntegrityCheckFailed {
             path: task.original_vault_path.clone(),
@@ -133,6 +137,9 @@ pub(crate) fn execute_extraction_task_standalone(
             calculated: calculated_original_hash.to_string(),
         });
     }
+
+    // 6. 持久化 (Rename)
+    temp_file.persist(destination_path).map_err(EncryptError::TempFilePersist)?;
 
     Ok(())
 }
@@ -143,9 +150,6 @@ pub(crate) fn extract_file(
     sha256sum: &VaultHash,
     destination_path: &Path,
 ) -> Result<(), ExtractError> {
-    // 阶段 1: 准备 (快速, 有锁)
     let task = prepare_extraction_task(vault, sha256sum)?;
-
-    // 阶段 2: 执行 (缓慢, 无锁)
-    execute_extraction_task_standalone(&task, destination_path)
+    execute_extraction_task_standalone(vault.storage.as_ref(), &task, destination_path)
 }

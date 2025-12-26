@@ -1,26 +1,35 @@
-use std::fs;
-use rusqlite::params;
-use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_FEATURES, META_VAULT_UPDATE_TIME};
+use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
+use crate::crypto::encrypt::{EncryptError, create_v2_encrypt_check, verify_v2_encrypt_check};
 use crate::file::{PathError, VaultPath};
-use crate::utils::time::now_as_rfc3339_string;
-use crate::vault::{query, QueryResult, Vault};
+use crate::storage::StorageBackend;
+use crate::vault::config::VaultConfig;
+use crate::vault::metadata::{self, MetadataError};
+use crate::vault::open::OpenError;
+use crate::vault::{QueryResult, Vault, query};
+use rusqlite::{Connection, params};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::io;
+use std::path::Path;
 
-/// Defines errors that can occur during metadata or file path update operations.
+const BUFFER_LEN: usize = 8192;
+
+/// Defines errors that can occur during file path or vault configuration update operations.
 //
-// // 定义在元数据或文件路径更新操作期间可能发生的错误。
+// // 定义在文件路径或保险库配置更新操作期间可能发生的错误。
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
-    /// A database query failed (e.g., file not found).
+    /// A database query failed.
     //
-    // // 数据库查询失败 (例如，文件未找到)。
+    // // 数据库查询失败。
     #[error("Database query error: {0}")]
     QueryError(#[from] query::QueryError),
 
-    /// An error occurred while executing a database update (e.g., INSERT, UPDATE, DELETE).
+    /// An error occurred while executing a database update.
     //
-    // // 执行数据库更新 (例如 INSERT, UPDATE, DELETE) 时发生错误。
+    // // 执行数据库更新时发生错误。
     #[error("Database update error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
 
@@ -36,29 +45,23 @@ pub enum UpdateError {
     #[error("File with SHA256 '{0}' not found.")]
     FileNotFound(String),
 
-    /// The target `VaultPath` for a move/rename operation is already in use by another file.
+    /// The target `VaultPath` is already in use by another file.
     //
-    // // 移动/重命名操作的目标 `VaultPath` 已被另一个文件占用。
+    // // 目标 `VaultPath` 已被另一个文件占用。
     #[error("Target path '{0}' is already taken.")]
     DuplicateTargetPath(String),
 
-    /// The target `VaultPath` was a directory, but a file path was required.
+    /// The new filename is invalid (e.g., contains path separators).
     //
-    // // 目标 `VaultPath` 是一个目录，但需要的是文件路径。
-    #[error("Target path '{0}' is invalid: must be a file path, not a directory path.")]
-    InvalidTargetFilePath(String),
-
-    /// The new filename for `rename_file_inplace` contained path separators (`/` or `\`).
-    //
-    // // `rename_file_inplace` 的新文件名包含路径分隔符 (`/` 或 `\`)。
+    // // 新文件名无效 (例如包含路径分隔符)。
     #[error("Invalid new filename '{0}': contains path separators.")]
     InvalidFilename(String),
 
-    /// An I/O error occurred while writing the `master.json` config file.
+    /// An I/O error occurred.
     //
-    // // 写入 `master.json` 配置文件时发生 I/O 错误。
-    #[error("Failed to write configuration file: {0}")]
-    ConfigWriteError(#[from] std::io::Error),
+    // // 发生 I/O 错误。
+    #[error("I/O error: {0}")]
+    Io(#[from] io::Error),
 
     /// Failed to serialize the `master.json` configuration.
     //
@@ -66,339 +69,178 @@ pub enum UpdateError {
     #[error("Failed to serialize configuration: {0}")]
     SerializationError(#[from] serde_json::Error),
 
-    /// The specified metadata key was not found.
+    /// The feature name is invalid (e.g., contains spaces).
     //
-    // // 未找到指定的元数据键。
-    #[error("Metadata key '{0}' not found.")]
-    MetadataKeyNotFound(String),
+    // // 功能名称无效 (例如包含空格)。
+    #[error("Invalid feature name '{0}': Feature names cannot contain spaces.")]
+    InvalidFeatureName(String),
 
-    /// The hash string provided was in an invalid format.
+    /// Hash parsing failed.
     //
-    // // 提供的哈希字符串格式无效。
+    // // 哈希解析失败。
     #[error("Wrong hash error: {0}")]
     HashParseError(#[from] HashParseError),
 
-    // 功能名称无效错误
-    #[error("Invalid feature name '{0}': Feature names cannot contain spaces.")]
-    InvalidFeatureName(String),
+    /// A metadata operation failed (e.g., updating timestamps).
+    //
+    // // 元数据操作失败 (例如更新时间戳)。
+    #[error("Metadata operation failed: {0}")]
+    MetadataError(#[from] MetadataError),
+
+    /// The calculated hash of the encrypted content does not match its identifier hash.
+    //
+    // // 加密内容的计算哈希与其标识符哈希不匹配。
+    #[error("File is corrupt: integrity check failed for hash {0}")]
+    IntegrityMismatch(String),
+
+    /// An error occurred while trying to open or read the vault configuration.
+    #[error("Failed to open or read vault configuration: {0}")]
+    Open(#[from] OpenError),
+
+    /// The provided old password was incorrect.
+    #[error("The provided old password is not correct.")]
+    InvalidOldPassword,
+
+    /// An error occurred during the creation of the encryption check string.
+    #[error("Encryption check creation error: {0}")]
+    EncryptCheck(#[from] EncryptError),
 }
 
-/// 移动保险库中的文件到新的路径。
-///
-/// - 如果 `target_path` 是目录 (e.g., `/new/dir/`), 文件会被移动到该目录下，保持原文件名。
-/// - 如果 `target_path` 是文件 (e.g., `/new/dir/new_name.txt`), 文件会被移动并重命名。
+/// Moves a file within the vault to a new path.
 pub(crate) fn move_file(
     vault: &Vault,
     hash: &VaultHash,
-    target_path: &VaultPath
+    target_path: &VaultPath,
 ) -> Result<(), UpdateError> {
-    // 1. 查找原始文件信息
+    // 1. Find original entry
     let original_entry = match query::check_by_hash(vault, hash)? {
         QueryResult::Found(entry) => entry,
         QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
     };
     let original_vault_path = original_entry.path.clone();
 
-    // 2. 解析最终的目标路径
+    // 2. Resolve final path
     let final_path = if target_path.is_dir() {
-        // 目标是目录，保留原文件名
-        let original_filename = original_vault_path.file_name()
-            .ok_or_else(|| UpdateError::VaultPathError(PathError::JoinToFile))?; // 理论上不会发生，因为库中存的总是文件路径
+        let original_filename = original_vault_path
+            .file_name()
+            .ok_or_else(|| UpdateError::VaultPathError(PathError::JoinToFile))?;
         target_path.join(original_filename)?
     } else {
-        // 目标是文件，直接使用
         target_path.clone()
     };
 
-    // 3. 检查目标路径是否已被占用 (排除自身)
+    // 3. Check for duplicates
     if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
         return if existing.sha256sum != *hash {
-            Err(UpdateError::DuplicateTargetPath(final_path.as_str().to_string()))
+            Err(UpdateError::DuplicateTargetPath(
+                final_path.as_str().to_string(),
+            ))
         } else {
-            // 目标路径就是当前路径，无需操作
             Ok(())
-        }
+        };
     }
 
-    // 4. 执行更新
+    // 4. Execute update
     let rows_affected = vault.database_connection.execute(
         "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
         params![final_path.as_str(), hash],
     )?;
 
     if rows_affected == 0 {
-        // 理论上不应该发生，因为我们已经确认文件存在
         return Err(UpdateError::FileNotFound(hash.to_string()));
     }
 
-    touch_file_update_time(vault, hash)?;
+    // 5. Update timestamp (using metadata module)
+    metadata::touch_file_update_time(vault, hash)?;
     Ok(())
 }
 
-/// 在当前目录下重命名文件。
-///
-/// 只改变文件的名称部分，保持其父目录不变。
+/// Renames a file in-place (keeping the same parent directory).
 pub(crate) fn rename_file_inplace(
     vault: &Vault,
     hash: &VaultHash,
-    new_filename: &str
+    new_filename: &str,
 ) -> Result<(), UpdateError> {
-    // 1. 验证新文件名不包含路径分隔符
     if new_filename.contains('/') || new_filename.contains('\\') {
         return Err(UpdateError::InvalidFilename(new_filename.to_string()));
     }
 
-    // 2. 查找原始文件信息
     let original_entry = match query::check_by_hash(vault, hash)? {
         QueryResult::Found(entry) => entry,
         QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
     };
-    let original_vault_path = original_entry.path.clone();
 
-    // 3. 获取父目录
-    let parent_dir = original_vault_path.parent()?; // parent() 返回 Result
-
-    // 4. 构建新的文件路径
+    let parent_dir = original_entry.path.parent()?;
     let final_path = parent_dir.join(new_filename)?;
 
-    // 5. 检查目标路径是否已被占用 (排除自身)
     if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
         if existing.sha256sum != *hash {
-            return Err(UpdateError::DuplicateTargetPath(final_path.as_str().to_string()));
+            return Err(UpdateError::DuplicateTargetPath(
+                final_path.as_str().to_string(),
+            ));
         } else {
-            // 目标路径就是当前路径，无需操作
             return Ok(());
         }
     }
 
-    // 6. 执行更新
     let rows_affected = vault.database_connection.execute(
         "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
         params![final_path.as_str(), hash],
     )?;
 
     if rows_affected == 0 {
-        // 理论上不应该发生
         return Err(UpdateError::FileNotFound(hash.to_string()));
     }
 
-    touch_file_update_time(vault, hash)?;
+    metadata::touch_file_update_time(vault, hash)?;
     Ok(())
 }
 
-// [废弃] 重命名保险库中的一个文件 (更新其路径)。
-// #[deprecated(since="0.3.0", note="Use `move_file` or `rename_file_inplace` instead")]
-// pub fn rename_file(vault: &Vault, sha256sum: &VaultHash, new_path: &VaultPath) -> Result<(), UpdateError> {
-//     // 保留旧实现，但标记为废弃
-//     if !new_path.is_file() {
-//         return Err(UpdateError::InvalidTargetFilePath(new_path.as_str().to_string()));
-//     }
-//     let normalized_new_path = new_path.as_str();
-//     if let QueryResult::Found(entry) = query::check_by_path(vault, new_path)? {
-//         return if &entry.sha256sum != sha256sum {
-//             Err(UpdateError::DuplicateTargetPath(normalized_new_path.to_string()))
-//         } else {
-//             Ok(())
-//         }
-//     }
-//     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-//         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-//     }
-//     let rows_affected = vault.database_connection.execute(
-//         "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
-//         params![normalized_new_path, sha256sum],
-//     )?;
-//     if rows_affected == 0 {
-//         return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-//     }
-//     touch_file_update_time(vault, sha256sum)?;
-//     Ok(())
-// }
+// --- Vault Config Operations ---
 
-
-// --- 文件标签操作 (不变) ---
-
-/// 为文件添加一个标签。
-pub(crate) fn add_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), UpdateError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-    }
-    vault.database_connection.execute(
-        "INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES (?1, ?2)",
-        params![sha256sum, tag],
-    )?;
-    touch_file_update_time(vault, sha256sum)?;
-    Ok(())
-}
-
-/// 为文件批量添加多个标签。
-pub(crate) fn add_tags(vault: &mut Vault, sha256sum: &VaultHash, tags: &[&str]) -> Result<(), UpdateError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-    }
-    let tx = vault.database_connection.transaction()?;
-    {
-        let mut stmt = tx.prepare("INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES (?1, ?2)")?;
-        for tag in tags {
-            stmt.execute(params![sha256sum, tag])?;
-        }
-    }
-    tx.commit()?;
-    Ok(())
-}
-
-/// 从文件中删除一个标签。
-pub(crate) fn remove_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), UpdateError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-    }
-    vault.database_connection.execute(
-        "DELETE FROM tags WHERE file_sha256sum = ?1 AND tag = ?2",
-        params![sha256sum, tag],
-    )?;
-    touch_file_update_time(vault, sha256sum)?;
-    Ok(())
-}
-
-/// 删除一个文件的所有标签。
-pub(crate) fn clear_tags(vault: &Vault, sha256sum: &VaultHash) -> Result<(), UpdateError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-    }
-    vault.database_connection.execute(
-        "DELETE FROM tags WHERE file_sha256sum = ?1",
-        params![sha256sum],
-    )?;
-    touch_file_update_time(vault, sha256sum)?;
-    Ok(())
-}
-
-// --- 文件元数据操作 (不变) ---
-
-/// Sets a metadata key-value pair for a file (upsert operation).
-pub(crate) fn set_file_metadata(vault: &Vault, sha256sum: &VaultHash, metadata:MetadataEntry) -> Result<(), UpdateError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-    }
-    vault.database_connection.execute(
-        "INSERT OR REPLACE INTO metadata (file_sha256sum, meta_key, meta_value) VALUES (?1, ?2, ?3)",
-        params![sha256sum, metadata.key, metadata.value],
-    )?;
-    if !metadata.key.starts_with(META_PREFIX) {
-        touch_file_update_time(vault, sha256sum)?;
-    }
-    Ok(())
-}
-
-/// Removes a metadata key-value pair from a file.
-pub(crate) fn remove_file_metadata(vault: &Vault, sha256sum: &VaultHash, key: &str) -> Result<(), UpdateError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(UpdateError::FileNotFound(sha256sum.to_string()));
-    }
-    vault.database_connection.execute(
-        "DELETE FROM metadata WHERE file_sha256sum = ?1 AND meta_key = ?2",
-        params![sha256sum, key],
-    )?;
-    if !key.starts_with(META_PREFIX) {
-        touch_file_update_time(vault, sha256sum)?;
-    }
-    Ok(())
-}
-
-// --- 保险库操作 ---
-
-/// 设置保险库的新名称。
+/// Sets the vault name.
 pub(crate) fn set_name(vault: &mut Vault, new_name: &str) -> Result<(), UpdateError> {
     vault.config.name = new_name.to_string();
-    // [修改] 只保存配置，不触碰元数据
     _save_config(vault)
 }
 
-/// 从数据库获取保险库元数据。
-pub(crate) fn get_vault_metadata(vault: &Vault, key: &str) -> Result<String, UpdateError> {
-    vault.database_connection.query_row(
-        "SELECT meta_value FROM vault_metadata WHERE meta_key = ?1",
-        params![key],
-        |row| row.get(0)
-    ).map_err(|e| {
-        if let rusqlite::Error::QueryReturnedNoRows = e {
-            UpdateError::MetadataKeyNotFound(key.to_string())
-        } else {
-            UpdateError::DatabaseError(e)
-        }
-    })
-}
-
-/// 为保险库设置一个元数据键值对 (upsert 操作)。
-pub(crate) fn set_vault_metadata(vault: &mut Vault, metadata_entry: MetadataEntry) -> Result<(), UpdateError> {
-    // 直接操作数据库
-    vault.database_connection.execute(
-        "INSERT OR REPLACE INTO vault_metadata (meta_key, meta_value) VALUES (?1, ?2)",
-        params![metadata_entry.key, metadata_entry.value],
-    )?;
-    Ok(())
-}
-
-/// 从保险库中移除一个元数据键值对。
-pub(crate) fn remove_vault_metadata(vault: &mut Vault, key: &str) -> Result<(), UpdateError> {
-    // [修改] 直接操作数据库
-    let rows_affected = vault.database_connection.execute(
-        "DELETE FROM vault_metadata WHERE meta_key = ?1",
-        params![key],
-    )?;
-    if rows_affected == 0 {
-        return Err(UpdateError::MetadataKeyNotFound(key.to_string()));
-    }
-    Ok(())
-}
-
-// --- [新增] 扩展功能操作 ---
-
-/// 启用一个保险库扩展功能。
-///
-/// 如果功能尚未启用，将其添加到 `_vavavult_feature` 列表中。
-/// 功能名称不能包含空格。
-pub(crate) fn enable_vault_feature(vault: &mut Vault, feature_name: &str) -> Result<(), UpdateError> {
-    // 1. 验证功能名称
+/// Enables a vault extension feature.
+pub(crate) fn enable_vault_feature(
+    vault: &mut Vault,
+    feature_name: &str,
+) -> Result<(), UpdateError> {
     if feature_name.contains(' ') || feature_name.trim().is_empty() {
         return Err(UpdateError::InvalidFeatureName(feature_name.to_string()));
     }
 
-    // 2. 获取当前的功能列表
-    // 如果键不存在 (MetadataKeyNotFound)，我们将其视为空字符串
-    let current_value = match get_vault_metadata(vault, META_VAULT_FEATURES) {
+    // Reuse metadata module logic
+    let current_value = match metadata::get_vault_metadata(vault, META_VAULT_FEATURES) {
         Ok(v) => v,
-        Err(UpdateError::MetadataKeyNotFound(_)) => String::new(),
-        Err(e) => return Err(e),
+        Err(MetadataError::MetadataKeyNotFound(_)) => String::new(),
+        Err(e) => return Err(e.into()),
     };
 
-    // 3. 解析并检查是否存在
     let mut features: Vec<&str> = current_value.split_whitespace().collect();
-
     if features.contains(&feature_name) {
-        // 功能已启用，直接返回成功
         return Ok(());
     }
 
-    // 4. 追加新功能
     features.push(feature_name);
-
-    // 5. 重新组合并保存
-    // 如果是第一个功能，features.join 会处理得很好
     let new_value = features.join(" ");
 
-    set_vault_metadata(vault, MetadataEntry {
-        key: META_VAULT_FEATURES.to_string(),
-        value: new_value,
-    })?;
+    metadata::set_vault_metadata(
+        vault,
+        MetadataEntry {
+            key: META_VAULT_FEATURES.to_string(),
+            value: new_value,
+        },
+    )?;
 
-    // 注意：set_vault_metadata 内部已经调用了 touch_vault_update_time
+    metadata::touch_vault_update_time(vault)?;
     Ok(())
 }
 
-// --- [V2 修改] 私有辅助函数 ---
-
-/// 仅负责将当前的配置状态保存到 `master.json`。
+/// Saves the current configuration to `master.json`.
 fn _save_config(vault: &Vault) -> Result<(), UpdateError> {
     let config_json = serde_json::to_string(&vault.config)?;
     let config_path = vault.root_path.join("master.json");
@@ -406,22 +248,115 @@ fn _save_config(vault: &Vault) -> Result<(), UpdateError> {
     Ok(())
 }
 
-/// 更新保险库的 `_vavavult_update_time` 元数据。
-pub(super) fn touch_vault_update_time(vault: &mut Vault) -> Result<(), UpdateError> {
-    let now = now_as_rfc3339_string();
-    // [修改] 使用 set_vault_metadata 函数
-    set_vault_metadata(vault, MetadataEntry {
-        key: META_VAULT_UPDATE_TIME.to_string(),
-        value: now,
-    })
+/// Verifies the integrity of an encrypted file by re-calculating its SHA256 hash
+/// and comparing it to the expected hash (which is also its ID).
+/// This is a fast, I/O-bound operation that does not perform decryption.
+//
+// // 通过重新计算加密文件的 SHA256 哈希并与预期哈希（即其 ID）进行比较，来验证其完整性。
+// // 这是一个快速的、受 I/O 限制的操作，不执行解密。
+pub fn verify_encrypted_file_hash(
+    storage: &dyn StorageBackend,
+    hash: &VaultHash,
+) -> Result<(), UpdateError> {
+    let mut reader = storage.reader(hash)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; BUFFER_LEN];
+
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let calculated_hash = VaultHash::new(hasher.finalize().into());
+
+    if calculated_hash == *hash {
+        Ok(())
+    } else {
+        Err(UpdateError::IntegrityMismatch(hash.to_string()))
+    }
 }
 
-/// 更新文件的 `_vavavult_update_time` 元数据。 (不变)
-pub(super) fn touch_file_update_time(vault: &Vault, sha256sum: &VaultHash) -> Result<(), UpdateError> {
-    let now = now_as_rfc3339_string();
-    let metadata_entry = MetadataEntry {
-        key: META_FILE_UPDATE_TIME.to_string(),
-        value: now,
-    };
-    set_file_metadata(vault, sha256sum, metadata_entry)
+/// Updates the master password for an encrypted vault.
+///
+/// This function performs a "shallow" update by re-keying the database and updating the
+/// configuration file with a new password verification marker. It does **not** re-encrypt
+/// the individual files stored within the vault. It is designed to operate on a closed vault.
+///
+/// # Arguments
+/// * `vault_path` - The path to the vault's root directory.
+/// * `old_password` - The current master password.
+/// * `new_password` - The new master password to set.
+///
+/// # Returns
+/// `Ok(())` on success, or an `UpdateError` on failure.
+//
+// // 更新加密保险库的主密码。
+// //
+// // 此函数通过重新加密数据库密钥并使用新的密码验证标记更新配置文件来执行“浅层”更新。
+// // 它 **不会** 重新加密保险库中存储的单个文件。该函数设计用于对关闭的保险库进行操作。
+// //
+// // # 参数
+// // * `vault_path` - 保险库根目录的路径。
+// // * `old_password` - 当前的主密码。
+// // * `new_password` - 要设置的新主密码。
+// //
+// // # 返回
+// // 成功时返回 `Ok(())`，失败时返回 `UpdateError`。
+pub(crate) fn update_password(
+    vault_path: &Path,
+    old_password: &str,
+    new_password: &str,
+) -> Result<(), UpdateError> {
+    // 1. Read and parse the existing configuration
+    let config_path = vault_path.join("master.json");
+    if !config_path.exists() {
+        return Err(UpdateError::Open(OpenError::ConfigNotFound));
+    }
+    let config_content = fs::read_to_string(&config_path)?;
+    let mut config: VaultConfig = serde_json::from_str(&config_content)?;
+
+    // 2. Verify the old password
+    if !config.encrypted {
+        // This operation is only meaningful for encrypted vaults.
+        // For now, we can treat it as a no-op success or return an error.
+        // Let's return success as there's no password to update.
+        return Ok(());
+    }
+
+    if !verify_v2_encrypt_check(&config.encrypt_check, old_password) {
+        return Err(UpdateError::InvalidOldPassword);
+    }
+
+    // 3. Connect to the database with the old password
+    let db_path = vault_path.join(&config.database);
+    let conn = Connection::open(db_path)?;
+    conn.pragma_update(None, "key", old_password)?;
+
+    // Verify connection by making a simple query
+    let verification_query = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='table'",
+        [],
+        |row| row.get::<_, i64>(0),
+    );
+    if verification_query.is_err() {
+        // This could happen if the pragma key failed silently.
+        return Err(UpdateError::InvalidOldPassword);
+    }
+
+    // 4. Re-key the database to the new password
+    let rekey_sql = format!("PRAGMA rekey = '{}'", new_password.replace('\'', "''"));
+    conn.execute_batch(&rekey_sql)?;
+
+    // 5. Generate the new encrypt_check and update the config
+    let new_encrypt_check = create_v2_encrypt_check(new_password)?;
+    config.encrypt_check = new_encrypt_check;
+
+    // 6. Write the updated config back to master.json
+    let new_config_content = serde_json::to_string_pretty(&config)?;
+    fs::write(config_path, new_config_content)?;
+
+    Ok(())
 }
