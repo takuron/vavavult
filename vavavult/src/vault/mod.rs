@@ -718,6 +718,9 @@ impl Vault {
     /// * `hash` - The `VaultHash` of the file to extract.
     /// * `destination_path` - The full local path where the file will be saved.
     ///
+    /// # Errors
+    /// Returns `ExtractError` if the file is not found, decryption fails, or an I/O error occurs.
+    //
     // // 从保险库中提取文件 (同步便捷方法)。
     // //
     // // 在一次调用中处理准备和执行。
@@ -830,13 +833,13 @@ impl Vault {
     // // 这是一个线程安全的、内存高效的方法，它执行耗时的加密工作而无需锁定保险库数据库。
     // // 它返回一个 `RekeyTask` 票据，其中包含原子化提交阶段所需的所有信息。
     // //
-    // // # Arguments
+    // // # 参数
     // // * `file_entry` - 需要轮换密钥的文件的完整 `FileEntry`。
     // //
-    // // # Returns
+    // // # 返回
     // // 一个 `RekeyTask` 对象，准备好传递给 `execute_rekey_tasks`。
     // //
-    // // # Errors
+    // // # 错误
     // // 如果 I/O 或加密失败，则返回 `RekeyError`。
     pub fn prepare_rekey_task(&self, file_entry: &FileEntry) -> Result<RekeyTask, RekeyError> {
         rekey::prepare_rekey_task(self.storage.as_ref(), file_entry)
@@ -859,10 +862,10 @@ impl Vault {
     // // 此方法需要对 `&mut self` 的独占访问权来执行事务。
     // // 它会更新数据库记录，将被重加密的文件从临时存储移动到最终位置，并删除旧文件。
     // //
-    // // # Arguments
+    // // # 参数
     // // * `tasks` - 一个包含来自阶段 1 的 `RekeyTask` 对象的 `Vec`。
     // //
-    // // # Errors
+    // // # 错误
     // // 如果数据库或文件系统提交失败，则返回 `RekeyError`。
     pub fn execute_rekey_tasks(&mut self, tasks: Vec<RekeyTask>) -> Result<(), RekeyError> {
         if tasks.is_empty() {
@@ -992,6 +995,9 @@ impl Vault {
     /// * `hash` - The hash of the file to tag.
     /// * `tags` - A slice of tag strings to add.
     ///
+    /// # Errors
+    /// Returns `TagError` if the file is not found.
+    //
     // // 在事务中为文件添加多个标签。
     // //
     // // # 参数

@@ -56,13 +56,21 @@ pub enum RekeyError {
 }
 /// A task representing a file that has been re-encrypted into a temporary location
 /// and is ready for an atomic database and filesystem commit.
+//
+// // 代表一个已重新加密到临时位置并准备好进行原子数据库和文件系统提交的文件任务。
 #[derive(Debug)]
 pub struct RekeyTask {
     /// The hash of the file *before* re-keying.
+    //
+    // // 密钥轮换 *前* 的文件哈希。
     pub old_hash: VaultHash,
     /// The complete file entry *after* re-keying, with a new hash and password.
+    //
+    // // 密钥轮换 *后* 的完整文件条目，包含新的哈希和密码。
     pub new_file_entry: FileEntry,
     /// The token representing the newly encrypted data in a temporary location.
+    //
+    // // 代表临时位置中新加密数据的令牌。
     pub staging_token: Box<dyn StagingToken>,
 }
 

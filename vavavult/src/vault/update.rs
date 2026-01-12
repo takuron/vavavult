@@ -94,14 +94,20 @@ pub enum UpdateError {
     IntegrityMismatch(String),
 
     /// An error occurred while trying to open or read the vault configuration.
+    //
+    // // 尝试打开或读取保险库配置时发生错误。
     #[error("Failed to open or read vault configuration: {0}")]
     Open(#[from] OpenError),
 
     /// The provided old password was incorrect.
+    //
+    // // 提供的旧密码不正确。
     #[error("The provided old password is not correct.")]
     InvalidOldPassword,
 
     /// An error occurred during the creation of the encryption check string.
+    //
+    // // 创建加密检查字符串时发生错误。
     #[error("Encryption check creation error: {0}")]
     EncryptCheck(#[from] EncryptError),
 }

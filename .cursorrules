@@ -11,7 +11,7 @@ It contains the definitive Project Structure, API architecture, and Coding Speci
 To ensure compliance, the following rules are enforced strictly:
 
 1. **Documentation Sync**: If you modify the project structure or public API, you MUST update `llm_readme.txt`.
-2. **Changelog**: Append a one-line summary of your changes to `llm_log.txt` after every task.
+2. **Changelog**: Log a concise summary of your changes by executing `python llm_log.py "Your concise log message."` after every task.
 3. **Internal Comments**: Write implementation logic comments in **CHINESE** (e.g., `// 1. 首先检查缓存...`).
 4. **Public Docs**: All public structs/fns must have **Dual-Language Documentation** (English Rustdoc followed by Chinese translation).
 
