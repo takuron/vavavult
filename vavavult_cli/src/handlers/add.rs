@@ -152,30 +152,53 @@ fn handle_add_directory_single_threaded(
     local_path: &Path,
     dest_dir_path: VaultPath,
 ) -> Result<(), CliError> {
-    println!("Scanning directory {:?}...", local_path);
+    // 1. [新增] 获取保险库中所有现有文件的路径
+    println!("Fetching existing file list from vault...");
+    let existing_vault_paths: std::collections::HashSet<VaultPath> = {
+        let vault_guard = vault.lock().unwrap();
+        vault_guard
+            .list_all()?
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect()
+    };
+    println!(
+        "Found {} files in the vault. Scanning local directory...",
+        existing_vault_paths.len()
+    );
 
-    // 1. 收集所有待添加的文件
+    // 2. 收集所有待添加的文件, 同时过滤掉重复项
     let files_to_add: Vec<(PathBuf, VaultPath)> = WalkDir::new(local_path)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
-        .map(|entry| {
+        .filter_map(|entry| {
             let source_path = entry.into_path();
             let relative_path = source_path.strip_prefix(local_path).unwrap();
             let vault_path = dest_dir_path
                 .join(relative_path.to_string_lossy().replace('\\', "/").as_ref())
                 .unwrap();
-            (source_path, vault_path)
+
+            // 3. [新增] 检查文件是否已存在
+            if existing_vault_paths.contains(&vault_path) {
+                println!("Skipping duplicate file: {}", vault_path.as_str());
+                None // 如果文件已存在，则将其从待添加列表中滤除
+            } else {
+                Some((source_path, vault_path)) // 否则，包含它
+            }
         })
         .collect();
 
     if files_to_add.is_empty() {
-        println!("No files found to add in the directory.");
+        println!("No new files found to add.");
         return Ok(());
     }
 
-    // 2. 打印文件列表
-    println!("The following {} files will be added:", files_to_add.len());
+    // 4. 打印文件列表
+    println!(
+        "\nThe following {} new files will be added:",
+        files_to_add.len()
+    );
     for (source, target) in &files_to_add {
         let source_display = source.to_string_lossy().replace('\\', "/");
         println!("  - \"{}\" -> {}", source_display, target.as_str());
@@ -186,7 +209,7 @@ fn handle_add_directory_single_threaded(
         return Ok(());
     }
 
-    // 3. 带进度条的单线程执行
+    // 5. 带进度条的单线程执行
     let pb = ProgressBar::new(files_to_add.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -226,30 +249,53 @@ fn handle_add_directory_parallel(
     local_path: &Path,
     dest_dir_path: VaultPath,
 ) -> Result<(), CliError> {
-    println!("Scanning directory {:?} (parallel mode)...", local_path);
+    // 1. [新增] 获取保险库中所有现有文件的路径
+    println!("Fetching existing file list from vault...");
+    let existing_vault_paths: std::collections::HashSet<VaultPath> = {
+        let vault_guard = vault.lock().unwrap();
+        vault_guard
+            .list_all()?
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect()
+    };
+    println!(
+        "Found {} files in the vault. Scanning local directory (parallel mode)...",
+        existing_vault_paths.len()
+    );
 
-    // 1. 收集任务 (同单线程)
+    // 2. 收集任务 (同单线程), 同时过滤掉重复项
     let files_to_add: Vec<(PathBuf, VaultPath)> = WalkDir::new(local_path)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
-        .map(|entry| {
+        .filter_map(|entry| {
             let source_path = entry.into_path();
             let relative_path = source_path.strip_prefix(local_path).unwrap();
             let vault_path = dest_dir_path
                 .join(relative_path.to_string_lossy().replace('\\', "/").as_ref())
                 .unwrap();
-            (source_path, vault_path)
+
+            // 3. [新增] 检查文件是否已存在
+            if existing_vault_paths.contains(&vault_path) {
+                println!("Skipping duplicate file: {}", vault_path.as_str());
+                None // 如果文件已存在，则将其从待添加列表中滤除
+            } else {
+                Some((source_path, vault_path)) // 否则，包含它
+            }
         })
         .collect();
 
     if files_to_add.is_empty() {
-        println!("No files found in the directory.");
+        println!("No new files found to add.");
         return Ok(());
     }
 
     let total_files_count = files_to_add.len();
-    println!("The following {} files will be added:", total_files_count);
+    println!(
+        "\nThe following {} new files will be added:",
+        total_files_count
+    );
     for (source, target) in &files_to_add {
         let source_display = source.to_string_lossy().replace('\\', "/");
         println!("  - \"{}\" -> {}", source_display, target.as_str());

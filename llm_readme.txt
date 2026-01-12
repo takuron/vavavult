@@ -95,9 +95,9 @@ To ensure consistency and maintainability when using an LLM for development, the
 *   **Goal:** This document must always serve as a reliable and up-to-date source of truth for the project's architecture.
 
 ### 4.2. Changelog Maintenance
-*   **Rule:** After every coding task (e.g., adding a feature, fixing a bug), a concise summary of the changes must be appended to `llm_log.txt`.
-*   **Format:** The log entry should be a single line summarizing the change.
-*   **Goal:** To maintain a persistent, append-only log of all modifications made by the LLM.
+*   **Rule:** After every coding task (e.g., adding a feature, fixing a bug), a concise summary of the changes must be logged by executing the `llm_log.py` script.
+*   **Format:** The command should be `python llm_log.py "Your concise log message."`. The script will automatically handle timestamping and appending to `llm_log.txt`.
+*   **Goal:** To maintain a persistent, append-only log of all modifications made by the LLM, with a standardized format.
 
 ### 4.3. Internal Code Commenting
 *   **Rule:** Internal implementation logic should be commented in Chinese, focusing on the sequence and purpose of operations.
