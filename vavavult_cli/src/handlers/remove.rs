@@ -2,7 +2,7 @@ use crate::core::helpers::{Target, get_all_files_recursively, identify_target};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
-use vavavult::vault::{QueryResult, Vault};
+use vavavult::vault::{DirectoryEntry, QueryResult, Vault};
 
 /// 处理 'rm' (Remove) 命令
 pub fn handle_remove(
@@ -10,6 +10,7 @@ pub fn handle_remove(
     target: &str,
     recursive: bool,
     force: bool,
+    yes: bool,
 ) -> Result<(), CliError> {
     let target_obj = identify_target(target)?;
 
@@ -19,13 +20,23 @@ pub fn handle_remove(
             if recursive {
                 println!("Warning: -r (recursive) has no effect when deleting by hash.");
             }
-            // find_by_hash
-            let file_entry = match vault.find_by_hash(&hash)? {
-                QueryResult::Found(entry) => entry,
-                QueryResult::NotFound => {
-                    return Err(CliError::EntryNotFound(
-                        "File not found by hash.".to_string(),
-                    ));
+
+            let file_entry = if force {
+                // 强制模式: 遍历所有文件以查找哈希，绕过验证
+                let all_files = vault.list_all()?;
+                all_files
+                    .into_iter()
+                    .find(|f| f.sha256sum == hash)
+                    .ok_or_else(|| CliError::EntryNotFound("File not found by hash.".to_string()))?
+            } else {
+                // 普通模式: 使用标准查找 (会验证文件存在性)
+                match vault.find_by_hash(&hash)? {
+                    QueryResult::Found(entry) => entry,
+                    QueryResult::NotFound => {
+                        return Err(CliError::EntryNotFound(
+                            "File not found by hash.".to_string(),
+                        ));
+                    }
                 }
             };
             let description = format!("file '{}' (by hash)", file_entry.path);
@@ -35,12 +46,28 @@ pub fn handle_remove(
             // --- 案例 2: 按路径删除 ---
             if vault_path.is_file() {
                 // 2a: 路径是文件
-                let file_entry = match vault.find_by_path(&vault_path)? {
-                    QueryResult::Found(entry) => entry,
-                    QueryResult::NotFound => {
-                        return Err(CliError::EntryNotFound(
-                            "File not found by path.".to_string(),
-                        ));
+                let file_entry = if force {
+                    // 强制模式: 列出父目录以查找文件，绕过验证
+                    let parent_path = vault_path.parent().unwrap();
+                    let entries = vault.list_by_path(&parent_path)?;
+                    entries
+                        .into_iter()
+                        .find_map(|entry| match entry {
+                            DirectoryEntry::File(f) if f.path == vault_path => Some(f),
+                            _ => None,
+                        })
+                        .ok_or_else(|| {
+                            CliError::EntryNotFound("File not found by path.".to_string())
+                        })?
+                } else {
+                    // 普通模式: 使用标准查找
+                    match vault.find_by_path(&vault_path)? {
+                        QueryResult::Found(entry) => entry,
+                        QueryResult::NotFound => {
+                            return Err(CliError::EntryNotFound(
+                                "File not found by path.".to_string(),
+                            ));
+                        }
                     }
                 };
                 let description = format!("file '{}'", file_entry.path);
@@ -70,7 +97,7 @@ pub fn handle_remove(
         return Ok(());
     }
 
-    if !force {
+    if !yes {
         let prompt = if files_to_delete.len() == 1 {
             format!(
                 "Are you sure you want to PERMANENTLY DELETE {}?",
@@ -108,7 +135,17 @@ pub fn handle_remove(
     let mut fail_count = 0;
 
     for entry in files_to_delete {
-        match vault.remove_file(&entry.sha256sum) {
+        let result = if force {
+            vault
+                .force_remove_file(&entry.sha256sum)
+                .map_err(|e| e.to_string())
+        } else {
+            vault
+                .remove_file(&entry.sha256sum)
+                .map_err(|e| e.to_string())
+        };
+
+        match result {
             Ok(_) => {
                 success_count += 1;
             }

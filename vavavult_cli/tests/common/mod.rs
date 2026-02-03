@@ -13,82 +13,44 @@
 // //
 
 use assert_cmd::Command;
+use predicates::prelude::predicate;
+use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::{TempDir, tempdir};
 
 /// Represents the context for a single test, including a temporary directory.
 ///
 /// This struct ensures that each test runs in an isolated environment, preventing
-/// interference between tests. The temporary directory is automatically cleaned up
+/// interference between tests.
+/// The temporary directory is automatically cleaned up
 /// when the `TestContext` goes out of scope.
 ///
 /// # Fields
 /// * `temp_dir` - A handle to the temporary directory.
 /// * `vault_path` - The path to the vault created within the temporary directory.
-//
-// // 代表单个测试的上下文，包含一个临时目录。
-// //
-// // 此结构确保每个测试都在隔离的环境中运行，防止测试之间的干扰。
-// // 当 `TestContext` 离开作用域时，临时目录会自动被清理。
-// //
-// // # 字段
-// // * `temp_dir` - 临时目录的句柄。
-// // * `vault_path` - 在临时目录中创建的保险库的路径。
 pub struct TestContext {
     /// A handle to the temporary directory. Held for its Drop behavior to ensure cleanup.
-    // // 临时目录的句柄。持有它是为了利用其 Drop 行为来确保自动清理。
     pub _temp_dir: TempDir,
     /// The path to the vault created within the temporary directory.
-    // // 在临时目录中创建的保险库的路径。
     pub vault_path: PathBuf,
 }
 
 impl TestContext {
     /// Creates a new vault for testing purposes.
-    ///
-    /// This function creates a new temporary directory and then invokes the `vavavult_cli create`
-    /// command to initialize a new vault inside it. It handles the interactive prompts
-    //  for vault name and password.
-    ///
-    /// # Arguments
-    /// * `vault_name` - The name for the new vault.
-    /// * `password` - The password for the new vault. An empty string means no encryption.
-    ///
-    /// # Returns
-    /// A `Result` containing the `TestContext` on success.
-    //
-    // // 创建一个用于测试的新保险库。
-    // //
-    // // 此函数会创建一个新的临时目录，然后调用 `vavavult_cli create` 命令
-    // // 在其中初始化一个新的保险库。它会自动处理保险库名称和密码的交互式提示。
-    // //
-    // // # 参数
-    // // * `vault_name` - 新保险库的名称。
-    // // * `password` - 新保险库的密码。空字符串表示不加密。
-    // //
-    // // # 返回
-    // // 成功时返回包含 `TestContext` 的 `Result`。
     pub fn new(vault_name: &str, password: &str) -> anyhow::Result<Self> {
-        // 1. 创建一个临时目录用于测试隔离
         let temp_dir = tempdir()?;
         let vault_path = temp_dir.path().join(vault_name);
 
-        // 2. 准备创建保险库的命令
-        //    create 命令接收的是父目录，然后在其中根据用户输入创建保险库目录
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_vavavult"));
         cmd.arg("create").arg(temp_dir.path());
 
-        // 3. 准备交互式输入：首先是保险库名称，然后是加密选项
         let use_encryption = !password.is_empty();
         let input = if use_encryption {
-            // 提供保险库名称 -> 选择加密 -> 输入密码 -> 确认密码
             format!("{}\ny\n{}\n{}\n", vault_name, password, password)
         } else {
-            // 提供保险库名称 -> 选择不加密
             format!("{}\nn\n", vault_name)
         };
 
-        // 4. 执行命令并断言成功
         cmd.write_stdin(input).assert().success();
 
         Ok(TestContext {
@@ -97,9 +59,86 @@ impl TestContext {
         })
     }
 
+    /// Helper to add a file to the vault for testing.
+    pub fn add_file(
+        &self,
+        file_name: &str,
+        content: &str,
+        vault_path: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let temp_file_path = self._temp_dir.path().join(file_name);
+        fs::write(&temp_file_path, content)?;
+
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+        cmd.arg("open").arg(&self.vault_path);
+
+        let mut repl_command = format!("add \"{}\"", temp_file_path.to_str().unwrap());
+        if let Some(p) = vault_path {
+            repl_command.push_str(&format!(" -p {}", p));
+        }
+        let repl_input = format!("{}\nexit\n", repl_command);
+
+        cmd.write_stdin(repl_input)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Successfully added file"));
+
+        Ok(())
+    }
+
+    /// Helper to get a file's hash and path by running `ls -l`.
+    /// Helper to get a file's hash and path by running `ls -l` on its parent directory.
+    pub fn get_file_hash_and_path(&self, vault_path: &str) -> anyhow::Result<(String, String)> {
+        // `ls` works on directories, so we list the parent and find the file.
+        let vault_path_p = Path::new(vault_path);
+        let parent_dir = vault_path_p
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or("/");
+
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+        cmd.arg("open").arg(&self.vault_path);
+
+        let repl_input = format!("ls -l {}\nexit\n", parent_dir);
+
+        let output = cmd.write_stdin(repl_input).output()?;
+        let stdout = String::from_utf8(output.stdout)?;
+
+        // Split output into blocks separated by '----'
+        let blocks = stdout.split("----------------------------------------");
+
+        for block in blocks {
+            let path_line_match = format!("Path:            {}", vault_path);
+            if block.contains(&path_line_match) {
+                // This is the correct block for our file.
+                let hash_line = block
+                    .lines()
+                    .find(|line| line.trim().starts_with("SHA256 (ID):"))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Could not find hash in file block for {}", vault_path)
+                    })?;
+                let hash = hash_line.split(':').nth(1).unwrap().trim().to_string();
+
+                let path = vault_path.to_string(); // We already know the path we are looking for
+
+                return Ok((hash, path));
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "Could not find file entry for '{}' in `ls -l {}` output. STDOUT:\n{}",
+            vault_path,
+            parent_dir,
+            stdout
+        ))
+    }
+
+    /// Helper to construct the physical path of a data file from its hash.
+    pub fn get_physical_file_path(&self, hash: &str) -> PathBuf {
+        self.vault_path.join("data").join(hash)
+    }
+
     /// Returns the path to the temporary directory.
-    //
-    // // 返回临时目录的路径。
     #[allow(dead_code)]
     pub fn path(&self) -> &Path {
         self._temp_dir.path()

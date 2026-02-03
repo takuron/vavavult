@@ -5,5 +5,8 @@
 [2026-02-03T13:23:21+08:00] Add the vault::fix_file, allowing it to repair missing files as intended.
 [2026-02-03T13:33:47+08:00] Fix the vault::fix_file function by querying file metadata without storage validation, allowing it to repair missing files as intended.
 [2026-02-03T13:45:01+08:00] Refactor vault::fix_file to use a single atomic transaction for replacing file records, enhancing data consistency.
-[2026-02-03T13:54:24+08:00] Update ix_test to verify custom metadata preservation. Add standard doc comments to FixError enum.
-[2026-02-03T14:10:24+08:00] Update ix_file to preserve original add_time and set new update_time. Enhance tests to verify timestamp handling.
+[2026-02-03T13:54:24+08:00] Update Fix_test to verify custom metadata preservation. Add standard doc comments to FixError enum.
+[2026-02-03T14:10:24+08:00] Update Fix_file to preserve original add_time and set new update_time. Enhance tests to verify timestamp handling.
+[2026-02-03T15:09:03+08:00] feat: Implement -f (force) option for the remove command to ignore missing files.
+[2026-02-03T15:19:30+08:00] refactor: Separate skip confirmation from force logic in remove command. Add -y/--yes flag.
+[2026-02-03T16:08:31+08:00] chore: Mark 'rm -f' as experimental and suppress dead code warnings for unused validation functions.

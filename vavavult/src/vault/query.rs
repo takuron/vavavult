@@ -207,6 +207,45 @@ pub(crate) fn check_by_path_no_validation(
     }
 }
 
+/// A variant of `check_by_hash` that does not validate physical file existence.
+#[allow(dead_code)]
+pub(crate) fn check_by_hash_no_validation(
+    vault: &Vault,
+    hash: &VaultHash,
+) -> Result<QueryResult, QueryError> {
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE sha256sum = ?1",
+    )?;
+
+    if let Some(res) = stmt
+        .query_row(params![hash], |row| {
+            Ok((
+                row.get::<_, VaultHash>(0)?,
+                row.get::<_, VaultPath>(1)?,
+                row.get::<_, VaultHash>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .optional()?
+    {
+        let (ret_sha256sum, path, original_sha256sum, encrypt_password) = res;
+        assert_eq!(ret_sha256sum, *hash);
+
+        // NOTE: No vault.storage.exists() check.
+
+        let entry = fetch_full_entry(
+            &vault.database_connection,
+            hash,
+            path,
+            &original_sha256sum,
+            &encrypt_password,
+        )?;
+        Ok(QueryResult::Found(entry))
+    } else {
+        Ok(QueryResult::NotFound)
+    }
+}
+
 /// 根据文件的加密后 SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。
 pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, QueryError> {
     // 查询 files 表
