@@ -84,13 +84,13 @@ pub enum QueryError {
     PathError(#[from] PathError),
 }
 
-/// 一个内部辅助函数，用于从数据库中获取一个 V2 文件的完整信息。
+/// 一个内部辅助函数，用于从数据库中获取一个文件的完整信息。
 pub(crate) fn fetch_full_entry(
     conn: &Connection,
-    sha256sum: &VaultHash,          // [修改]
-    path: VaultPath,                // 文件路径
-    original_sha256sum: &VaultHash, // [修改]
-    encrypt_password: &str,         // 文件密码
+    sha256sum: &VaultHash,
+    path: VaultPath,
+    original_sha256sum: &VaultHash,
+    encrypt_password: &str,
 ) -> Result<FileEntry, QueryError> {
     // 查询标签 (外键现在是加密后哈希)
     // `params![sha256sum]` 将自动工作 (ToSql)
@@ -163,10 +163,53 @@ pub(crate) fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResu
     }
 }
 
+/// A variant of `check_by_path` that does not validate physical file existence.
+/// This is intended for internal operations like `fix` where the file is expected to be missing.
+//
+// // `check_by_path` 的一个变体，不验证物理文件是否存在。
+// // 这用于 `fix` 等内部操作，因为这些操作预期文件会丢失。
+pub(crate) fn check_by_path_no_validation(
+    vault: &Vault,
+    path: &VaultPath,
+) -> Result<QueryResult, QueryError> {
+    // VaultPath 已经是规范化的
+    let normalized_path = path.as_str();
+
+    let mut stmt = vault.database_connection.prepare(
+        "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE path = ?1",
+    )?;
+
+    if let Some(res) = stmt
+        .query_row(params![normalized_path], |row| {
+            Ok((
+                row.get::<_, VaultHash>(0)?,
+                row.get::<_, VaultPath>(1)?,
+                row.get::<_, VaultHash>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .optional()?
+    {
+        let (sha256sum, path, original_sha256sum, encrypt_password) = res;
+
+        // NOTE: No vault.storage.exists() check.
+
+        let entry = fetch_full_entry(
+            &vault.database_connection,
+            &sha256sum,
+            path,
+            &original_sha256sum,
+            &encrypt_password,
+        )?;
+        Ok(QueryResult::Found(entry))
+    } else {
+        Ok(QueryResult::NotFound)
+    }
+}
+
 /// 根据文件的加密后 SHA256 哈希值 (Base64 `&str`) 在保险库中查找文件。
 pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, QueryError> {
-    // [修改]
-    // 查询 V2 files 表
+    // 查询 files 表
     let mut stmt = vault.database_connection.prepare(
         "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE sha256sum = ?1"
     )?;
@@ -183,7 +226,7 @@ pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResu
         })
         .optional()?
     {
-        // 解构 V2 字段
+        // 解构字段
         let (ret_sha256sum, path, original_sha256sum, encrypt_password) = res;
         // 确认返回的哈希与查询的哈希一致 (虽然理论上应该总是如此)
         assert_eq!(ret_sha256sum, *hash);
@@ -193,7 +236,7 @@ pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResu
             return Err(QueryError::FileMissing(hash.to_string()));
         }
 
-        // 使用 V2 字段调用 fetch_full_entry
+        // 调用 fetch_full_entry
         let entry = fetch_full_entry(
             &vault.database_connection,
             hash,
@@ -285,18 +328,17 @@ pub(crate) fn check_by_original_hash(
     vault: &Vault,
     original_hash: &VaultHash,
 ) -> Result<QueryResult, QueryError> {
-    // [修改]
     let mut stmt = vault.database_connection.prepare(
         "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE original_sha256sum = ?1"
     )?;
 
-    // [修改] 参数现在是 *原始* 哈希 (ToSql)
+    // 参数现在是 *原始* 哈希 (ToSql)
     if let Some(res) = stmt
         .query_row(params![original_hash], |row| {
             Ok((
-                row.get::<_, VaultHash>(0)?, // [修改]
+                row.get::<_, VaultHash>(0)?,
                 row.get::<_, VaultPath>(1)?,
-                row.get::<_, VaultHash>(2)?, // [修改]
+                row.get::<_, VaultHash>(2)?,
                 row.get::<_, String>(3)?,
             ))
         })
@@ -311,7 +353,6 @@ pub(crate) fn check_by_original_hash(
             return Err(QueryError::FileMissing(sha256sum.to_string()));
         }
 
-        // 使用 V2 字段调用 fetch_full_entry
         let entry = fetch_full_entry(
             &vault.database_connection,
             &sha256sum,
