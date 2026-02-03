@@ -1,10 +1,10 @@
 [package]
 name = "vavavult"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 license = "LGPL-2.1"
-authors = ["takuron <takuron@163.com>"] # 请替换为您的邮箱
-repository = "https://github.com/takuron/vavavult" # 请替换为您的仓库地址
+authors = ["takuron <takuron@163.com>"]
+repository = "https://github.com/takuron/vavavult"
 
 [features]
 # 默认不启用任何额外功能
