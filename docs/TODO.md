@@ -14,9 +14,9 @@
 > 架构详情请参阅 [vavavult_mount_architecture.md](./vavavult_mount_architecture.md)
 
 ### 阶段 0：技术选型与依赖准备
-- [ ] 在 workspace `Cargo.toml` 的 `[workspace.dependencies]` 中添加 `dav-server`、`tokio`、`hyper`、`http-body-util`、`hyper-util` 等依赖
-- [ ] 更新 `vavavult_mount/Cargo.toml`，添加对 `vavavult` 核心库以及上述依赖的引用
-- [ ] 确认所有依赖版本兼容并能正常编译
+- [x] 在 workspace `Cargo.toml` 的 `[workspace.dependencies]` 中添加 `dav-server`、`tokio`、`hyper`、`http-body-util`、`hyper-util` 等依赖
+- [x] 更新 `vavavult_mount/Cargo.toml`，添加对 `vavavult` 核心库以及上述依赖的引用
+- [x] 确认所有依赖版本兼容并能正常编译
 
 ### 阶段 1：错误类型与配置结构定义
 - [ ] 创建 `vavavult_mount/src/error.rs` — 定义 `MountError` 统一错误类型
