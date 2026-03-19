@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "vavavult", "vavavult_cli",
+    "vavavult", "vavavult_cli", "vavavult_mount",
 ]
 resolver = "3"
 
