@@ -19,9 +19,9 @@
 - [x] 确认所有依赖版本兼容并能正常编译
 
 ### 阶段 1：错误类型与配置结构定义
-- [ ] 创建 `vavavult_mount/src/error.rs` — 定义 `MountError` 统一错误类型
-- [ ] 创建 `vavavult_mount/src/config.rs` — 定义 `MountConfig` 和 `AuthConfig` 结构体
-- [ ] 更新 `vavavult_mount/src/lib.rs` — 注册新模块并导出公共类型
+- [x] 创建 `vavavult_mount/src/error.rs` — 定义 `MountError` 统一错误类型
+- [x] 创建 `vavavult_mount/src/config.rs` — 定义 `MountConfig` 和 `AuthConfig` 结构体
+- [x] 更新 `vavavult_mount/src/lib.rs` — 注册新模块并导出公共类型
 
 ### 阶段 2：虚拟文件系统层 — 只读实现 (核心)
 - [ ] 创建 `vavavult_mount/src/vfs/mod.rs` — 定义 `VaultDavFs` 结构体，持有 `Arc<Mutex<Vault>>`

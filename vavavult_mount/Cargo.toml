@@ -10,3 +10,4 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 tokio = { workspace = true }
 vavavult = { path = "../vavavult" }
+thiserror = { workspace = true }
