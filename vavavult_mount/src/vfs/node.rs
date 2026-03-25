@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
-use std::io::Cursor;
-use dav_server::{DavFile, FsError, FsFuture};
+use std::io::{Cursor, SeekFrom};
+use dav_server::fs::{DavFile, FsError, FsFuture, DavMetaData};
 use vavavult::vault::{Vault, ExtractionTask};
+use bytes::Buf;
 
 /// Represents an open file handle for reading from the vault.
 ///
@@ -11,6 +12,7 @@ use vavavult::vault::{Vault, ExtractionTask};
 // // 代表从保险库读取的打开文件句柄。
 // //
 // // 此结构体实现了 `DavFile` trait，提供对解密文件内容的流式读取访问。
+#[derive(Debug)]
 pub struct VaultDavFile {
     /// The extraction task containing decryption parameters.
     // // 包含解密参数的提取任务。
@@ -53,11 +55,17 @@ impl VaultDavFile {
     // // 确保文件内容已解密并缓存。
     fn ensure_content(&mut self) -> Result<(), FsError> {
         if self.content.is_none() {
-            // 执行解密任务
             let vault = self.vault.lock().unwrap();
-            let mut buffer = Vec::new();
-            Vault::execute_extraction_task_standalone(&self.task, &mut buffer)
+            let temp_dir = std::env::temp_dir();
+            let temp_file = temp_dir.join(format!("vavavult_{}", uuid::Uuid::new_v4()));
+
+            vault.execute_extraction_task(&self.task, &temp_file)
                 .map_err(|_| FsError::GeneralFailure)?;
+
+            let buffer = std::fs::read(&temp_file)
+                .map_err(|_| FsError::GeneralFailure)?;
+            let _ = std::fs::remove_file(&temp_file);
+
             self.content = Some(buffer);
         }
         Ok(())
@@ -65,11 +73,11 @@ impl VaultDavFile {
 }
 
 impl DavFile for VaultDavFile {
-    fn metadata<'a>(&'a mut self) -> FsFuture<Box<dyn dav_server::DavMetaData>> {
+    fn metadata<'a>(&'a mut self) -> FsFuture<Box<dyn DavMetaData>> {
         Box::pin(async move {
             self.ensure_content()?;
             let size = self.content.as_ref().unwrap().len() as u64;
-            Ok(Box::new(FileMetadata { size }) as Box<dyn dav_server::DavMetaData>)
+            Ok(Box::new(FileMetadata { size }) as Box<dyn DavMetaData>)
         })
     }
 
@@ -88,15 +96,19 @@ impl DavFile for VaultDavFile {
 
     fn write_bytes<'a>(&'a mut self, _buf: bytes::Bytes) -> FsFuture<()> {
         Box::pin(async move {
-            // 只读实现，拒绝写入
             Err(FsError::Forbidden)
         })
     }
 
-    fn write_all<'a>(&'a mut self, _buf: bytes::Bytes) -> FsFuture<()> {
+    fn write_buf<'a>(&'a mut self, _buf: Box<dyn Buf + Send + 'static>) -> FsFuture<()> {
         Box::pin(async move {
-            // 只读实现，拒绝写入
             Err(FsError::Forbidden)
+        })
+    }
+
+    fn seek<'a>(&'a mut self, _pos: SeekFrom) -> FsFuture<u64> {
+        Box::pin(async move {
+            Err(FsError::NotImplemented)
         })
     }
 
@@ -107,16 +119,21 @@ impl DavFile for VaultDavFile {
 
 /// Metadata for an open file.
 // // 打开文件的元数据。
+#[derive(Debug, Clone)]
 struct FileMetadata {
     size: u64,
 }
 
-impl dav_server::DavMetaData for FileMetadata {
+impl DavMetaData for FileMetadata {
     fn len(&self) -> u64 {
         self.size
     }
 
     fn is_dir(&self) -> bool {
         false
+    }
+
+    fn modified(&self) -> dav_server::fs::FsResult<std::time::SystemTime> {
+        Ok(std::time::SystemTime::now())
     }
 }

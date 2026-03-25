@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
-use dav_server::{DavFileSystem, DavMetaData, FsError, FsFuture};
+use dav_server::fs::{DavFileSystem, DavMetaData, DavDirEntry, FsError, FsFuture, ReadDirMeta, FsStream, OpenOptions, DavFile};
+use dav_server::davpath::DavPath;
 use vavavult::vault::Vault;
 use vavavult::file::VaultPath;
 
@@ -43,7 +44,7 @@ impl VaultDavFs {
 }
 
 impl DavFileSystem for VaultDavFs {
-    fn metadata<'a>(&'a self, path: &'a dav_server::DavPath) -> FsFuture<Box<dyn DavMetaData>> {
+    fn metadata<'a>(&'a self, path: &'a DavPath) -> FsFuture<Box<dyn DavMetaData>> {
         Box::pin(async move {
             // 1. 将 DavPath 转换为 VaultPath
             let path_str = path.as_url_string();
@@ -83,49 +84,49 @@ impl DavFileSystem for VaultDavFs {
 
     fn read_dir<'a>(
         &'a self,
-        path: &'a dav_server::DavPath,
-        _meta: dav_server::ReadDirMeta,
-    ) -> FsFuture<dav_server::FsStream<Box<dyn DavMetaData>>> {
+        path: &'a DavPath,
+        _meta: ReadDirMeta,
+    ) -> FsFuture<FsStream<Box<dyn DavDirEntry>>> {
         Box::pin(async move {
-            // 1. 转换路径
             let path_str = path.as_url_string();
             let vault_path = VaultPath::new(&path_str);
 
-            // 2. 确保是目录路径
             if !vault_path.is_dir() {
                 return Err(FsError::Forbidden);
             }
 
-            // 3. 锁定 vault 并列出目录内容
             let vault = self.vault.lock().unwrap();
             let entries = vault.list_by_path(&vault_path)
                 .map_err(|_| FsError::NotFound)?;
 
-            // 4. 转换为 DavMetaData 流
-            let items: Vec<Box<dyn DavMetaData>> = entries.into_iter()
+            let items: Vec<Box<dyn DavDirEntry>> = entries.into_iter()
                 .map(|entry| match entry {
-                    vavavult::vault::DirectoryEntry::Directory(_) => {
-                        Box::new(VaultDirMetadata) as Box<dyn DavMetaData>
+                    vavavult::vault::DirectoryEntry::Directory(name) => {
+                        Box::new(VaultDirEntry { name: name.to_string(), is_dir: true, size: 0 }) as Box<dyn DavDirEntry>
                     }
                     vavavult::vault::DirectoryEntry::File(file_entry) => {
                         let size = file_entry.metadata.iter()
                             .find(|m| m.key == "_vavavult_file_size")
                             .and_then(|m| m.value.parse::<u64>().ok())
                             .unwrap_or(0);
-                        Box::new(VaultFileMetadata { size }) as Box<dyn DavMetaData>
+                        Box::new(VaultDirEntry {
+                            name: file_entry.path.to_string(),
+                            is_dir: false,
+                            size
+                        }) as Box<dyn DavDirEntry>
                     }
                 })
                 .collect();
 
-            Ok(Box::pin(futures::stream::iter(items.into_iter().map(Ok))) as dav_server::FsStream<Box<dyn DavMetaData>>)
+            Ok(Box::pin(futures::stream::iter(items.into_iter().map(Ok))) as FsStream<Box<dyn DavDirEntry>>)
         })
     }
 
     fn open<'a>(
         &'a self,
-        path: &'a dav_server::DavPath,
-        _options: dav_server::OpenOptions,
-    ) -> FsFuture<Box<dyn dav_server::DavFile>> {
+        path: &'a DavPath,
+        _options: OpenOptions,
+    ) -> FsFuture<Box<dyn DavFile>> {
         Box::pin(async move {
             // 1. 转换路径
             let path_str = path.as_url_string();
@@ -147,13 +148,14 @@ impl DavFileSystem for VaultDavFs {
                 .map_err(|_| FsError::GeneralFailure)?;
 
             // 4. 创建 VaultDavFile
-            Ok(Box::new(VaultDavFile::new(task, self.vault.clone())) as Box<dyn dav_server::DavFile>)
+            Ok(Box::new(VaultDavFile::new(task, self.vault.clone())) as Box<dyn DavFile>)
         })
     }
 }
 
 /// Metadata for a directory in the vault.
 // // 保险库中目录的元数据。
+#[derive(Debug, Clone)]
 struct VaultDirMetadata;
 
 impl DavMetaData for VaultDirMetadata {
@@ -164,10 +166,15 @@ impl DavMetaData for VaultDirMetadata {
     fn is_dir(&self) -> bool {
         true
     }
+
+    fn modified(&self) -> dav_server::fs::FsResult<std::time::SystemTime> {
+        Ok(std::time::SystemTime::now())
+    }
 }
 
 /// Metadata for a file in the vault.
 // // 保险库中文件的元数据。
+#[derive(Debug, Clone)]
 struct VaultFileMetadata {
     size: u64,
 }
@@ -179,5 +186,35 @@ impl DavMetaData for VaultFileMetadata {
 
     fn is_dir(&self) -> bool {
         false
+    }
+
+    fn modified(&self) -> dav_server::fs::FsResult<std::time::SystemTime> {
+        Ok(std::time::SystemTime::now())
+    }
+}
+
+/// Directory entry for vault items.
+#[derive(Debug, Clone)]
+struct VaultDirEntry {
+    name: String,
+    is_dir: bool,
+    size: u64,
+}
+
+impl DavDirEntry for VaultDirEntry {
+    fn name(&self) -> Vec<u8> {
+        self.name.as_bytes().to_vec()
+    }
+
+    fn metadata(&self) -> dav_server::fs::FsFuture<Box<dyn DavMetaData>> {
+        let is_dir = self.is_dir;
+        let size = self.size;
+        Box::pin(async move {
+            if is_dir {
+                Ok(Box::new(VaultDirMetadata) as Box<dyn DavMetaData>)
+            } else {
+                Ok(Box::new(VaultFileMetadata { size }) as Box<dyn DavMetaData>)
+            }
+        })
     }
 }

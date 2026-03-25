@@ -2,3 +2,4 @@
 [2026-03-19T20:09:13+08:00] Completed Phase 0 of Vavavult Mount coding plan: Added WebDAV dependencies (dav-server, tokio, hyper, etc.) to workspace Cargo.toml and vavavult_mount/Cargo.toml.
 [2026-03-20T11:36:47+08:00] Implemented Phase 1 of Vavavult Mount: Defined MountError, MountConfig, AuthConfig, and exported them in lib.rs for vavavult_mount.
 [2026-03-25T10:50:46+08:00] 阶段2：实现了VaultDavFs虚拟文件系统层，包括metadata、read_dir、open方法；实现了VaultDavFile用于文件读取；添加了bytes和futures依赖
+[2026-03-25T12:18:33+08:00] 修复了vavavult_mount模块的编译错误：修正dav_server导入路径使用fs模块，添加DavPath导入，为元数据结构添加Debug和Clone derive，实现missing的modified/write_buf/seek方法，修正read_dir返回DavDirEntry类型，添加uuid依赖，修复文件解密逻辑和字段名称

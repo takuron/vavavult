@@ -13,3 +13,4 @@ vavavult = { path = "../vavavult" }
 thiserror = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
+uuid = { version = "1.0", features = ["v4"] }
