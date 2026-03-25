@@ -25,6 +25,39 @@
 
 ## 🚀 快速开始
 
+### Windows 环境配置
+
+编译此项目需要 OpenSSL 和 Perl：
+
+1. **安装 vcpkg**：
+   ```bash
+   scoop install vcpkg
+   ```
+
+2. **安装 OpenSSL**：
+   ```bash
+   vcpkg install openssl:x64-windows
+   ```
+
+3. **安装 Perl**：
+   ```bash
+   scoop install strawberryperl
+   ```
+
+4. **安装 Perl 模块**：
+   ```bash
+   perl -MCPAN -e "install Locale::Maketext::Simple"
+   ```
+
+5. **配置环境变量**：
+   ```
+   OPENSSL_DIR=C:\Users\<你的用户名>\scoop\apps\vcpkg\current\installed\x64-windows
+   OPENSSL_NO_VENDOR=1
+   ```
+   添加 Perl 到 PATH：`C:\Strawberry\perl\bin`
+
+### 添加依赖
+
 由于 `vavavult` 尚未发布到 crates.io，您需要在 `Cargo.toml` 中将其添加为 git 依赖项：
 
 ```toml
