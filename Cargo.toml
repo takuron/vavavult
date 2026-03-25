@@ -32,3 +32,5 @@ tempfile = "3.21"
 thiserror = "2.0"
 tokio = { version = "1.50.0", features = ["full"] }
 walkdir = "2.5"
+bytes = "1.11"
+futures = "0.3"
