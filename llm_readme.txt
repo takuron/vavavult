@@ -1,8 +1,24 @@
 # Vavavult Technical Overview for LLM
 
-!!! IMPORTANT: YOU MUST FOLLOW THE CODING SPECIFICATIONS IN SECTION 4 FOR EVERY RESPONSE. !!!
+!!! IMPORTANT: YOU MUST FOLLOW THE CODING SPECIFICATIONS IN SECTION 5 FOR EVERY RESPONSE. !!!
 
-## 1. Project Structure
+## 1. Windows Build Setup
+
+### Prerequisites
+- Install via scoop: `vcpkg`, `strawberryperl`
+- Run: `vcpkg install openssl:x64-windows`
+- Run: `perl -MCPAN -e "install Locale::Maketext::Simple"`
+
+### Environment Variables
+```
+OPENSSL_DIR=C:\Users\<Username>\scoop\apps\vcpkg\current\installed\x64-windows
+OPENSSL_NO_VENDOR=1
+PATH += C:\Strawberry\perl\bin
+```
+
+Restart terminal, then `cargo build` should work.
+
+## 2. Project Structure
 
 Vavavult is a Rust workspace composed of two main crates: a core library (`vavavult`) and a command-line interface (`vavavult_cli`).
 

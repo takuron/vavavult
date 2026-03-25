@@ -25,6 +25,39 @@ A secure, robust, and concurrent local file vault library for Rust. Designed to 
 
 ## 🚀 Getting Started
 
+### Prerequisites (Windows)
+
+This project requires OpenSSL and Perl for compilation:
+
+1. **Install vcpkg** (if not already installed):
+   ```bash
+   scoop install vcpkg
+   ```
+
+2. **Install OpenSSL via vcpkg**:
+   ```bash
+   vcpkg install openssl:x64-windows
+   ```
+
+3. **Install Perl** (Strawberry Perl recommended):
+   ```bash
+   scoop install strawberryperl
+   ```
+
+4. **Install required Perl module**:
+   ```bash
+   perl -MCPAN -e "install Locale::Maketext::Simple"
+   ```
+
+5. **Set environment variables**:
+   ```
+   OPENSSL_DIR=C:\Users\<YourUsername>\scoop\apps\vcpkg\current\installed\x64-windows
+   OPENSSL_NO_VENDOR=1
+   ```
+   Add Perl to PATH: `C:\Strawberry\perl\bin`
+
+### Adding as Dependency
+
 Since `vavavult` is not yet on crates.io, you can add it as a git dependency in your `Cargo.toml`:
 
 ```toml
