@@ -20,7 +20,7 @@ Restart terminal, then `cargo build` should work.
 
 ## 2. Project Structure
 
-Vavavult is a Rust workspace composed of two main crates: a core library (`vavavult`) and a command-line interface (`vavavult_cli`).
+Vavavult is a Rust workspace composed of three crates: a core library (`vavavult`), a command-line interface (`vavavult_cli`), and a WebDAV mount extension (`vavavult_mount`).
 
 ## 2. `vavavult` - Core Library
 
@@ -101,6 +101,55 @@ A user-facing CLI application for interacting with `vavavult` vaults.
     *   `tests/common/mod.rs`: A shared helper module that provides utilities to simplify testing.
     *   `TestContext`: A key struct within the common module that creates a fully isolated environment for each test. `TestContext::new()` handles the creation of a temporary directory and a new vault inside it, ready for testing.
 *   **Usage:** To write a new test, you typically start by creating a `TestContext`, then use `assert_cmd::Command` to run `vavavult` commands (either top-level or REPL commands via stdin), and finally use `predicates` to assert that the `stdout` or `stderr` contains the expected output.
+
+## 3.5. `vavavult_mount` - WebDAV Mount Extension
+
+A WebDAV server extension that allows mounting a Vavavult vault as a read-only (or optionally read-write) virtual filesystem, accessible via standard WebDAV clients.
+
+### 3.5.1. Architecture Overview
+
+The crate implements the `DavFileSystem` trait from the `dav-server` crate, providing a virtual filesystem layer (VFS) that transparently decrypts vault files on demand. The architecture follows a two-phase approach for file reads to minimize lock contention:
+
+1. **Phase 1 (under vault mutex lock):** Query metadata and prepare an `ExtractionTask`.
+2. **Phase 2 (lock-free):** Execute decryption using `execute_extraction_task_standalone` with a cloned `Arc<dyn StorageBackend>`.
+
+### 3.5.2. Key Modules and Their Functions
+
+*   **`vavavult_mount::vfs`**
+    *   **Path:** `vavavult_mount/src/vfs/`
+    *   **Description:** The virtual filesystem layer implementing `DavFileSystem`.
+    *   `mod.rs`: Defines `VaultDavFs` (the main `DavFileSystem` implementation), `VaultDavMetaData`, and `VaultDavDirEntry`. Provides `metadata()`, `read_dir()`, and `open()` methods.
+    *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy decryption, cursor-based reading, and full seek support for HTTP Range requests.
+
+*   **`vavavult_mount::config`**
+    *   **Path:** `vavavult_mount/src/config.rs`
+    *   **Description:** Defines `MountConfig` (bind address, port, read-only flag, prefix) and `AuthConfig` (HTTP Basic Auth credentials).
+
+*   **`vavavult_mount::error`**
+    *   **Path:** `vavavult_mount/src/error.rs`
+    *   **Description:** Defines `MountError`, the unified error type for vault operations, I/O, server, authentication, and configuration errors.
+
+### 3.5.3. Key Public Types
+
+*   **`VaultDavFs`**: The main `DavFileSystem` implementation. Wraps `Arc<Mutex<Vault>>` and translates WebDAV paths to `VaultPath` queries.
+*   **`VaultDavFile`**: A `DavFile` implementation with lazy decryption. Stores an `ExtractionTask` and `Arc<dyn StorageBackend>`; content is decrypted into memory only on first read.
+*   **`VaultDavMetaData`**: Metadata for vault entries (files and directories). Carries size, directory flag, and modification time.
+*   **`VaultDavDirEntry`**: Directory entry for `read_dir()` results. Contains only the entry name (not full path), as required by WebDAV.
+*   **`MountConfig`**: Server configuration (bind address, port, read-only mode, auth, prefix).
+*   **`MountError`**: Unified error enum for the mount crate.
+
+### 3.5.4. Testing
+
+*   **Path:** `vavavult_mount/src/vfs/mod.rs` (tests module), `vavavult_mount/src/vfs/node.rs` (tests module)
+*   **Description:** Unit and integration tests for the VFS layer. Tests cover:
+    - Path conversion (`DavPath` → `VaultPath`)
+    - Metadata for root directories, files, and non-existent paths
+    - Directory listing (root and subdirectories)
+    - File opening (success, not found, forbidden for directories)
+    - Lazy decryption (metadata without decryption, full/partial reads)
+    - Seek operations (`Start`, `Current`, `End`)
+    - Write prohibition in read-only mode
+    - Large file reading
 
 ## 4. LLM Coding Specification
 

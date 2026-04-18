@@ -24,12 +24,12 @@
 - [x] 更新 `vavavult_mount/src/lib.rs` — 注册新模块并导出公共类型
 
 ### 阶段 2：虚拟文件系统层 — 只读实现 (核心)
-- [ ] 创建 `vavavult_mount/src/vfs/mod.rs` — 定义 `VaultDavFs` 结构体，持有 `Arc<Mutex<Vault>>`
-- [ ] 创建 `vavavult_mount/src/vfs/node.rs` — 实现 `VaultDavFile`（`DavFile` trait），处理文件解密与流式读取
-- [ ] 实现 `DavFileSystem::metadata()` — VaultPath 查询 + 元数据映射（`_vavavult_file_size` → content-length 等）
-- [ ] 实现 `DavFileSystem::read_dir()` — 调用 `vault.list_by_path()` 返回目录条目迭代器
-- [ ] 实现 `DavFileSystem::open()` — 基于两阶段 API（`prepare_extraction_task` → `execute_extraction_task_standalone`）完成解密读取
-- [ ] 针对 VFS 层编写单元测试
+- [x] 创建 `vavavult_mount/src/vfs/mod.rs` — 定义 `VaultDavFs` 结构体，持有 `Arc<Mutex<Vault>>`
+- [x] 创建 `vavavult_mount/src/vfs/node.rs` — 实现 `VaultDavFile`（`DavFile` trait），处理文件解密与流式读取
+- [x] 实现 `DavFileSystem::metadata()` — VaultPath 查询 + 元数据映射（`_vavavult_file_size` → content-length 等）
+- [x] 实现 `DavFileSystem::read_dir()` — 调用 `vault.list_by_path()` 返回目录条目迭代器
+- [x] 实现 `DavFileSystem::open()` — 基于两阶段 API（`prepare_extraction_task` → `execute_extraction_task_standalone`）完成解密读取
+- [x] 针对 VFS 层编写单元测试
 
 ### 阶段 3：WebDAV 服务器启动与生命周期管理
 - [ ] 创建 `vavavult_mount/src/server.rs` — 实现 `start_webdav_server()` 和 `start_webdav_server_with_handle()`
