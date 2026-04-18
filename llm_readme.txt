@@ -113,13 +113,23 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
 1. **Phase 1 (under vault mutex lock):** Query metadata and prepare an `ExtractionTask`.
 2. **Phase 2 (lock-free):** Execute decryption using `execute_extraction_task_standalone` with a cloned `Arc<dyn StorageBackend>`.
 
+### Streaming Architecture
+
+`VaultDavFile` uses a **file-handle-based streaming** approach rather than loading the entire decrypted content into memory:
+
+- Decrypted content is written to a **temporary file** on disk.
+- An open `File` handle is kept for subsequent reads and seeks.
+- `read_bytes` reads directly from the file handle into a buffer of only the requested size — **memory usage is O(1)** regardless of file size.
+- `seek` delegates to the `File` handle's native `Seek` implementation (OS `lseek` syscall) — zero memory overhead.
+- The temporary file is automatically cleaned up when `VaultDavFile` is dropped (via a `Drop` impl).
+
 ### 3.5.2. Key Modules and Their Functions
 
 *   **`vavavult_mount::vfs`**
     *   **Path:** `vavavult_mount/src/vfs/`
     *   **Description:** The virtual filesystem layer implementing `DavFileSystem`.
     *   `mod.rs`: Defines `VaultDavFs` (the main `DavFileSystem` implementation), `VaultDavMetaData`, and `VaultDavDirEntry`. Provides `metadata()`, `read_dir()`, and `open()` methods.
-    *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy decryption, cursor-based reading, and full seek support for HTTP Range requests.
+    *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy decryption to a temporary file, file-handle-based streaming reads (O(1) memory), native `File::seek` for HTTP Range requests, and automatic temp-file cleanup via `Drop`.
 
 *   **`vavavult_mount::config`**
     *   **Path:** `vavavult_mount/src/config.rs`
@@ -132,7 +142,7 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
 ### 3.5.3. Key Public Types
 
 *   **`VaultDavFs`**: The main `DavFileSystem` implementation. Wraps `Arc<Mutex<Vault>>` and translates WebDAV paths to `VaultPath` queries.
-*   **`VaultDavFile`**: A `DavFile` implementation with lazy decryption. Stores an `ExtractionTask` and `Arc<dyn StorageBackend>`; content is decrypted into memory only on first read.
+*   **`VaultDavFile`**: A `DavFile` implementation with lazy decryption. Stores an `ExtractionTask` and `Arc<dyn StorageBackend>`; on first read, decrypts to a temporary file and keeps an open `File` handle. Reads are streaming (O(1) memory), seeks use native OS `lseek`. Temp file is cleaned up on `Drop`.
 *   **`VaultDavMetaData`**: Metadata for vault entries (files and directories). Carries size, directory flag, and modification time.
 *   **`VaultDavDirEntry`**: Directory entry for `read_dir()` results. Contains only the entry name (not full path), as required by WebDAV.
 *   **`MountConfig`**: Server configuration (bind address, port, read-only mode, auth, prefix).
@@ -146,10 +156,11 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
     - Metadata for root directories, files, and non-existent paths
     - Directory listing (root and subdirectories)
     - File opening (success, not found, forbidden for directories)
-    - Lazy decryption (metadata without decryption, full/partial reads)
-    - Seek operations (`Start`, `Current`, `End`)
+    - Lazy decryption (metadata without decryption, streaming reads from file handle)
+    - Seek operations (`Start`, `Current`, `End`) via native OS `lseek`
     - Write prohibition in read-only mode
-    - Large file reading
+    - Large file reading (streaming, O(1) memory)
+    - Temporary file cleanup on `Drop`
 
 ## 4. LLM Coding Specification
 
