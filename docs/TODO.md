@@ -32,15 +32,15 @@
 - [x] 针对 VFS 层编写单元测试
 
 ### 阶段 3：WebDAV 服务器启动与生命周期管理
-- [ ] 创建 `vavavult_mount/src/server.rs` — 实现 `start_webdav_server()` 和 `start_webdav_server_with_handle()`
-- [ ] 实现 `ServerHandle` 结构体（包含 `shutdown()` 方法，基于 `tokio::sync::oneshot` 通道）
-- [ ] 将 `VaultDavFs` 注入 `DavHandler`，通过 `hyper` 绑定地址并启动服务
-- [ ] 服务器启动时打印访问 URL 日志
+- [x] 创建 `vavavult_mount/src/server.rs` — 实现 `start_webdav_server()` 和 `start_webdav_server_with_handle()`
+- [x] 实现 `ServerHandle` 结构体（包含 `shutdown()` 方法，基于 `tokio::sync::oneshot` 通道）
+- [x] 将 `VaultDavFs` 注入 `DavHandler`，通过 `hyper` 绑定地址并启动服务
+- [x] 服务器启动时打印访问 URL 日志
 
 ### 阶段 4：可选的 HTTP Basic Auth
-- [ ] 创建 `vavavult_mount/src/auth.rs` — 实现 HTTP Basic Auth 中间件
-- [ ] 当 `MountConfig.auth` 为 `Some` 时，校验 `Authorization` 请求头
-- [ ] 认证失败返回 `401 Unauthorized` + `WWW-Authenticate: Basic realm="vavavult"`
+- [x] 创建 `vavavult_mount/src/auth.rs` — 实现 HTTP Basic Auth 中间件
+- [x] 当 `MountConfig.auth` 为 `Some` 时，校验 `Authorization` 请求头
+- [x] 认证失败返回 `401 Unauthorized` + `WWW-Authenticate: Basic realm="vavavult"`
 
 ### 阶段 5：写入支持（可选，受 `read_only` 配置控制）
 - [ ] 实现 `DavFileSystem::create_dir()` — 对 Vault 来说目录是隐式的，返回成功即可
