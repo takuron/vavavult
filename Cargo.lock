@@ -1984,12 +1984,14 @@ dependencies = [
 name = "vavavult_mount"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bytes",
  "dav-server",
  "futures",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "log",
  "tempfile",
  "thiserror",
  "tokio",

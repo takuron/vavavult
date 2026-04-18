@@ -139,6 +139,14 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
     *   **Path:** `vavavult_mount/src/error.rs`
     *   **Description:** Defines `MountError`, the unified error type for vault operations, I/O, server, authentication, and configuration errors.
 
+*   **`vavavult_mount::auth`**
+    *   **Path:** `vavavult_mount/src/auth.rs`
+    *   **Description:** Provides `check_basic_auth()`, a stateless function that validates an HTTP `Authorization: Basic ...` header against an `AuthConfig`. Decodes Base64, splits on the first colon, and compares username/password. Handles passwords containing colons correctly.
+
+*   **`vavavult_mount::server`**
+    *   **Path:** `vavavult_mount/src/server.rs`
+    *   **Description:** WebDAV server startup and lifecycle management. Provides `start_webdav_server(vault, config)` which binds a TCP listener, builds a `DavHandler` backed by `VaultDavFs`, and spawns a background tokio task that accepts connections via `hyper` HTTP/1.1. Returns a `ServerHandle` for graceful shutdown. If `config.auth` is set, every request is gated by `check_basic_auth()`; unauthenticated requests receive a `401 Unauthorized` with a `WWW-Authenticate: Basic realm="vavavult"` header.
+
 ### 3.5.3. Key Public Types
 
 *   **`VaultDavFs`**: The main `DavFileSystem` implementation. Wraps `Arc<Mutex<Vault>>` and translates WebDAV paths to `VaultPath` queries.
@@ -146,7 +154,9 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
 *   **`VaultDavMetaData`**: Metadata for vault entries (files and directories). Carries size, directory flag, and modification time.
 *   **`VaultDavDirEntry`**: Directory entry for `read_dir()` results. Contains only the entry name (not full path), as required by WebDAV.
 *   **`MountConfig`**: Server configuration (bind address, port, read-only mode, auth, prefix).
+*   **`AuthConfig`**: HTTP Basic Auth credentials (username, password). Used by `check_basic_auth()` and `start_webdav_server()`.
 *   **`MountError`**: Unified error enum for the mount crate.
+*   **`ServerHandle`**: Handle to a running WebDAV server. Exposes `bound_addr: SocketAddr` (useful for port-0 tests) and `shutdown() -> impl Future` for graceful teardown.
 
 ### 3.5.4. Testing
 

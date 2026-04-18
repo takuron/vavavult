@@ -51,6 +51,7 @@ pub use node::VaultDavFile;
 // // 保险库通过 `Arc<Mutex<Vault>>` 共享。互斥锁仅在元数据查询和提取任务准备
 // // 的短时间内持有。实际的解密（I/O 密集型）在不持有锁的情况下执行，
 // // 使用独立提取 API 和克隆的 `Arc<dyn StorageBackend>`。
+#[derive(Clone)]
 pub struct VaultDavFs {
     /// Shared reference to the vault instance, protected by a mutex.
     // // 保险库实例的共享引用，由互斥锁保护。
