@@ -43,11 +43,11 @@
 - [x] 认证失败返回 `401 Unauthorized` + `WWW-Authenticate: Basic realm="vavavult"`
 
 ### 阶段 5：写入支持（可选，受 `read_only` 配置控制）
-- [ ] 实现 `DavFileSystem::create_dir()` — 对 Vault 来说目录是隐式的，返回成功即可
-- [ ] 实现 `DavFile::write_all/write_bytes` (PUT) — 接收上传流 → 写入临时文件 → 调用 `vault.add_file()`
-- [ ] 实现 `DavFileSystem::remove_file()` (DELETE) — 调用 `vault.find_by_path()` → `vault.remove_file()`
-- [ ] 实现 `DavFileSystem::rename()` (MOVE) — 调用 `vault.find_by_path()` → `vault.move_file()`
-- [ ] 当 `read_only = true` 时，所有写入操作返回 `403 Forbidden`
+- [x] 实现 `DavFileSystem::create_dir()` — 对 Vault 来说目录是隐式的，返回成功即可
+- [x] 实现 `DavFile::write_all/write_bytes` (PUT) — 接收上传流 → 写入临时文件 → 调用 `vault.add_file()`
+- [x] 实现 `DavFileSystem::remove_file()` (DELETE) — 调用 `vault.find_by_path()` → `vault.remove_file()`
+- [x] 实现 `DavFileSystem::rename()` (MOVE) — 调用 `vault.find_by_path()` → `vault.move_file()`
+- [x] 当 `read_only = true` 时，所有写入操作返回 `403 Forbidden`
 
 ### 阶段 6：CLI 集成
 - [ ] 在 `vavavult_cli/Cargo.toml` 中添加 `vavavult_mount` 和 `tokio` 依赖

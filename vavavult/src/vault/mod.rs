@@ -1387,6 +1387,16 @@ impl Vault {
 // --- Standalone Functions for Parallelism ---
 // // --- 用于并行化的独立函数 ---
 
+/// 独立函数：通过读取器准备添加任务。
+pub fn prepare_addition_task_from_reader(
+    storage: &dyn StorageBackend,
+    reader: impl std::io::Read,
+    dest_path: &VaultPath,
+    source_modified_time: chrono::DateTime<chrono::Utc>,
+) -> Result<(AdditionTask, u64), AddFileError> {
+    add::prepare_addition_task_from_reader(storage, reader, dest_path, source_modified_time)
+}
+
 /// Encrypts a file for adding to the vault (Standalone).
 ///
 /// This is a thread-safe, CPU-intensive function that does not require a `&Vault` lock.

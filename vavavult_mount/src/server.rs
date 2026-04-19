@@ -8,7 +8,6 @@
 // //
 // // 此模块提供 `start_webdav_server()`，用于启动由 `VaultDavFs` 实例支持的 WebDAV 服务器。
 // // 服务器在后台 tokio 任务中运行，可通过返回的 `ServerHandle` 优雅关闭。
-
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -116,7 +115,7 @@ pub async fn start_webdav_server(
     config: MountConfig,
 ) -> Result<ServerHandle, MountError> {
     // 1. 构建 VaultDavFs 并注入 DavHandler
-    let vfs = VaultDavFs::new(vault);
+    let vfs = VaultDavFs::new(vault, config.read_only);
     let dav_handler = DavHandler::builder()
         .filesystem(Box::new(vfs))
         .build_handler();

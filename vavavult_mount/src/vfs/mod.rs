@@ -23,6 +23,8 @@ use vavavult::vault::Vault;
 mod node;
 pub use node::VaultDavFile;
 
+use std::collections::HashSet;
+
 /// Virtual filesystem adapter that exposes a Vavavult vault via WebDAV.
 ///
 /// This struct implements the `DavFileSystem` trait from `dav-server`, allowing
@@ -56,6 +58,16 @@ pub struct VaultDavFs {
     /// Shared reference to the vault instance, protected by a mutex.
     // // 保险库实例的共享引用，由互斥锁保护。
     vault: Arc<Mutex<Vault>>,
+
+    /// Whether the filesystem is read-only.
+    // // 文件系统是否为只读。
+    read_only: bool,
+
+    /// Virtual directories created during this mount session.
+    /// Since vault directories are implicit, we store explicitly created empty directories here.
+    // // 在此挂载会话期间创建的虚拟目录。
+    // // 由于保险库目录是隐式的，我们将显式创建的空目录存储在此处。
+    virtual_dirs: Arc<Mutex<HashSet<VaultPath>>>,
 }
 
 impl VaultDavFs {
@@ -63,6 +75,7 @@ impl VaultDavFs {
     ///
     /// # Arguments
     /// * `vault` - An `Arc<Mutex<Vault>>` to the vault to be exposed via WebDAV.
+    /// * `read_only` - Whether the filesystem should reject write operations.
     ///
     /// # Returns
     /// A new `VaultDavFs` instance ready to be used with a `DavHandler`.
@@ -71,11 +84,16 @@ impl VaultDavFs {
     // //
     // // # 参数
     // // * `vault` - 通过 WebDAV 暴露的保险库的 `Arc<Mutex<Vault>>`。
+    // // * `read_only` - 文件系统是否应拒绝写入操作。
     // //
     // // # 返回
     // // 一个新的 `VaultDavFs` 实例，可用于 `DavHandler`。
-    pub fn new(vault: Arc<Mutex<Vault>>) -> Self {
-        Self { vault }
+    pub fn new(vault: Arc<Mutex<Vault>>, read_only: bool) -> Self {
+        Self {
+            vault,
+            read_only,
+            virtual_dirs: Arc::new(Mutex::new(HashSet::new())),
+        }
     }
 }
 
@@ -170,6 +188,13 @@ impl DavFileSystem for VaultDavFs {
                     return Ok(Box::new(VaultDavMetaData::dir()) as Box<dyn DavMetaData>);
                 }
 
+                // Check virtual directories first
+                let virtual_dirs = self.virtual_dirs.lock().unwrap();
+                if virtual_dirs.contains(&vault_path) {
+                    return Ok(Box::new(VaultDavMetaData::dir()) as Box<dyn DavMetaData>);
+                }
+                drop(virtual_dirs);
+
                 // 非根目录：通过 list_by_path 检查是否有子条目
                 let vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
                 match vault.list_by_path(&vault_path) {
@@ -200,6 +225,14 @@ impl DavFileSystem for VaultDavFs {
                         // 处理客户端省略目录路径尾部斜杠的情况
                         let dir_path_str = format!("{}/", vault_path.as_str());
                         let dir_path = VaultPath::new(dir_path_str);
+
+                        // Check virtual directories first
+                        let virtual_dirs = self.virtual_dirs.lock().unwrap();
+                        if virtual_dirs.contains(&dir_path) {
+                            return Ok(Box::new(VaultDavMetaData::dir()) as Box<dyn DavMetaData>);
+                        }
+                        drop(virtual_dirs);
+
                         match vault.list_by_path(&dir_path) {
                             Ok(entries) if !entries.is_empty() => {
                                 Ok(Box::new(VaultDavMetaData::dir()) as Box<dyn DavMetaData>)
@@ -244,7 +277,7 @@ impl DavFileSystem for VaultDavFs {
             })?;
 
             // 将 DirectoryEntry 转换为 DavDirEntry
-            let items: Vec<Box<dyn DavDirEntry>> = entries
+            let mut items: Vec<Box<dyn DavDirEntry>> = entries
                 .into_iter()
                 .map(|entry| -> Box<dyn DavDirEntry> {
                     match entry {
@@ -263,6 +296,25 @@ impl DavFileSystem for VaultDavFs {
                     }
                 })
                 .collect();
+
+            // Add virtual directories
+            let virtual_dirs = self.virtual_dirs.lock().unwrap();
+            let parent_str = vault_path.as_str();
+            for vdir in virtual_dirs.iter() {
+                let vdir_str = vdir.as_str();
+                if vdir_str.starts_with(parent_str) && vdir_str.len() > parent_str.len() {
+                    let suffix = &vdir_str[parent_str.len()..];
+                    // if suffix contains exactly one '/' and it's at the end, it's a direct child
+                    if suffix.matches('/').count() == 1 && suffix.ends_with('/') {
+                        let name = suffix.trim_end_matches('/').to_string();
+                        // avoid duplicate if vault already returned it
+                        let is_duplicate = items.iter().any(|item| item.name() == name.as_bytes());
+                        if !is_duplicate {
+                            items.push(Box::new(VaultDavDirEntry::dir(name)));
+                        }
+                    }
+                }
+            }
 
             Ok(Box::pin(futures::stream::iter(items.into_iter().map(Ok)))
                 as FsStream<Box<dyn DavDirEntry>>)
@@ -289,7 +341,7 @@ impl DavFileSystem for VaultDavFs {
     fn open<'a>(
         &'a self,
         path: &'a DavPath,
-        _options: OpenOptions,
+        options: OpenOptions,
     ) -> FsFuture<'a, Box<dyn DavFile>> {
         Box::pin(async move {
             let vault_path = dav_path_to_vault_path(path);
@@ -297,6 +349,17 @@ impl DavFileSystem for VaultDavFs {
             // 不能打开目录作为文件
             if vault_path.is_dir() {
                 return Err(FsError::Forbidden);
+            }
+
+            if options.write {
+                if self.read_only {
+                    return Err(FsError::Forbidden);
+                }
+
+                return Ok(
+                    Box::new(VaultDavFile::new_write(self.vault.clone(), vault_path))
+                        as Box<dyn DavFile>,
+                );
             }
 
             let vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
@@ -325,6 +388,100 @@ impl DavFileSystem for VaultDavFs {
 
             // 6. 创建 VaultDavFile（阶段 2 解密将在首次读取时惰性执行）
             Ok(Box::new(VaultDavFile::new(task, storage, file_size, modified)) as Box<dyn DavFile>)
+        })
+    }
+
+    fn create_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
+        Box::pin(async move {
+            if self.read_only {
+                return Err(FsError::Forbidden);
+            }
+
+            let mut path_str = dav_path_to_vault_path(path).as_str().to_string();
+            if !path_str.ends_with('/') {
+                path_str.push('/');
+            }
+            let vault_path = VaultPath::new(&path_str);
+
+            let mut virtual_dirs = self.virtual_dirs.lock().unwrap();
+            virtual_dirs.insert(vault_path);
+
+            Ok(())
+        })
+    }
+
+    fn remove_file<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
+        Box::pin(async move {
+            if self.read_only {
+                return Err(FsError::Forbidden);
+            }
+
+            let vault_path = dav_path_to_vault_path(path);
+            if vault_path.is_dir() {
+                return Err(FsError::Forbidden);
+            }
+
+            let mut vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
+
+            let file_entry = match vault.find_by_path(&vault_path) {
+                Ok(vavavult::vault::QueryResult::Found(entry)) => entry,
+                Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),
+                Err(_) => return Err(FsError::GeneralFailure),
+            };
+
+            let _ = vault
+                .remove_file(&file_entry.sha256sum)
+                .map_err(|_| FsError::GeneralFailure)?;
+            Ok(())
+        })
+    }
+
+    fn remove_dir<'a>(&'a self, path: &'a DavPath) -> FsFuture<'a, ()> {
+        Box::pin(async move {
+            if self.read_only {
+                return Err(FsError::Forbidden);
+            }
+
+            let mut path_str = dav_path_to_vault_path(path).as_str().to_string();
+            if !path_str.ends_with('/') {
+                path_str.push('/');
+            }
+            let vault_path = VaultPath::new(&path_str);
+
+            let mut virtual_dirs = self.virtual_dirs.lock().unwrap();
+            if virtual_dirs.remove(&vault_path) {
+                Ok(())
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn rename<'a>(&'a self, from: &'a DavPath, to: &'a DavPath) -> FsFuture<'a, ()> {
+        Box::pin(async move {
+            if self.read_only {
+                return Err(FsError::Forbidden);
+            }
+
+            let from_path = dav_path_to_vault_path(from);
+            let to_path = dav_path_to_vault_path(to);
+
+            if from_path.is_dir() {
+                return Err(FsError::Forbidden);
+            }
+
+            let mut vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
+
+            let file_entry = match vault.find_by_path(&from_path) {
+                Ok(vavavult::vault::QueryResult::Found(entry)) => entry,
+                Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),
+                Err(_) => return Err(FsError::GeneralFailure),
+            };
+
+            let _ = vault
+                .move_file(&file_entry.sha256sum, &to_path)
+                .map_err(|_| FsError::GeneralFailure)?;
+            Ok(())
         })
     }
 
@@ -628,7 +785,7 @@ mod tests {
     async fn test_metadata_root_dir() {
         // 根目录始终存在
         let (_temp_dir, vault) = create_test_vault();
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/").expect("无法创建 DavPath");
         let meta = fs.metadata(&dav_path).await.expect("根目录元数据查询失败");
@@ -639,7 +796,7 @@ mod tests {
     async fn test_metadata_nonexistent_path() {
         // 不存在的路径应返回 NotFound
         let (_temp_dir, vault) = create_test_vault();
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/nonexistent").expect("无法创建 DavPath");
         let result = fs.metadata(&dav_path).await;
@@ -651,7 +808,7 @@ mod tests {
         // 添加文件后应能查询到元数据
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/test.txt").expect("无法创建 DavPath");
         let meta = fs.metadata(&dav_path).await.expect("文件元数据查询失败");
@@ -664,7 +821,7 @@ mod tests {
         // 包含文件的目录应能查询到元数据
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/docs/report.txt", b"report content");
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/docs/").expect("无法创建 DavPath");
         let meta = fs.metadata(&dav_path).await.expect("目录元数据查询失败");
@@ -676,7 +833,7 @@ mod tests {
         // 不带尾部斜杠的目录路径应回退为目录查找
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/docs/report.txt", b"report content");
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/docs").expect("无法创建 DavPath");
         let meta = fs.metadata(&dav_path).await.expect("目录回退查询失败");
@@ -689,7 +846,7 @@ mod tests {
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/file1.txt", b"content1");
         add_test_file(&mut vault, "/docs/note.txt", b"content2");
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/").expect("无法创建 DavPath");
         use futures::StreamExt;
@@ -709,7 +866,7 @@ mod tests {
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/docs/report.txt", b"report");
         add_test_file(&mut vault, "/docs/notes/todo.txt", b"todo");
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/docs/").expect("无法创建 DavPath");
         use futures::StreamExt;
@@ -728,7 +885,7 @@ mod tests {
         // 打开文件应成功
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/hello.txt", b"hello world");
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/hello.txt").expect("无法创建 DavPath");
         let mut file = fs
@@ -752,7 +909,7 @@ mod tests {
     async fn test_open_nonexistent_file() {
         // 打开不存在的文件应返回 NotFound
         let (_temp_dir, vault) = create_test_vault();
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/nonexistent.txt").expect("无法创建 DavPath");
         let result = fs
@@ -772,7 +929,7 @@ mod tests {
         // 打开目录应返回 Forbidden
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/docs/file.txt", b"content");
-        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)));
+        let fs = VaultDavFs::new(Arc::new(Mutex::new(vault)), true);
 
         let dav_path = DavPath::new("/docs/").expect("无法创建 DavPath");
         let result = fs

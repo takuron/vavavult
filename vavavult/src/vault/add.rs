@@ -1,25 +1,24 @@
-use std::fs::{self, File};
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use chrono::{DateTime, Utc};
-use crate::crypto::stream_cipher;
 use crate::common::constants::{
-    META_FILE_ADD_TIME, META_FILE_SIZE, META_FILE_UPDATE_TIME,
-    META_SOURCE_MODIFIED_TIME
+    META_FILE_ADD_TIME, META_FILE_SIZE, META_FILE_UPDATE_TIME, META_SOURCE_MODIFIED_TIME,
 };
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
-use crate::crypto::encrypt::{EncryptError};
-use crate::file::path::VaultPath;
-use crate::file::PathError;
+use crate::crypto::encrypt::EncryptError;
+use crate::crypto::stream_cipher;
 use crate::crypto::stream_cipher::StreamCipherError;
-use crate::utils::random::{generate_random_password};
+use crate::file::PathError;
+use crate::file::path::VaultPath;
+use crate::storage::{StagingToken, StorageBackend};
+use crate::utils::random::generate_random_password;
 use crate::utils::time::now_as_rfc3339_string;
-use crate::vault::{query, FileEntry};
-use crate::vault::query::QueryResult;
-use crate::storage::{StorageBackend, StagingToken};
-use crate::vault::metadata::MetadataError;
 pub(crate) use crate::vault::Vault;
+use crate::vault::metadata::MetadataError;
+use crate::vault::query::QueryResult;
+use crate::vault::{FileEntry, query};
+use chrono::{DateTime, Utc};
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
 
 /// Defines errors that can occur during the file addition process.
 //
@@ -47,7 +46,9 @@ pub enum AddFileError {
     /// The target `VaultPath` was a directory path, but a file path was required.
     //
     // // 目标 `VaultPath` 是一个目录路径，但需要的是文件路径。
-    #[error("The provided vault path is invalid: '{0}' (must be a file path, not a directory path)")]
+    #[error(
+        "The provided vault path is invalid: '{0}' (must be a file path, not a directory path)"
+    )]
     InvalidFilePath(String),
 
     /// A database query failed during pre-checks.
@@ -71,8 +72,10 @@ pub enum AddFileError {
     /// A file with the same *original* content hash already exists.
     //
     // // 具有相同 *原始* 内容哈希的文件已存在。
-    #[error("A file with the same original content (Original SHA256: {0}) already exists at path '{1}' or in this batch.")]
-    DuplicateOriginalContent (String, String),
+    #[error(
+        "A file with the same original content (Original SHA256: {0}) already exists at path '{1}' or in this batch."
+    )]
+    DuplicateOriginalContent(String, String),
 
     /// The source file path has no filename (e.g., ".") and cannot be added to a directory.
     //
@@ -124,14 +127,98 @@ pub struct AdditionTask {
     pub staging_token: Box<dyn StagingToken>,
 }
 
+/// 这是一个直接从实现 `Read` 的流中准备添加任务的函数。
+/// 用于流式上传，避免创建本地临时文件。
+pub(crate) fn prepare_addition_task_from_reader(
+    storage: &dyn StorageBackend,
+    mut reader: impl std::io::Read,
+    dest_path: &VaultPath,
+    source_modified_time: DateTime<Utc>,
+) -> Result<(AdditionTask, u64), AddFileError> {
+    // 1. 验证目标路径
+    if !dest_path.is_file() {
+        return Err(AddFileError::InvalidFilePath(
+            dest_path.as_str().to_string(),
+        ));
+    }
+
+    // 2. 调用存储后端准备写入
+    let (mut staging_writer, staging_token) =
+        storage.prepare_write().map_err(AddFileError::IoError)?;
+
+    // 3. 构建一个带有计数功能的 Reader
+    struct CountingReader<R> {
+        inner: R,
+        count: u64,
+    }
+    impl<R: std::io::Read> std::io::Read for CountingReader<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.count += n as u64;
+            Ok(n)
+        }
+    }
+    let mut counting_reader = CountingReader {
+        inner: reader,
+        count: 0,
+    };
+
+    // 4. 调用 stream_cipher
+    let per_file_password = generate_random_password(16);
+    let (encrypted_sha256sum, original_sha256sum) = stream_cipher::stream_encrypt_and_hash(
+        &mut counting_reader,
+        &mut staging_writer,
+        &per_file_password,
+    )?;
+
+    let file_size = counting_reader.count;
+
+    // 5. 构建 FileEntry
+    let now = now_as_rfc3339_string();
+    let metadata = vec![
+        MetadataEntry {
+            key: META_FILE_ADD_TIME.to_string(),
+            value: now.clone(),
+        },
+        MetadataEntry {
+            key: META_FILE_UPDATE_TIME.to_string(),
+            value: now,
+        },
+        MetadataEntry {
+            key: META_FILE_SIZE.to_string(),
+            value: file_size.to_string(),
+        },
+        MetadataEntry {
+            key: META_SOURCE_MODIFIED_TIME.to_string(),
+            value: source_modified_time.to_rfc3339(),
+        },
+    ];
+
+    let file_entry = FileEntry {
+        path: dest_path.clone(),
+        sha256sum: encrypted_sha256sum,
+        original_sha256sum,
+        encrypt_password: per_file_password,
+        tags: Vec::new(),
+        metadata,
+    };
+
+    Ok((
+        AdditionTask {
+            file_entry,
+            staging_token,
+        },
+        file_size,
+    ))
+}
+
 /// 这是新的独立函数 (standalone)，不依赖 Vault。
 /// 它可以被 CLI 无锁调用。
 pub(crate) fn prepare_addition_task_standalone(
     storage: &dyn StorageBackend,
     source_path: &Path,
-    dest_path: &VaultPath
+    dest_path: &VaultPath,
 ) -> Result<AdditionTask, AddFileError> {
-
     // 1. 验证源文件 (这里仍依赖本地 FS，因为我们是从本地添加)
     if !source_path.is_file() {
         return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
@@ -139,18 +226,22 @@ pub(crate) fn prepare_addition_task_standalone(
     // 2. 解析最终路径
     let final_dest_path = resolve_final_path(source_path, dest_path)?;
     if !final_dest_path.is_file() {
-        return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
+        return Err(AddFileError::InvalidFilePath(
+            final_dest_path.as_str().to_string(),
+        ));
     }
     // 3. 获取元数据
     let source_metadata = fs::metadata(source_path).map_err(AddFileError::IoError)?;
     let file_size = source_metadata.len();
-    let source_modified_time: DateTime<Utc> = source_metadata.modified()
-        .map_err(AddFileError::IoError)?.into();
+    let source_modified_time: DateTime<Utc> = source_metadata
+        .modified()
+        .map_err(AddFileError::IoError)?
+        .into();
 
     // 4. 调用存储后端准备写入
     // 这将返回一个写入器 (Writer) 和一个令牌 (Token)
-    let (mut staging_writer, staging_token) = storage.prepare_write()
-        .map_err(AddFileError::IoError)?;
+    let (mut staging_writer, staging_token) =
+        storage.prepare_write().map_err(AddFileError::IoError)?;
 
     // 打开源文件
     let mut source_file = File::open(source_path).map_err(AddFileError::IoError)?;
@@ -158,20 +249,31 @@ pub(crate) fn prepare_addition_task_standalone(
     // 5. 调用 stream_cipher
     // 直接写入到 storage 提供的 writer 中
     let per_file_password = generate_random_password(16);
-    let (encrypted_sha256sum, original_sha256sum) =
-        stream_cipher::stream_encrypt_and_hash(
-            &mut source_file,
-            &mut staging_writer,
-            &per_file_password
-        )?;
+    let (encrypted_sha256sum, original_sha256sum) = stream_cipher::stream_encrypt_and_hash(
+        &mut source_file,
+        &mut staging_writer,
+        &per_file_password,
+    )?;
 
     // 6. 构建 FileEntry
     let now = now_as_rfc3339_string();
     let metadata = vec![
-        MetadataEntry { key: META_FILE_ADD_TIME.to_string(), value: now.clone() },
-        MetadataEntry { key: META_FILE_UPDATE_TIME.to_string(), value: now },
-        MetadataEntry { key: META_FILE_SIZE.to_string(), value: file_size.to_string() },
-        MetadataEntry { key: META_SOURCE_MODIFIED_TIME.to_string(), value: source_modified_time.to_rfc3339() },
+        MetadataEntry {
+            key: META_FILE_ADD_TIME.to_string(),
+            value: now.clone(),
+        },
+        MetadataEntry {
+            key: META_FILE_UPDATE_TIME.to_string(),
+            value: now,
+        },
+        MetadataEntry {
+            key: META_FILE_SIZE.to_string(),
+            value: file_size.to_string(),
+        },
+        MetadataEntry {
+            key: META_SOURCE_MODIFIED_TIME.to_string(),
+            value: source_modified_time.to_rfc3339(),
+        },
     ];
 
     let file_entry = FileEntry {
@@ -193,7 +295,7 @@ pub(crate) fn prepare_addition_task_standalone(
 /// 阶段 2: 提交一个文件添加事务 (需要独占访问的自由函数)
 pub(crate) fn execute_addition_tasks(
     vault: &mut Vault,
-    files: Vec<AdditionTask>
+    files: Vec<AdditionTask>,
 ) -> Result<(), AddFileError> {
     if files.is_empty() {
         return Ok(());
@@ -219,12 +321,22 @@ pub(crate) fn execute_addition_tasks(
         }
 
         // 检查数据库中原始哈希是否重复
-        if let QueryResult::Found(existing) = query::check_by_original_hash(vault, &entry.original_sha256sum)? {
-            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing.path.to_string()));
+        if let QueryResult::Found(existing) =
+            query::check_by_original_hash(vault, &entry.original_sha256sum)?
+        {
+            return Err(AddFileError::DuplicateOriginalContent(
+                entry.original_sha256sum.to_string(),
+                existing.path.to_string(),
+            ));
         }
         // 检查批内原始哈希是否重复
-        if let Some(existing_path) = originals_in_batch.insert(&entry.original_sha256sum, &entry.path) {
-            return Err(AddFileError::DuplicateOriginalContent(entry.original_sha256sum.to_string(),existing_path.to_string()));
+        if let Some(existing_path) =
+            originals_in_batch.insert(&entry.original_sha256sum, &entry.path)
+        {
+            return Err(AddFileError::DuplicateOriginalContent(
+                entry.original_sha256sum.to_string(),
+                existing_path.to_string(),
+            ));
         }
 
         // 检查加密后哈希是否重复 (主键，理论上概率极低，但保险起见)
@@ -243,7 +355,7 @@ pub(crate) fn execute_addition_tasks(
             "INSERT INTO files (sha256sum, path, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3, ?4)"
         )?;
         let mut meta_stmt = tx.prepare(
-            "INSERT INTO metadata (file_sha256sum, meta_key, meta_value) VALUES (?1, ?2, ?3)"
+            "INSERT INTO metadata (file_sha256sum, meta_key, meta_value) VALUES (?1, ?2, ?3)",
         )?;
 
         // 插入所有记录
@@ -275,10 +387,15 @@ pub(crate) fn execute_addition_tasks(
 }
 
 /// 快捷函数：添加一个新文件
-pub(crate) fn add_file(vault: &mut Vault, source_path: &Path, dest_path: &VaultPath) -> Result<VaultHash, AddFileError> {
+pub(crate) fn add_file(
+    vault: &mut Vault,
+    source_path: &Path,
+    dest_path: &VaultPath,
+) -> Result<VaultHash, AddFileError> {
     // 阶段 1: 加密
     // 使用 self.storage
-    let file_to_add = prepare_addition_task_standalone(vault.storage.as_ref(), source_path, dest_path)?;
+    let file_to_add =
+        prepare_addition_task_standalone(vault.storage.as_ref(), source_path, dest_path)?;
 
     let hash = file_to_add.file_entry.sha256sum.clone();
 
@@ -296,14 +413,18 @@ fn commit_storage_files(
     for file_to_add in files {
         // 调用后端的 commit_write
         // 这通常会将暂存文件重命名/移动到最终位置
-        storage.commit_write(file_to_add.staging_token, &file_to_add.file_entry.sha256sum)
+        storage
+            .commit_write(file_to_add.staging_token, &file_to_add.file_entry.sha256sum)
             .map_err(AddFileError::IoError)?;
     }
     Ok(())
 }
 
 /// 辅助函数：根据源路径和目标路径解析最终的文件路径。 (保持不变)
-fn resolve_final_path(source_path: &Path, dest_path: &VaultPath) -> Result<VaultPath, AddFileError> {
+fn resolve_final_path(
+    source_path: &Path,
+    dest_path: &VaultPath,
+) -> Result<VaultPath, AddFileError> {
     if dest_path.is_dir() {
         // 目标是目录，附加源文件名
         let source_filename = source_path
