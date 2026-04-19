@@ -127,11 +127,40 @@ pub struct AdditionTask {
     pub staging_token: Box<dyn StagingToken>,
 }
 
-/// 这是一个直接从实现 `Read` 的流中准备添加任务的函数。
-/// 用于流式上传，避免创建本地临时文件。
+/// Prepares an addition task directly from a reader stream.
+///
+/// Used for streaming uploads to bypass local temporary file creation.
+///
+/// # Arguments
+/// * `storage` - The storage backend to use.
+/// * `reader` - An object implementing `std::io::Read` to stream data from.
+/// * `dest_path` - The target `VaultPath`.
+/// * `source_modified_time` - The modification time of the source data.
+///
+/// # Returns
+/// A tuple containing the `AdditionTask` and the processed file size in bytes.
+///
+/// # Errors
+/// Returns `AddFileError` if encryption fails, IO error occurs, or path is invalid.
+//
+// // 直接从读取器流准备添加任务。
+// //
+// // 用于流式上传，绕过本地临时文件的创建。
+// //
+// // # 参数
+// // * `storage` - 要使用的存储后端。
+// // * `reader` - 实现 `std::io::Read` 以从中流入数据的对象。
+// // * `dest_path` - 目标 `VaultPath`。
+// // * `source_modified_time` - 源数据的修改时间。
+// //
+// // # 返回
+// // 一个包含 `AdditionTask` 和处理过的文件大小（字节）的元组。
+// //
+// // # 错误
+// // 如果加密失败、发生 IO 错误或路径无效，则返回 `AddFileError`。
 pub(crate) fn prepare_addition_task_from_reader(
     storage: &dyn StorageBackend,
-    mut reader: impl std::io::Read,
+    reader: impl std::io::Read,
     dest_path: &VaultPath,
     source_modified_time: DateTime<Utc>,
 ) -> Result<(AdditionTask, u64), AddFileError> {

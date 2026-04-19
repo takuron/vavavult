@@ -1387,7 +1387,39 @@ impl Vault {
 // --- Standalone Functions for Parallelism ---
 // // --- 用于并行化的独立函数 ---
 
-/// 独立函数：通过读取器准备添加任务。
+/// Prepares a task to add a file directly from a reader.
+///
+/// This function encrypts data stream directly from a `Read` object, avoiding the need
+/// for a temporary local file. Useful for stream uploads like WebDAV PUT.
+///
+/// # Arguments
+/// * `storage` - The storage backend to use.
+/// * `reader` - An object implementing `std::io::Read` to stream data from.
+/// * `dest_path` - The target `VaultPath`.
+/// * `source_modified_time` - The modification time of the source data.
+///
+/// # Returns
+/// A tuple containing the `AdditionTask` and the processed file size in bytes.
+///
+/// # Errors
+/// Returns `AddFileError` if encryption fails, IO error occurs, or path is invalid.
+//
+// // 从读取器直接准备添加文件的任务。
+// //
+// // 此函数直接从 `Read` 对象加密数据流，避免了创建临时本地文件的需要。
+// // 适用于如 WebDAV PUT 这样的流式上传。
+// //
+// // # 参数
+// // * `storage` - 要使用的存储后端。
+// // * `reader` - 实现 `std::io::Read` 以从中流入数据的对象。
+// // * `dest_path` - 目标 `VaultPath`。
+// // * `source_modified_time` - 源数据的修改时间。
+// //
+// // # 返回
+// // 一个包含 `AdditionTask` 和处理过的文件大小（字节）的元组。
+// //
+// // # 错误
+// // 如果加密失败、发生 IO 错误或路径无效，则返回 `AddFileError`。
 pub fn prepare_addition_task_from_reader(
     storage: &dyn StorageBackend,
     reader: impl std::io::Read,

@@ -57,15 +57,39 @@ impl std::io::Read for ReceiverReader {
     }
 }
 
+/// Represents the operation state of a `VaultDavFile`.
+///
+/// A WebDAV file handle can be opened for either reading (e.g., GET requests)
+/// or writing (e.g., PUT requests).
+//
+// // 代表 `VaultDavFile` 的操作状态。
+// //
+// // WebDAV 文件句柄可以为了读取（例如 GET 请求）或写入（例如 PUT 请求）而打开。
 pub enum VaultDavFileState {
+    /// State for a file opened for reading.
+    // // 为读取而打开的文件状态。
     Read {
+        /// The extraction task, consumed on first read.
+        // // 提取任务，在首次读取时消费。
         task: Option<ExtractionTask>,
+        /// Reference to the storage backend.
+        // // 对存储后端的引用。
         storage: Arc<dyn StorageBackend>,
+        /// Open file handle to the decrypted temporary file.
+        // // 解密临时文件的打开文件句柄。
         content: Option<File>,
+        /// Path to the temporary file for cleanup.
+        // // 临时文件的路径，用于清理。
         temp_path: Option<PathBuf>,
     },
+    /// State for a file opened for writing.
+    // // 为写入而打开的文件状态。
     Write {
+        /// Channel to send incoming bytes to the background encryption task.
+        // // 用于将传入字节发送到后台加密任务的通道。
         write_tx: Option<tokio::sync::mpsc::Sender<bytes::Bytes>>,
+        /// Handle to await the completion of the background encryption task.
+        // // 用于等待后台加密任务完成的句柄。
         write_join_handle: Option<tokio::task::JoinHandle<Result<(), FsError>>>,
     },
 }
@@ -104,6 +128,28 @@ impl VaultDavFile {
         }
     }
 
+    /// Creates a new `VaultDavFile` in write mode.
+    ///
+    /// This sets up a background task that streams incoming data through the
+    /// encryption cipher and commits it to the vault upon completion.
+    ///
+    /// # Arguments
+    /// * `vault` - The vault instance to write to.
+    /// * `vault_path` - The target path within the vault.
+    ///
+    /// # Returns
+    /// A new `VaultDavFile` instance ready for writing.
+    //
+    // // 以写入模式创建一个新的 `VaultDavFile`。
+    // //
+    // // 这会设置一个后台任务，通过加密密码流式传输传入数据，并在完成后将其提交到保险库。
+    // //
+    // // # 参数
+    // // * `vault` - 要写入的保险库实例。
+    // // * `vault_path` - 保险库内的目标路径。
+    // //
+    // // # 返回
+    // // 一个准备好进行写入的新 `VaultDavFile` 实例。
     pub fn new_write(vault: Arc<Mutex<Vault>>, vault_path: vavavult::file::VaultPath) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(32);
 
