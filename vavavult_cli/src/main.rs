@@ -56,8 +56,17 @@ fn main() -> Result<(), CliError> {
                 vault.config.name
             );
             println!("Type 'help' for commands or 'exit' to quit.");
+
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime");
+
             let mut app_state = AppState {
                 active_vault: Some(Arc::new(Mutex::new(vault))),
+                server_handle: None,
+                mount_handle: None,
+                rt,
             };
             run_repl(&mut app_state)?;
         }

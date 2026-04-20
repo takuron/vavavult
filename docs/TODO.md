@@ -50,12 +50,12 @@
 - [x] 当 `read_only = true` 时，所有写入操作返回 `403 Forbidden`
 
 ### 阶段 6：CLI 集成
-- [ ] 在 `vavavult_cli/Cargo.toml` 中添加 `vavavult_mount` 和 `tokio` 依赖
-- [ ] 在 `vavavult_cli/src/cli.rs` 中添加 `Mount` / `Unmount` REPL 命令定义
-- [ ] 创建 `vavavult_cli/src/handlers/mount.rs` — 实现 mount/unmount handler
-- [ ] 更新 `vavavult_cli/src/handlers/mod.rs` — 注册新 handler
-- [ ] 更新 `vavavult_cli/src/repl/dispatcher.rs` — 添加 Mount/Unmount 分发逻辑
-- [ ] 扩展 `vavavult_cli/src/repl/state.rs` 中的 `AppState`，添加 `server_handle: Option<ServerHandle>` 字段
+- [x] 在 `vavavult_cli/Cargo.toml` 中添加 `vavavult_mount` 和 `tokio` 依赖
+- [x] 在 `vavavult_cli/src/cli.rs` 中添加 `Mount` / `Unmount` REPL 命令定义
+- [x] 创建 `vavavult_cli/src/handlers/mount.rs` — 实现 mount/unmount handler
+- [x] 更新 `vavavult_cli/src/handlers/mod.rs` — 注册新 handler
+- [x] 更新 `vavavult_cli/src/repl/dispatcher.rs` — 添加 Mount/Unmount 分发逻辑
+- [x] 扩展 `vavavult_cli/src/repl/state.rs` 中的 `AppState`，添加 `server_handle: Option<ServerHandle>` 字段
 
 ### 阶段 7：测试
 - [ ] VFS 单元测试：元数据映射正确性、目录列表正确性、文件读取（解密）正确性

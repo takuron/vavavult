@@ -205,6 +205,37 @@ pub enum ReplCommand {
     //  管理保险库本身
     #[command(subcommand)]
     Vault(VaultCommand),
+    /// Mount the vault as a WebDAV network drive
+    //  将保险库挂载为 WebDAV 网络驱动器
+    Mount {
+        /// Optional port for the WebDAV server. Default: 21980
+        //  可选的 WebDAV 服务器端口。默认值: 21980
+        #[arg(short = 'p', long, default_value = "21980")]
+        port: u16,
+
+        /// Optional bind address. Default: 127.0.0.1
+        //  可选的绑定地址。默认值: 127.0.0.1
+        #[arg(short = 'b', long, default_value = "127.0.0.1")]
+        bind: String,
+
+        /// Start the WebDAV server only, without mounting to the system
+        //  仅启动 WebDAV 服务器，不挂载到系统
+        #[arg(short = 'w', long = "webdav-only")]
+        webdav_only: bool,
+
+        /// Mount as read-only
+        //  以只读模式挂载
+        #[arg(short = 'r', long = "read-only")]
+        read_only: bool,
+
+        /// Optional mount point (drive letter or path). Default: automatic
+        //  可选的挂载点 (盘符或路径)。默认值: 自动分配
+        #[arg(short = 'm', long = "mount-point")]
+        mount_point: Option<String>,
+    },
+    /// Unmount the previously mounted WebDAV network drive
+    //  卸载之前挂载的 WebDAV 网络驱动器
+    Unmount,
     /// Verify the integrity of files in the vault
     //  校验保险库中文件的完整性
     Verify {

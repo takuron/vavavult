@@ -9,3 +9,4 @@
 [2026-04-19T18:27:50+08:00] Implemented Phase 5: WebDAV write support. Added streaming file upload without local temp files using prepare_addition_task_from_reader. Implemented virtual directories in memory for empty directories created via WebDAV. Handled create_dir, remove_file, remove_dir, and rename in DavFileSystem with read_only config check.
 [2026-04-20T09:38:24+08:00] Implemented SystemMounter in vavavult_mount/src/sys_mount.rs to mount WebDAV as a local network drive before CLI integration. Documented in llm_readme.txt.
 [2026-04-20T09:40:02+08:00] Added rclone fallback for macOS in SystemMounter to match Windows and Linux behavior.
+[2026-04-20T09:48:13+08:00] Implemented CLI integration for mount feature: added Mount/Unmount REPL commands, handler, and state management, providing auto-mounting by default on port 21980.

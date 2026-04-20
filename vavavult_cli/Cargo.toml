@@ -11,6 +11,8 @@ path = "src/main.rs"
 [dependencies]
 
 vavavult = { path = "../vavavult" }
+vavavult_mount = { path = "../vavavult_mount" }
+tokio = { workspace = true, features = ["full"] }
 
 # 从工作区继承 clap 的配置
 clap = { workspace = true, features = ["derive"] }

@@ -1976,7 +1976,9 @@ dependencies = [
  "shlex",
  "tempfile",
  "thiserror",
+ "tokio",
  "vavavult",
+ "vavavult_mount",
  "walkdir",
 ]
 
