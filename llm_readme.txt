@@ -131,6 +131,10 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
     *   `mod.rs`: Defines `VaultDavFs` (the main `DavFileSystem` implementation), `VaultDavMetaData`, and `VaultDavDirEntry`. Provides `metadata()`, `read_dir()`, and `open()` methods.
     *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy decryption to a temporary file, file-handle-based streaming reads (O(1) memory), native `File::seek` for HTTP Range requests, and automatic temp-file cleanup via `Drop`.
 
+*   **`vavavult_mount::sys_mount`**
+    *   **Path:** `vavavult_mount/src/sys_mount.rs`
+    *   **Description:** System-level utility class for mounting WebDAV as a local network drive across different platforms (Windows, macOS, Linux). Allows the use of third-party support (e.g., `rclone` with `winfsp`) on systems where the native method is problematic.
+
 *   **`vavavult_mount::config`**
     *   **Path:** `vavavult_mount/src/config.rs`
     *   **Description:** Defines `MountConfig` (bind address, port, read-only flag, prefix) and `AuthConfig` (HTTP Basic Auth credentials).
@@ -156,6 +160,8 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
 *   **`MountConfig`**: Server configuration (bind address, port, read-only mode, auth, prefix).
 *   **`AuthConfig`**: HTTP Basic Auth credentials (username, password). Used by `check_basic_auth()` and `start_webdav_server()`.
 *   **`MountError`**: Unified error enum for the mount crate.
+*   **`MountHandle`**: Represents a mount handle. The mount will be automatically unmounted when the handle is dropped.
+*   **`SystemMounter`**: Utility struct that provides a cross-platform `mount` method for attaching a WebDAV URL as a local network drive.
 *   **`ServerHandle`**: Handle to a running WebDAV server. Exposes `bound_addr: SocketAddr` (useful for port-0 tests) and `shutdown() -> impl Future` for graceful teardown.
 
 ### 3.5.4. Testing

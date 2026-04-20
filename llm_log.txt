@@ -7,3 +7,5 @@
 [2026-04-18T12:43:15+08:00] 改进 VaultDavFile 为流式读取架构：将 Cursor<Vec<u8>> 全量内存缓存替换为基于临时文件句柄的按需流式读取。解密到临时文件后保持 File 句柄，read_bytes 仅分配请求大小的缓冲区（O(1) 内存），seek 委托给 File 原生 Seek（OS lseek），添加 Drop impl 自动清理临时文件。新增 2 个测试（Drop 清理、反复 seek+read），全部 30 个测试通过。
 [2026-04-18T15:26:07+08:00] [Phase 3] 实现 WebDAV 服务器启动与生命周期管理：新增 vavavult_mount/src/server.rs（ServerHandle、start_webdav_server）和 vavavult_mount/src/auth.rs（check_basic_auth），为 VaultDavFs 添加 Clone derive，更新 lib.rs 导出，更新 llm_readme.txt。
 [2026-04-19T18:27:50+08:00] Implemented Phase 5: WebDAV write support. Added streaming file upload without local temp files using prepare_addition_task_from_reader. Implemented virtual directories in memory for empty directories created via WebDAV. Handled create_dir, remove_file, remove_dir, and rename in DavFileSystem with read_only config check.
+[2026-04-20T09:38:24+08:00] Implemented SystemMounter in vavavult_mount/src/sys_mount.rs to mount WebDAV as a local network drive before CLI integration. Documented in llm_readme.txt.
+[2026-04-20T09:40:02+08:00] Added rclone fallback for macOS in SystemMounter to match Windows and Linux behavior.
