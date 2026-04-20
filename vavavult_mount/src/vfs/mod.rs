@@ -464,14 +464,55 @@ impl DavFileSystem for VaultDavFs {
             }
 
             let from_path = dav_path_to_vault_path(from);
-            let to_path = dav_path_to_vault_path(to);
-
-            if from_path.is_dir() {
-                return Err(FsError::Forbidden);
-            }
+            let mut to_path = dav_path_to_vault_path(to);
 
             let mut vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
 
+            if from_path.is_dir() {
+                // 如果是目录，我们要递归移动里面的所有文件，并更新 virtual_dirs
+                let mut to_path_str = to_path.as_str().to_string();
+                if !to_path_str.ends_with('/') {
+                    to_path_str.push('/');
+                }
+                to_path = vavavult::file::VaultPath::new(&to_path_str);
+
+                // 递归获取所有文件
+                let files_to_move = vault.list_all_recursive(&from_path).unwrap_or_default();
+                for hash in files_to_move {
+                    if let Ok(vavavult::vault::QueryResult::Found(entry)) =
+                        vault.find_by_hash(&hash)
+                    {
+                        if let Some(relative) = entry.path.as_str().strip_prefix(from_path.as_str())
+                        {
+                            let new_path_str = format!("{}{}", to_path.as_str(), relative);
+                            let new_path = vavavult::file::VaultPath::new(&new_path_str);
+                            let _ = vault
+                                .move_file(&hash, &new_path)
+                                .map_err(|_| FsError::GeneralFailure)?;
+                        }
+                    }
+                }
+
+                // 更新 virtual_dirs（处理那些没有实体文件但是被记录为空目录的记录）
+                let mut virtual_dirs = self.virtual_dirs.lock().unwrap();
+                let mut new_virtual_dirs = std::collections::HashSet::new();
+                for vd in virtual_dirs.drain() {
+                    if let Some(relative) = vd.as_str().strip_prefix(from_path.as_str()) {
+                        let mut new_vd_str = format!("{}{}", to_path.as_str(), relative);
+                        if !new_vd_str.ends_with('/') {
+                            new_vd_str.push('/');
+                        }
+                        new_virtual_dirs.insert(vavavult::file::VaultPath::new(&new_vd_str));
+                    } else {
+                        new_virtual_dirs.insert(vd);
+                    }
+                }
+                *virtual_dirs = new_virtual_dirs;
+
+                return Ok(());
+            }
+
+            // 单个文件重命名
             let file_entry = match vault.find_by_path(&from_path) {
                 Ok(vavavult::vault::QueryResult::Found(entry)) => entry,
                 Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),

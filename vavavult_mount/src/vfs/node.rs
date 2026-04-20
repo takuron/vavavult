@@ -178,6 +178,19 @@ impl VaultDavFile {
             })?;
 
             let mut v = vault.lock().unwrap();
+
+            // WebDAV PUT 操作通常意味着覆盖现有文件。
+            // 由于 Vault 核心库会在检测到同名路径时返回 DuplicateFileName，
+            // 我们需要在这里先尝试移除可能存在的旧文件。
+            if let Ok(vavavult::vault::QueryResult::Found(existing_entry)) =
+                v.find_by_path(&vault_path)
+            {
+                if let Err(e) = v.remove_file(&existing_entry.sha256sum) {
+                    eprintln!("[vavavult_mount] 覆盖文件前移除旧文件失败: {:?}", e);
+                    return Err(FsError::GeneralFailure);
+                }
+            }
+
             v.execute_addition_tasks(vec![addition_task]).map_err(|e| {
                 eprintln!("[vavavult_mount] 提交文件失败: {:?}", e);
                 FsError::GeneralFailure
