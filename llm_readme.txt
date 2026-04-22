@@ -122,19 +122,17 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
 
 ### Streaming Architecture
 
-`VaultDavFile` uses a **pipe-based streaming** approach with a seek fallback:
+`VaultDavFile` uses a **pipe-based streaming** approach:
 
-- **Streaming mode (default):** Decryption runs in a background `spawn_blocking` task, writing 8KB chunks through an `mpsc` channel. `read_bytes()` pulls from the channel on demand, so the client receives data as soon as each chunk is decrypted — no need to wait for the entire file. Memory usage is O(chunk_size).
-- **Random-access mode (on seek):** If `seek()` is called, the remaining stream is drained into a temporary file and subsequent reads use native OS `lseek`. The temp file is cleaned up on `Drop`.
-- The state machine transitions: `Pending` → `Streaming` → (optional) `RandomAccess`.
+- **Streaming mode:** Decryption runs in a background `spawn_blocking` task, writing 8KB chunks through an `mpsc` channel. `read_bytes()` pulls from the channel on demand, so the client receives data as soon as each chunk is decrypted — no need to wait for the entire file. Memory usage is O(chunk_size).
+- **No seek support:** `seek()` always returns `FsError::NotImplemented`. Random access and concurrency are handled by rclone's `--vfs-cache-mode=full` at the VFS layer.
+- The state machine transitions: `Pending` → `Streaming`.
 
 ### rclone Performance Parameters
 
 When mounting via rclone, the following cache/performance parameters are applied:
-- `--vfs-cache-mode=full`: Full VFS caching to avoid repeated HTTP requests.
+- `--vfs-cache-mode=full`: Full VFS caching; rclone downloads files sequentially via the streaming pipe, then handles random access and concurrent reads locally.
 - `--dir-cache-time=30m` / `--attr-timeout=30m`: Reduce PROPFIND and attribute query frequency.
-- `--vfs-read-chunk-size=8M` / `--vfs-read-chunk-size-limit=64M`: Adaptive read chunk sizing.
-- `--vfs-read-ahead=16M`: Read-ahead buffer for sequential reads.
 
 ### 3.5.2. Key Modules and Their Functions
 
@@ -142,7 +140,7 @@ When mounting via rclone, the following cache/performance parameters are applied
     *   **Path:** `vavavult_mount/src/vfs/`
     *   **Description:** The virtual filesystem layer implementing `DavFileSystem`.
     *   `mod.rs`: Defines `VaultDavFs` (the main `DavFileSystem` implementation), `VaultDavMetaData`, and `VaultDavDirEntry`. Provides `metadata()`, `read_dir()`, and `open()` methods.
-    *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy decryption via a background `spawn_blocking` task, pipe-based streaming reads through `mpsc` channel, seek fallback to temporary file with native `File::seek`, and automatic temp-file cleanup via `Drop`.
+    *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy decryption via a background `spawn_blocking` task and pipe-based streaming reads through `mpsc` channel. Seek is not supported (`FsError::NotImplemented`); rclone `--vfs-cache-mode=full` handles random access at the VFS layer.
 
 *   **`vavavult_mount::sys_mount`**
     *   **Path:** `vavavult_mount/src/sys_mount.rs`
@@ -167,7 +165,7 @@ When mounting via rclone, the following cache/performance parameters are applied
 ### 3.5.3. Key Public Types
 
 *   **`VaultDavFs`**: The main `DavFileSystem` implementation. Wraps `Arc<Mutex<Vault>>` and translates WebDAV paths to `VaultPath` queries.
-*   **`VaultDavFile`**: A `DavFile` implementation with lazy decryption. Stores an `ExtractionTask` and `Arc<dyn StorageBackend>`; on first read, starts a background `spawn_blocking` decryption task that streams 8KB chunks through an `mpsc` channel. Reads pull from the channel on demand (pipe-based streaming). If `seek()` is called, drains remaining stream to a temp file and switches to random-access mode. Temp file (if created) is cleaned up on `Drop`.
+*   **`VaultDavFile`**: A `DavFile` implementation with lazy decryption. Stores an `ExtractionTask` and `Arc<dyn StorageBackend>`; on first read, starts a background `spawn_blocking` decryption task that streams 8KB chunks through an `mpsc` channel. Reads pull from the channel on demand (pipe-based streaming). `seek()` returns `FsError::NotImplemented`; random access is delegated to rclone `--vfs-cache-mode=full`.
 *   **`VaultDavMetaData`**: Metadata for vault entries (files and directories). Carries size, directory flag, and modification time.
 *   **`VaultDavDirEntry`**: Directory entry for `read_dir()` results. Contains only the entry name (not full path), as required by WebDAV.
 *   **`MountConfig`**: Server configuration (bind address, port, read-only mode, auth, prefix).
@@ -186,10 +184,9 @@ When mounting via rclone, the following cache/performance parameters are applied
     - Directory listing (root and subdirectories)
     - File opening (success, not found, forbidden for directories)
     - Lazy decryption (metadata without decryption, pipe-based streaming reads)
-    - Seek operations (`Start`, `Current`, `End`) with automatic drain to temp file
+    - Seek returns `FsError::NotImplemented`
     - Write prohibition in read-only mode
     - Large file reading (streaming via mpsc channel)
-    - Temporary file cleanup on `Drop` (only created when seek is used)
 
 ## 4. LLM Coding Specification
 
