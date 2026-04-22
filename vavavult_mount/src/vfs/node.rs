@@ -261,10 +261,16 @@ impl VaultDavFile {
 
                 let join_handle =
                     tokio::task::spawn_blocking(move || -> Result<(), FsError> {
-                        let writer = ChannelWriter {
+                        let channel_writer = ChannelWriter {
                             sender: tx,
                             rt_handle,
                         };
+                        // 缓冲大小对齐 stream_cipher 的 BUFFER_LEN (8192)，
+                        // 每个解密块写入刚好填满缓冲区，立即 flush 一次 channel send
+                        let writer = std::io::BufWriter::with_capacity(
+                            8192,
+                            channel_writer,
+                        );
                         vavavult::vault::Vault::decrypt_extraction_task(
                             storage.as_ref(),
                             &task,
