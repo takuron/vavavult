@@ -1,6 +1,6 @@
 [package]
 name = "vavavult_cli"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 
 # 显式指定二进制产物的名称和路径
