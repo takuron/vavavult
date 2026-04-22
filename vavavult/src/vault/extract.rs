@@ -1,5 +1,6 @@
-use std::path::{Path};
+use std::path::Path;
 use std::fs;
+use std::io::Write;
 use tempfile::NamedTempFile;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::crypto::encrypt::EncryptError;
@@ -95,41 +96,96 @@ pub(crate) fn prepare_extraction_task(
 
     // 3. 打包为 "工作票据"
     Ok(ExtractionTask {
-        file_hash: sha256sum.clone(), // 保存哈希
+        file_hash: sha256sum.clone(),
         password: file_entry.encrypt_password,
         expected_original_hash: file_entry.original_sha256sum,
         original_vault_path: file_entry.path.to_string(),
     })
 }
 
-/// (阶段 2) 执行一个已准备好的提取任务。
-/// 这是一个缓慢的、线程安全的函数（无 `&Vault` 锁）。
-pub(crate) fn execute_extraction_task_standalone(
-    storage: &dyn StorageBackend, // [新增]
-    task: &ExtractionTask,
-    destination_path: &Path,
-) -> Result<(), ExtractError> {
-    // 1. 确保目标目录存在
-    if let Some(parent_dir) = destination_path.parent() {
-        fs::create_dir_all(parent_dir)?;
-    }
+/// Stage 1 (Extract): Prepares multiple files for extraction in a single batch.
+///
+/// This is a fast method that queries the database for each hash and verifies
+/// that the corresponding file exists in the storage backend. Returns one
+/// `ExtractionTask` per hash, in the same order.
+///
+/// # Arguments
+/// * `vault` - The vault instance (read access).
+/// * `hashes` - A slice of `VaultHash`es to prepare for extraction.
+///
+/// # Returns
+/// A `Vec<ExtractionTask>` — one per hash, in the same order.
+///
+/// # Errors
+/// Returns `ExtractError` if any hash is not found or a database error occurs.
+//
+// // 阶段 1 (提取): 在单个批次中准备多个文件用于提取。
+// //
+// // 这是一个快速的方法，它为每个哈希查询数据库并验证对应的文件
+// // 存在于存储后端中。按相同顺序返回每个哈希对应的 `ExtractionTask`。
+// //
+// // # 参数
+// // * `vault` - 保险库实例（读取访问）。
+// // * `hashes` - 要准备提取的 `VaultHash` 切片。
+// //
+// // # 返回
+// // `Vec<ExtractionTask>` — 每个哈希一个，顺序相同。
+// //
+// // # 错误
+// // 如果任何哈希未找到或发生数据库错误，则返回 `ExtractError`。
+pub(crate) fn prepare_extraction_tasks(
+    vault: &Vault,
+    hashes: &[VaultHash],
+) -> Result<Vec<ExtractionTask>, ExtractError> {
+    hashes
+        .iter()
+        .map(|hash| prepare_extraction_task(vault, hash))
+        .collect()
+}
 
-    // 2. 从存储后端获取读取器
+/// Stage 2 (Extract): Decrypts a prepared extraction task to a writer stream.
+///
+/// This is a **thread-safe** function that does NOT require a `&Vault`.
+/// It performs the expensive CPU/IO decryption work using only the storage backend,
+/// writing the decrypted plaintext to the provided writer.
+///
+/// # Arguments
+/// * `storage` - The storage backend to read encrypted data from.
+/// * `task` - The extraction ticket from Stage 1.
+/// * `writer` - An object implementing `std::io::Write` to receive the decrypted data.
+///
+/// # Errors
+/// Returns `ExtractError` if decryption fails, IO error occurs, or integrity check fails.
+//
+// // 阶段 2 (提取): 将已准备好的提取任务解密到写入流。
+// //
+// // 这是一个 **线程安全** 的函数，不需要 `&Vault`。
+// // 它仅使用存储后端执行昂贵的 CPU/IO 解密工作，
+// // 将解密后的明文写入提供的写入器。
+// //
+// // # 参数
+// // * `storage` - 用于读取加密数据的存储后端。
+// // * `task` - 来自阶段 1 的提取票据。
+// // * `writer` - 实现 `std::io::Write` 以接收解密数据的对象。
+// //
+// // # 错误
+// // 如果解密失败、发生 IO 错误或完整性检查失败，则返回 `ExtractError`。
+pub(crate) fn decrypt_extraction_task(
+    storage: &dyn StorageBackend,
+    task: &ExtractionTask,
+    mut writer: impl Write,
+) -> Result<(), ExtractError> {
+    // 1. 从存储后端获取读取器
     let mut encrypted_reader = storage.reader(&task.file_hash)?;
 
-    // 3. 准备原子写入 (写入同目录下的临时文件)
-    // 这里的逻辑复用了原 decrypt_file 中的思路
-    let parent_dir = destination_path.parent().unwrap_or(Path::new("."));
-    let mut temp_file = NamedTempFile::new_in(parent_dir)?;
-
-    // 4. 执行解密 (直接调用 stream_cipher)
+    // 2. 执行解密，写入到调用方提供的 writer
     let calculated_original_hash = stream_cipher::stream_decrypt(
         &mut encrypted_reader,
-        &mut temp_file,
+        &mut writer,
         &task.password,
-    )?; // 会自动转换为 ExtractError (需确保 StreamCipherError 实现了 Into)
+    )?;
 
-    // 5. 比较哈希 (完整性检查)
+    // 3. 完整性检查
     if calculated_original_hash != task.expected_original_hash {
         return Err(ExtractError::IntegrityCheckFailed {
             path: task.original_vault_path.clone(),
@@ -138,18 +194,64 @@ pub(crate) fn execute_extraction_task_standalone(
         });
     }
 
-    // 6. 持久化 (Rename)
+    Ok(())
+}
+
+/// Stage 2 shortcut: Decrypts a prepared extraction task to a local file.
+///
+/// This wraps `decrypt_extraction_task` with atomic file writing:
+/// data is first written to a temporary file in the same directory,
+/// then atomically renamed to the final path on success.
+///
+/// # Arguments
+/// * `storage` - The storage backend to read encrypted data from.
+/// * `task` - The extraction ticket from Stage 1.
+/// * `destination_path` - The local path to save the decrypted file.
+///
+/// # Errors
+/// Returns `ExtractError` if decryption fails, IO error occurs, or integrity check fails.
+//
+// // 阶段 2 快捷方法: 将已准备好的提取任务解密到本地文件。
+// //
+// // 这包装了 `decrypt_extraction_task`，使用原子文件写入：
+// // 数据先写入同目录下的临时文件，成功后原子重命名到最终路径。
+// //
+// // # 参数
+// // * `storage` - 用于读取加密数据的存储后端。
+// // * `task` - 来自阶段 1 的提取票据。
+// // * `destination_path` - 保存解密文件的本地路径。
+// //
+// // # 错误
+// // 如果解密失败、发生 IO 错误或完整性检查失败，则返回 `ExtractError`。
+pub(crate) fn decrypt_extraction_task_to_file(
+    storage: &dyn StorageBackend,
+    task: &ExtractionTask,
+    destination_path: &Path,
+) -> Result<(), ExtractError> {
+    // 1. 确保目标目录存在
+    if let Some(parent_dir) = destination_path.parent() {
+        fs::create_dir_all(parent_dir)?;
+    }
+
+    // 2. 准备原子写入（写入同目录下的临时文件）
+    let parent_dir = destination_path.parent().unwrap_or(Path::new("."));
+    let temp_file = NamedTempFile::new_in(parent_dir)?;
+
+    // 3. 解密到临时文件
+    decrypt_extraction_task(storage, task, &temp_file)?;
+
+    // 4. 原子持久化
     temp_file.persist(destination_path).map_err(EncryptError::TempFilePersist)?;
 
     Ok(())
 }
 
-/// 从保险库中提取一个文件，并在解密后验证其完整性。
+/// 快捷函数：从保险库中提取一个文件到本地路径（两阶段合一）。
 pub(crate) fn extract_file(
     vault: &Vault,
     sha256sum: &VaultHash,
     destination_path: &Path,
 ) -> Result<(), ExtractError> {
     let task = prepare_extraction_task(vault, sha256sum)?;
-    execute_extraction_task_standalone(vault.storage.as_ref(), &task, destination_path)
+    decrypt_extraction_task_to_file(vault.storage.as_ref(), &task, destination_path)
 }

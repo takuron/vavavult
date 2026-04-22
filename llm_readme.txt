@@ -39,6 +39,10 @@ Provides the core logic for managing encrypted file vaults.
     *     2. **Encrypt** (`Vault::encrypt_addition_task`): Encrypts data from a `Read` stream (associated function, no `&self` needed — parallelizable).
     *     3. **Commit** (`commit_addition_tasks`): Commits encrypted files to DB (requires `&mut self`).
 
+*     The extraction API follows a similar two-phase pattern:
+    *     1. **Prepare** (`prepare_extraction_task` / `prepare_extraction_tasks`): Queries DB for decryption keys (requires `&self`).
+    *     2. **Decrypt** (`Vault::decrypt_extraction_task`): Decrypts to a `Write` stream (associated function, no `&self` — parallelizable). A file shortcut `Vault::decrypt_extraction_task_to_file` is also provided.
+
 *   **`vavavult::storage`**
     *   **Path:** `vavavult/src/storage/`
     *   **Description:** Implements the storage backend abstraction.

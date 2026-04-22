@@ -27,12 +27,16 @@ use crate::vault::add::{
     add_file, add_from_reader, commit_addition_tasks,
     encrypt_addition_task as _encrypt_addition_task,
     prepare_addition_tasks as _prepare_addition_tasks,
+    prepare_addition_tasks_from_files as _prepare_addition_tasks_from_files,
     resolve_file_metadata as _resolve_file_metadata,
 };
 use crate::vault::create::create_vault;
 use crate::vault::extract::{
-    execute_extraction_task_standalone as _execute_extraction_task_standalone, extract_file,
+    decrypt_extraction_task as _decrypt_extraction_task,
+    decrypt_extraction_task_to_file as _decrypt_extraction_task_to_file,
+    extract_file,
     prepare_extraction_task,
+    prepare_extraction_tasks as _prepare_extraction_tasks,
 };
 use crate::vault::fix::fix_file as _fix_file;
 use crate::vault::metadata::{
@@ -678,6 +682,44 @@ impl Vault {
         _prepare_addition_tasks(self, requests)
     }
 
+    /// Stage 1 shortcut for local files: Resolves metadata and validates a batch of
+    /// local file paths against the vault database in one call.
+    ///
+    /// This combines `resolve_file_metadata` + `prepare_addition_tasks` for the common
+    /// case of adding files from the local filesystem. Each pair's destination path
+    /// is resolved (e.g., if it's a directory, the source filename is appended).
+    ///
+    /// # Arguments
+    /// * `file_pairs` - A slice of `(source_path, dest_vault_path)` pairs.
+    ///
+    /// # Returns
+    /// A `Vec<PendingAdditionTask>` — one per pair, in the same order.
+    ///
+    /// # Errors
+    /// Returns `AddFileError` if any source file is missing, path is invalid,
+    /// or duplicates are detected.
+    //
+    // // 本地文件的阶段 1 快捷方法：一次调用中解析元数据并根据保险库数据库验证一批本地文件路径。
+    // //
+    // // 这将 `resolve_file_metadata` + `prepare_addition_tasks` 合并，
+    // // 适用于从本地文件系统添加文件的常见场景。每对的目标路径会被解析
+    // // （例如如果是目录，则追加源文件名）。
+    // //
+    // // # 参数
+    // // * `file_pairs` - `(源路径, 目标保险库路径)` 对的切片。
+    // //
+    // // # 返回
+    // // `Vec<PendingAdditionTask>` — 每对一个，顺序相同。
+    // //
+    // // # 错误
+    // // 如果任何源文件缺失、路径无效或检测到重复，则返回 `AddFileError`。
+    pub fn prepare_addition_tasks_from_files(
+        &self,
+        file_pairs: &[(&Path, &VaultPath)],
+    ) -> Result<Vec<PendingAdditionTask>, AddFileError> {
+        _prepare_addition_tasks_from_files(self, file_pairs)
+    }
+
     /// Stage 2 (Add): Encrypts data from a reader and produces an `AdditionTask`.
     ///
     /// This is a **thread-safe** associated function that does NOT require a `&Vault`.
@@ -837,10 +879,11 @@ impl Vault {
     // --- Extract APIs ---
     // // --- 提取 API ---
 
-    /// Extracts a file from the vault (Synchronous convenience method).
+    /// Extracts a file from the vault to a local path (synchronous convenience method).
     ///
-    /// Handles preparation and execution in a single call.
-    /// For bulk extract, prefer using `prepare_extraction_task` and `execute_extraction_task` separately.
+    /// Handles preparation and decryption in a single call.
+    /// For bulk extract, prefer using `prepare_extraction_tasks` and
+    /// `Vault::decrypt_extraction_task` / `Vault::decrypt_extraction_task_to_file` separately.
     ///
     /// # Arguments
     /// * `hash` - The `VaultHash` of the file to extract.
@@ -849,10 +892,11 @@ impl Vault {
     /// # Errors
     /// Returns `ExtractError` if the file is not found, decryption fails, or an I/O error occurs.
     //
-    // // 从保险库中提取文件 (同步便捷方法)。
+    // // 从保险库中提取文件到本地路径（同步便捷方法）。
     // //
-    // // 在一次调用中处理准备和执行。
-    // // 对于批量提取，请首选分开使用 `prepare_extraction_task` 和 `execute_extraction_task`。
+    // // 在一次调用中处理准备和解密。
+    // // 对于批量提取，请首选分开使用 `prepare_extraction_tasks` 和
+    // // `Vault::decrypt_extraction_task` / `Vault::decrypt_extraction_task_to_file`。
     // //
     // // # 参数
     // // * `hash` - 要提取的文件的 `VaultHash`。
@@ -868,10 +912,10 @@ impl Vault {
         extract_file(self, hash, destination_path)
     }
 
-    /// Stage 1 (Extract): Prepares a file for extraction.
+    /// Stage 1 (Extract): Prepares a single file for extraction.
     ///
-    /// This is a fast, thread-safe method that queries the database (holding a read lock)
-    /// and returns an `ExtractionTask` ticket. This ticket contains all information
+    /// This is a fast method that queries the database (holding a read lock)
+    /// and returns an `ExtractionTask` ticket containing all information
     /// (keys, hashes, paths) needed for the slow decryption step.
     ///
     /// # Arguments
@@ -886,9 +930,8 @@ impl Vault {
     //
     // // 阶段 1 (提取): 准备一个文件用于提取。
     // //
-    // // 这是一个快速、线程安全的方法，它查询数据库 (持有读锁)
-    // // 并返回一个 `ExtractionTask` 票据。该票据包含缓慢的解密步骤
-    // // 所需的所有信息 (密钥、哈希、路径)。
+    // // 这是一个快速的方法，它查询数据库（持有读锁）并返回一个 `ExtractionTask` 票据，
+    // // 包含缓慢的解密步骤所需的所有信息（密钥、哈希、路径）。
     // //
     // // # 参数
     // // * `hash` - 要提取的文件的 `VaultHash`。
@@ -906,37 +949,106 @@ impl Vault {
         prepare_extraction_task(self, hash)
     }
 
-    /// Stage 2 (Extract): Executes a prepared extraction task.
+    /// Stage 1 (Extract): Prepares multiple files for extraction in a single batch.
     ///
-    /// This instance method wraps `execute_extraction_task_standalone`.
-    /// In multithreaded contexts, consider collecting tasks and calling the standalone
-    /// function in parallel to avoid contention on the Vault instance.
+    /// This is a fast method that queries the database for each hash and verifies
+    /// that the corresponding file exists in the storage backend.
     ///
     /// # Arguments
-    /// * `task` - The task object from `prepare_extraction_task`.
+    /// * `hashes` - A slice of `VaultHash`es to prepare for extraction.
+    ///
+    /// # Returns
+    /// A `Vec<ExtractionTask>` — one per hash, in the same order.
+    ///
+    /// # Errors
+    /// Returns `ExtractError` if any hash is not found or a database error occurs.
+    //
+    // // 阶段 1 (提取): 在单个批次中准备多个文件用于提取。
+    // //
+    // // 这是一个快速的方法，它为每个哈希查询数据库并验证对应的文件
+    // // 存在于存储后端中。
+    // //
+    // // # 参数
+    // // * `hashes` - 要准备提取的 `VaultHash` 切片。
+    // //
+    // // # 返回
+    // // `Vec<ExtractionTask>` — 每个哈希一个，顺序相同。
+    // //
+    // // # 错误
+    // // 如果任何哈希未找到或发生数据库错误，则返回 `ExtractError`。
+    pub fn prepare_extraction_tasks(
+        &self,
+        hashes: &[VaultHash],
+    ) -> Result<Vec<ExtractionTask>, ExtractError> {
+        _prepare_extraction_tasks(self, hashes)
+    }
+
+    /// Stage 2 (Extract): Decrypts a prepared extraction task to a writer stream.
+    ///
+    /// This is a **thread-safe** associated function that does NOT require a `&Vault`.
+    /// It performs the expensive CPU/IO decryption work using only the storage backend.
+    /// Callers can invoke this in parallel (e.g., via Rayon) for bulk extractions.
+    ///
+    /// # Arguments
+    /// * `storage` - The storage backend to read encrypted data from.
+    /// * `task` - The extraction ticket from Stage 1.
+    /// * `writer` - An object implementing `std::io::Write` to receive the decrypted data.
+    ///
+    /// # Errors
+    /// Returns `ExtractError` if decryption fails, IO error occurs, or integrity check fails.
+    //
+    // // 阶段 2 (提取): 将已准备好的提取任务解密到写入流。
+    // //
+    // // 这是一个 **线程安全** 的关联函数，不需要 `&Vault`。
+    // // 它仅使用存储后端执行昂贵的 CPU/IO 解密工作。
+    // // 调用方可以并行调用此函数（例如通过 Rayon）进行批量提取。
+    // //
+    // // # 参数
+    // // * `storage` - 用于读取加密数据的存储后端。
+    // // * `task` - 来自阶段 1 的提取票据。
+    // // * `writer` - 实现 `std::io::Write` 以接收解密数据的对象。
+    // //
+    // // # 错误
+    // // 如果解密失败、发生 IO 错误或完整性检查失败，则返回 `ExtractError`。
+    pub fn decrypt_extraction_task(
+        storage: &dyn StorageBackend,
+        task: &ExtractionTask,
+        writer: impl std::io::Write,
+    ) -> Result<(), ExtractError> {
+        _decrypt_extraction_task(storage, task, writer)
+    }
+
+    /// Stage 2 shortcut: Decrypts a prepared extraction task to a local file.
+    ///
+    /// This is a **thread-safe** associated function that wraps `decrypt_extraction_task`
+    /// with atomic file writing (temp file + rename).
+    ///
+    /// # Arguments
+    /// * `storage` - The storage backend to read encrypted data from.
+    /// * `task` - The extraction ticket from Stage 1.
     /// * `destination_path` - The local path to save the decrypted file.
     ///
     /// # Errors
     /// Returns `ExtractError` if decryption fails, IO error occurs, or integrity check fails.
     //
-    // // 阶段 2 (提取): 执行一个已准备好的提取任务。
+    // // 阶段 2 快捷方法: 将已准备好的提取任务解密到本地文件。
     // //
-    // // 此实例方法包装了 `execute_extraction_task_standalone`。
-    // // 在多线程环境中，考虑收集任务并并行调用独立函数，
-    // // 以避免对 Vault 实例的争用。
+    // // 这是一个 **线程安全** 的关联函数，包装了 `decrypt_extraction_task`，
+    // // 使用原子文件写入（临时文件 + 重命名）。
     // //
     // // # 参数
-    // // * `task` - 来自 `prepare_extraction_task` 的任务对象。
+    // // * `storage` - 用于读取加密数据的存储后端。
+    // // * `task` - 来自阶段 1 的提取票据。
     // // * `destination_path` - 保存解密文件的本地路径。
     // //
     // // # 错误
     // // 如果解密失败、发生 IO 错误或完整性检查失败，则返回 `ExtractError`。
-    pub fn execute_extraction_task(
-        &self, // 接收 &self 以实现 API 对称性，但内部实现不使用它
+    pub fn decrypt_extraction_task_to_file(
+        storage: &dyn StorageBackend,
         task: &ExtractionTask,
         destination_path: &Path,
     ) -> Result<(), ExtractError> {
-        _execute_extraction_task_standalone(self.storage.as_ref(), task, destination_path)
+        _decrypt_extraction_task_to_file(storage, task, destination_path)
     }
 
     // --- Rekey APIs ---
@@ -1506,39 +1618,6 @@ pub fn resolve_file_metadata(
     dest_path: &VaultPath,
 ) -> Result<(VaultPath, u64, chrono::DateTime<chrono::Utc>), AddFileError> {
     _resolve_file_metadata(source_path, dest_path)
-}
-
-/// Executes a prepared extraction task (Standalone).
-///
-/// This is a thread-safe, CPU-intensive function that performs decryption.
-/// Ideal for use in parallel iterators (e.g., Rayon).
-///
-/// # Arguments
-/// * `storage` - The storage backend to read from.
-/// * `task` - The extraction ticket containing keys and hashes.
-/// * `destination_path` - The local path to write the decrypted file.
-///
-/// # Errors
-/// Returns `ExtractError` on decryption failure, IO error, or integrity check failure.
-//
-// // 执行已准备好的提取任务 (独立函数)。
-// //
-// // 这是一个线程安全的、CPU 密集型的函数，用于执行解密。
-// // 非常适合在并行迭代器 (如 Rayon) 中使用。
-// //
-// // # 参数
-// // * `storage` - 要从中读取的存储后端。
-// // * `task` - 包含密钥和哈希的提取票据。
-// // * `destination_path` - 写入解密文件的本地路径。
-// //
-// // # 错误
-// // 如果解密失败、发生 IO 错误或完整性检查失败，则返回 `ExtractError`。
-pub fn execute_extraction_task_standalone(
-    storage: &dyn StorageBackend,
-    task: &ExtractionTask,
-    destination_path: &Path,
-) -> Result<(), ExtractError> {
-    _execute_extraction_task_standalone(storage, task, destination_path)
 }
 
 /// Prepares a file for re-keying (Standalone).

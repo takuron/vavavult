@@ -7,7 +7,7 @@ use tempfile::tempdir;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::file::VaultPath;
 use vavavult::vault::{AddFileError, ExtractionTask, PrepareAdditionRequest, QueryResult, Vault};
-use vavavult::vault::{execute_extraction_task_standalone, resolve_file_metadata};
+use vavavult::vault::resolve_file_metadata;
 
 mod common;
 use common::{
@@ -198,7 +198,7 @@ fn test_batch_queries_and_search() {
 }
 
 /// 测试：并行 API。
-/// 模拟 CLI 的行为，使用 `encrypt_file_for_add_standalone` 和 `execute_extraction_task_standalone`
+/// 模拟 CLI 的行为，使用三阶段 API 和 `Vault::decrypt_extraction_task_to_file`
 /// 来在多个线程中并行处理加密和解密，不持有 Vault 锁。
 #[test]
 fn test_parallel_add_and_extract() {
@@ -278,7 +278,7 @@ fn test_parallel_add_and_extract() {
     // 执行任务 (无锁并行)
     let storage_ext = vault_arc.lock().unwrap().storage.clone();
     tasks.par_iter().for_each(|(task, path)| {
-        execute_extraction_task_standalone(storage_ext.as_ref(), task, path).unwrap();
+        Vault::decrypt_extraction_task_to_file(storage_ext.as_ref(), task, path).unwrap();
     });
 
     assert_eq!(fs::read_dir(extract_dir).unwrap().count(), file_count);

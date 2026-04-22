@@ -423,6 +423,61 @@ pub(crate) fn commit_addition_tasks(
 // 快捷方法的内部实现
 // ---------------------------------------------------------------------------
 
+/// Stage 1 shortcut for local files: Resolves metadata and validates a batch of
+/// local file paths against the vault database in one call.
+///
+/// This combines `resolve_file_metadata` + `prepare_addition_tasks` for the common
+/// case of adding files from the local filesystem.
+///
+/// # Arguments
+/// * `vault` - The vault instance (read access).
+/// * `file_pairs` - A slice of `(source_path, dest_vault_path)` pairs.
+///
+/// # Returns
+/// A `Vec<PendingAdditionTask>` — one per pair, in the same order.
+/// Each task's `dest_path` has been resolved (e.g., directory targets get the source filename appended).
+///
+/// # Errors
+/// Returns `AddFileError` if any source file is missing, path is invalid, or duplicates are detected.
+//
+// // 本地文件的阶段 1 快捷方法：一次调用中解析元数据并根据保险库数据库验证一批本地文件路径。
+// //
+// // 这将 `resolve_file_metadata` + `prepare_addition_tasks` 合并，
+// // 适用于从本地文件系统添加文件的常见场景。
+// //
+// // # 参数
+// // * `vault` - 保险库实例（读取访问）。
+// // * `file_pairs` - `(源路径, 目标保险库路径)` 对的切片。
+// //
+// // # 返回
+// // `Vec<PendingAdditionTask>` — 每对一个，顺序相同。
+// // 每个任务的 `dest_path` 已被解析（例如目录目标会追加源文件名）。
+// //
+// // # 错误
+// // 如果任何源文件缺失、路径无效或检测到重复，则返回 `AddFileError`。
+pub(crate) fn prepare_addition_tasks_from_files(
+    vault: &Vault,
+    file_pairs: &[(&Path, &VaultPath)],
+) -> Result<Vec<PendingAdditionTask>, AddFileError> {
+    // 1. 解析所有文件的元数据
+    let resolved: Vec<(VaultPath, u64, DateTime<Utc>)> = file_pairs
+        .iter()
+        .map(|(source_path, dest_path)| resolve_file_metadata(source_path, dest_path))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // 2. 构建请求并调用 prepare_addition_tasks 进行校验
+    let requests: Vec<PrepareAdditionRequest> = resolved
+        .iter()
+        .map(|(dest, size, mtime)| PrepareAdditionRequest {
+            dest_path: dest,
+            source_size: *size,
+            source_modified_time: *mtime,
+        })
+        .collect();
+
+    prepare_addition_tasks(vault, &requests)
+}
+
 /// 快捷函数：从本地文件添加（三阶段合一）
 pub(crate) fn add_file(
     vault: &mut Vault,

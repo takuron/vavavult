@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{DirectoryEntry, ExtractionTask, Vault, execute_extraction_task_standalone};
+use vavavult::vault::{DirectoryEntry, ExtractionTask, Vault};
 
 /// 主处理函数，根据新的 CLI 签名分发任务
 pub fn handle_extract(
@@ -353,7 +353,7 @@ fn run_directory_extract_parallel(
                 if let Some(parent) = final_path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                execute_extraction_task_standalone(storage.as_ref(), &task, &final_path)?;
+                Vault::decrypt_extraction_task_to_file(storage.as_ref(), &task, &final_path)?;
                 Ok(())
             })();
 

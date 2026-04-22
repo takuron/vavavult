@@ -232,7 +232,7 @@ impl VaultDavFile {
                 let unique_id = uuid::Uuid::new_v4();
                 let temp_file = temp_dir.join(format!("vavavult_mount_{}", unique_id));
 
-                vavavult::vault::execute_extraction_task_standalone(
+                vavavult::vault::Vault::decrypt_extraction_task_to_file(
                     storage.as_ref(),
                     &t,
                     &temp_file,
