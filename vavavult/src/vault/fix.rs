@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
 use crate::vault::Vault;
-use crate::vault::add::{AddFileError, prepare_addition_task_standalone};
+use crate::vault::add::{AddFileError, encrypt_addition_task, resolve_file_metadata, PendingAdditionTask};
 use crate::vault::metadata::MetadataError;
 use crate::vault::query::{QueryError, QueryResult};
 use crate::vault::remove::ForceRemoveError;
@@ -105,8 +105,16 @@ pub(crate) fn fix_file(
     };
 
     // 3. 对新文件流式加密暂存
+    let (resolved_path, file_size, source_modified_time) =
+        resolve_file_metadata(source_path, vault_path)?;
+    let pending = PendingAdditionTask {
+        dest_path: resolved_path,
+        source_size: file_size,
+        source_modified_time,
+    };
+    let source_file = std::fs::File::open(source_path).map_err(AddFileError::IoError)?;
     let addition_task =
-        prepare_addition_task_standalone(vault.storage.as_ref(), source_path, vault_path)?;
+        encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
 
     // 4. 校验替换是否合法
     if addition_task.file_entry.original_sha256sum != old_entry.original_sha256sum {

@@ -24,8 +24,10 @@ use crate::storage::local::LocalStorage;
 
 //- Internal implementation imports
 use crate::vault::add::{
-    add_file, execute_addition_tasks,
-    prepare_addition_task_standalone as _prepare_addition_task_standalone,
+    add_file, add_from_reader, commit_addition_tasks,
+    encrypt_addition_task as _encrypt_addition_task,
+    prepare_addition_tasks as _prepare_addition_tasks,
+    resolve_file_metadata as _resolve_file_metadata,
 };
 use crate::vault::create::create_vault;
 use crate::vault::extract::{
@@ -53,7 +55,7 @@ use crate::vault::update::{
 };
 
 //- Public API type re-exports
-pub use add::{AddFileError, AdditionTask};
+pub use add::{AddFileError, AdditionTask, PendingAdditionTask, PrepareAdditionRequest};
 pub use config::VaultConfig;
 pub use create::CreateError;
 pub use extract::{ExtractError, ExtractionTask};
@@ -642,73 +644,155 @@ impl Vault {
     //     self.root_path.join(DATA_SUBDIR)
     // }
 
-    /// Stage 1 (Add): Encrypts a file and prepares it for a batch commit.
+    /// Stage 1 (Add): Validates a batch of addition requests against the vault database.
     ///
-    /// This is a **thread-safe** method that performs the expensive CPU/IO encryption work
-    /// without locking the vault database. It writes to a temporary staging area using
-    /// the storage backend.
+    /// Checks for path validity and duplicate paths (in DB and within the batch).
+    /// Does NOT perform encryption — that is deferred to Stage 2.
     ///
     /// # Arguments
-    /// * `source_path` - The path to the local file.
-    /// * `dest_path` - The final target `VaultPath`.
+    /// * `requests` - A slice of `PrepareAdditionRequest`s to validate.
     ///
     /// # Returns
-    /// An `EncryptedAddingFile` object ready to be passed to `commit_add_files`.
+    /// A `Vec<PendingAdditionTask>` — one per request, in the same order.
     ///
     /// # Errors
-    /// Returns `AddFileError` if encryption fails, IO error occurs, or source is invalid.
+    /// Returns `AddFileError` if any request fails validation.
     //
-    // // 阶段 1 (添加): 加密文件并准备进行批量提交。
+    // // 阶段 1 (添加): 根据保险库数据库验证一批添加请求。
     // //
-    // // 这是一个 **线程安全** 的方法，它执行昂贵的 CPU/IO 加密工作，
-    // // 而无需锁定保险库数据库。它使用存储后端写入临时暂存区。
+    // // 检查路径有效性和重复路径（数据库中和批次内）。
+    // // 不执行加密 — 加密推迟到阶段 2。
     // //
     // // # 参数
-    // // * `source_path` - 本地文件的路径。
-    // // * `dest_path` - 最终的目标 `VaultPath`。
+    // // * `requests` - 要验证的 `PrepareAdditionRequest` 切片。
     // //
     // // # 返回
-    // // 一个 `EncryptedAddingFile` 对象，准备好传递给 `commit_add_files`。
+    // // `Vec<PendingAdditionTask>` — 每个请求一个，顺序相同。
     // //
     // // # 错误
-    // // 如果加密失败、发生 IO 错误或源无效，则返回 `AddFileError`。
-    pub fn prepare_addition_task(
+    // // 如果任何请求验证失败，则返回 `AddFileError`。
+    pub fn prepare_addition_tasks(
         &self,
-        source_path: &Path,
-        dest_path: &VaultPath,
-    ) -> Result<AdditionTask, AddFileError> {
-        _prepare_addition_task_standalone(self.storage.as_ref(), source_path, dest_path)
+        requests: &[PrepareAdditionRequest],
+    ) -> Result<Vec<PendingAdditionTask>, AddFileError> {
+        _prepare_addition_tasks(self, requests)
     }
 
-    /// Stage 2 (Add): Commits one or more encrypted files to the vault database.
+    /// Stage 2 (Add): Encrypts data from a reader and produces an `AdditionTask`.
+    ///
+    /// This is a **thread-safe** associated function that does NOT require a `&Vault`.
+    /// It performs the expensive CPU/IO encryption work using only the storage backend.
+    /// Callers can invoke this in parallel (e.g., via Rayon) for bulk additions.
+    ///
+    /// # Arguments
+    /// * `storage` - The storage backend to write encrypted data to.
+    /// * `pending` - A validated `PendingAdditionTask` from Stage 1.
+    /// * `reader` - An object implementing `std::io::Read` to stream source data from.
+    ///
+    /// # Returns
+    /// An `AdditionTask` containing the encrypted `FileEntry` and a `StagingToken`.
+    ///
+    /// # Errors
+    /// Returns `AddFileError` if encryption fails or an IO error occurs.
+    //
+    // // 阶段 2 (添加): 从读取器加密数据并生成 `AdditionTask`。
+    // //
+    // // 这是一个 **线程安全** 的关联函数，不需要 `&Vault`。
+    // // 它仅使用存储后端执行昂贵的 CPU/IO 加密工作。
+    // // 调用方可以并行调用此函数（例如通过 Rayon）进行批量添加。
+    // //
+    // // # 参数
+    // // * `storage` - 用于写入加密数据的存储后端。
+    // // * `pending` - 来自阶段 1 的已验证 `PendingAdditionTask`。
+    // // * `reader` - 实现 `std::io::Read` 以从中流入源数据的对象。
+    // //
+    // // # 返回
+    // // 包含加密 `FileEntry` 和 `StagingToken` 的 `AdditionTask`。
+    // //
+    // // # 错误
+    // // 如果加密失败或发生 IO 错误，则返回 `AddFileError`。
+    pub fn encrypt_addition_task(
+        storage: &dyn StorageBackend,
+        pending: PendingAdditionTask,
+        reader: impl std::io::Read,
+    ) -> Result<AdditionTask, AddFileError> {
+        _encrypt_addition_task(storage, pending, reader)
+    }
+
+    /// Stage 3 (Add): Commits one or more encrypted files to the vault database.
     ///
     /// This method requires exclusive `&mut self` access (locking the DB) to perform
     /// a transaction. It moves files from the staging area to permanent storage and
     /// inserts records into the database.
     ///
     /// # Arguments
-    /// * `files` - A `Vec` of `EncryptedAddingFile` objects from stage 1.
+    /// * `files` - A `Vec` of `AdditionTask` objects from Stage 2.
     ///
     /// # Errors
     /// Returns `AddFileError` if database transaction fails or file commit fails.
     //
-    // // 阶段 2 (添加): 将一个或多个已加密的文件提交到保险库数据库。
+    // // 阶段 3 (添加): 将一个或多个已加密的文件提交到保险库数据库。
     // //
     // // 此方法需要独占的 `&mut self` 访问权限 (锁定 DB) 来执行事务。
     // // 它将文件从暂存区移动到永久存储，并将记录插入数据库。
     // //
     // // # 参数
-    // // * `files` - 来自阶段 1 的 `EncryptedAddingFile` 对象列表。
+    // // * `files` - 来自阶段 2 的 `AdditionTask` 对象列表。
     // //
     // // # 错误
     // // 如果数据库事务失败或文件提交失败，则返回 `AddFileError`。
-    pub fn execute_addition_tasks(&mut self, files: Vec<AdditionTask>) -> Result<(), AddFileError> {
+    pub fn commit_addition_tasks(&mut self, files: Vec<AdditionTask>) -> Result<(), AddFileError> {
         if files.is_empty() {
             return Ok(());
         }
-        execute_addition_tasks(self, files)?;
+        commit_addition_tasks(self, files)?;
         touch_vault_update_time(self)?;
         Ok(())
+    }
+
+    /// Adds a new file from a reader stream (synchronous convenience method).
+    ///
+    /// This handles validation, encryption, and database commit in a single call.
+    /// This is the primary convenience method — for file-based additions, use `add_file`.
+    ///
+    /// # Arguments
+    /// * `reader` - An object implementing `std::io::Read` to stream data from.
+    /// * `dest_path` - The target `VaultPath` inside the vault.
+    /// * `source_size` - The size of the source data in bytes.
+    /// * `source_modified_time` - The modification time of the source data.
+    ///
+    /// # Returns
+    /// The `VaultHash` (encrypted ID) of the added file.
+    ///
+    /// # Errors
+    /// Returns `AddFileError` if path invalid, duplicate content/path exists, or encryption fails.
+    //
+    // // 从读取器流添加新文件（同步便捷方法）。
+    // //
+    // // 这在一次调用中处理验证、加密和数据库提交。
+    // // 这是主要的便捷方法 — 对于基于文件的添加，请使用 `add_file`。
+    // //
+    // // # 参数
+    // // * `reader` - 实现 `std::io::Read` 以从中流入数据的对象。
+    // // * `dest_path` - 保险库内部的目标 `VaultPath`。
+    // // * `source_size` - 源数据的大小（字节）。
+    // // * `source_modified_time` - 源数据的修改时间。
+    // //
+    // // # 返回
+    // // 添加文件的 `VaultHash` (加密 ID)。
+    // //
+    // // # 错误
+    // // 如果路径无效、存在重复的内容/路径或加密失败，则返回 `AddFileError`。
+    pub fn add_from_reader(
+        &mut self,
+        reader: impl std::io::Read,
+        dest_path: &VaultPath,
+        source_size: u64,
+        source_modified_time: chrono::DateTime<chrono::Utc>,
+    ) -> Result<VaultHash, AddFileError> {
+        let result = add_from_reader(self, reader, dest_path, source_size, source_modified_time)?;
+        touch_vault_update_time(self)?;
+        Ok(result)
     }
 
     /// Safely replaces a file at a specific vault path with a new file, verifying its original hash first.
@@ -1387,85 +1471,41 @@ impl Vault {
 // --- Standalone Functions for Parallelism ---
 // // --- 用于并行化的独立函数 ---
 
-/// Prepares a task to add a file directly from a reader.
+/// Resolves file metadata from a local path for use with the three-stage API.
 ///
-/// This function encrypts data stream directly from a `Read` object, avoiding the need
-/// for a temporary local file. Useful for stream uploads like WebDAV PUT.
-///
-/// # Arguments
-/// * `storage` - The storage backend to use.
-/// * `reader` - An object implementing `std::io::Read` to stream data from.
-/// * `dest_path` - The target `VaultPath`.
-/// * `source_modified_time` - The modification time of the source data.
-///
-/// # Returns
-/// A tuple containing the `AdditionTask` and the processed file size in bytes.
-///
-/// # Errors
-/// Returns `AddFileError` if encryption fails, IO error occurs, or path is invalid.
-//
-// // 从读取器直接准备添加文件的任务。
-// //
-// // 此函数直接从 `Read` 对象加密数据流，避免了创建临时本地文件的需要。
-// // 适用于如 WebDAV PUT 这样的流式上传。
-// //
-// // # 参数
-// // * `storage` - 要使用的存储后端。
-// // * `reader` - 实现 `std::io::Read` 以从中流入数据的对象。
-// // * `dest_path` - 目标 `VaultPath`。
-// // * `source_modified_time` - 源数据的修改时间。
-// //
-// // # 返回
-// // 一个包含 `AdditionTask` 和处理过的文件大小（字节）的元组。
-// //
-// // # 错误
-// // 如果加密失败、发生 IO 错误或路径无效，则返回 `AddFileError`。
-pub fn prepare_addition_task_from_reader(
-    storage: &dyn StorageBackend,
-    reader: impl std::io::Read,
-    dest_path: &VaultPath,
-    source_modified_time: chrono::DateTime<chrono::Utc>,
-) -> Result<(AdditionTask, u64), AddFileError> {
-    add::prepare_addition_task_from_reader(storage, reader, dest_path, source_modified_time)
-}
-
-/// Encrypts a file for adding to the vault (Standalone).
-///
-/// This is a thread-safe, CPU-intensive function that does not require a `&Vault` lock.
-/// It works directly with the `StorageBackend` to write temporary encrypted data.
+/// This is a utility function that extracts the resolved `VaultPath`, file size,
+/// and modification time from a local file. Useful for building
+/// `PrepareAdditionRequest`s in CLI parallel mode.
 ///
 /// # Arguments
-/// * `storage` - The storage backend to use.
 /// * `source_path` - The local source file path.
 /// * `dest_path` - The target `VaultPath`.
 ///
 /// # Returns
-/// An `EncryptedAddingFile` struct containing encryption details and staging token.
+/// A tuple of (resolved VaultPath, file size in bytes, modification time).
 ///
 /// # Errors
-/// Returns `AddFileError` on encryption failure, IO error, or invalid path.
+/// Returns `AddFileError` if source not found or metadata read fails.
 //
-// // 加密一个文件用于添加到保险库 (独立函数)。
+// // 从本地文件路径解析元数据，用于三阶段 API。
 // //
-// // 这是一个线程安全的、CPU 密集型的函数，不需要 `&Vault` 锁。
-// // 它直接与 `StorageBackend` 协作以写入临时加密数据。
+// // 这是一个实用函数，从本地文件中提取解析后的 `VaultPath`、文件大小和修改时间。
+// // 适用于在 CLI 并行模式中构建 `PrepareAdditionRequest`。
 // //
 // // # 参数
-// // * `storage` - 要使用的存储后端。
 // // * `source_path` - 本地源文件路径。
 // // * `dest_path` - 目标 `VaultPath`。
 // //
 // // # 返回
-// // 包含加密细节和暂存令牌的 `EncryptedAddingFile` 结构。
+// // (解析后的 VaultPath, 文件大小（字节）, 修改时间) 的元组。
 // //
 // // # 错误
-// // 如果加密失败、发生 IO 错误或路径无效，则返回 `AddFileError`。
-pub fn prepare_addition_task_standalone(
-    storage: &dyn StorageBackend,
+// // 如果源未找到或元数据读取失败，则返回 `AddFileError`。
+pub fn resolve_file_metadata(
     source_path: &Path,
     dest_path: &VaultPath,
-) -> Result<AdditionTask, AddFileError> {
-    _prepare_addition_task_standalone(storage, source_path, dest_path)
+) -> Result<(VaultPath, u64, chrono::DateTime<chrono::Utc>), AddFileError> {
+    _resolve_file_metadata(source_path, dest_path)
 }
 
 /// Executes a prepared extraction task (Standalone).

@@ -166,11 +166,16 @@ impl VaultDavFile {
 
             let now = chrono::Utc::now();
 
-            let (addition_task, _) = vavavult::vault::prepare_addition_task_from_reader(
+            // 阶段 2: 加密（无锁）
+            let pending = vavavult::vault::PendingAdditionTask {
+                dest_path: vault_path.clone(),
+                source_size: 0,
+                source_modified_time: now,
+            };
+            let addition_task = vavavult::vault::Vault::encrypt_addition_task(
                 storage.as_ref(),
+                pending,
                 &mut reader,
-                &vault_path,
-                now,
             )
             .map_err(|e| {
                 eprintln!("[vavavult_mount] 加密流失败: {:?}", e);
@@ -191,7 +196,7 @@ impl VaultDavFile {
                 }
             }
 
-            v.execute_addition_tasks(vec![addition_task]).map_err(|e| {
+            v.commit_addition_tasks(vec![addition_task]).map_err(|e| {
                 eprintln!("[vavavult_mount] 提交文件失败: {:?}", e);
                 FsError::GeneralFailure
             })?;

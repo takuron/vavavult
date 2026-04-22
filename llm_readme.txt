@@ -34,7 +34,10 @@ Provides the core logic for managing encrypted file vaults.
 
 *   **`vavavult::vault`**
     *   **Path:** `vavavult/src/vault/`
-    *   **Description:** Contains the core logic for vault operations, broken down into submodules for each action (e.g., `add.rs`, `extract.rs`, `query.rs`). It defines the main `Vault` struct and its comprehensive API. The API supports two-phase operations (prepare/execute) for performance-critical tasks, allowing CPU-intensive work to be parallelized.
+    *   **Description:** Contains the core logic for vault operations, broken down into submodules for each action (e.g., `add.rs`, `extract.rs`, `query.rs`). It defines the main `Vault` struct and its comprehensive API. The API supports three-phase operations (prepare/encrypt/commit) for performance-critical additions, allowing CPU-intensive encryption to be parallelized without holding the vault lock. The three phases are:
+    *     1. **Prepare** (`prepare_addition_tasks`): Validates requests against the vault DB (requires `&self`).
+    *     2. **Encrypt** (`Vault::encrypt_addition_task`): Encrypts data from a `Read` stream (associated function, no `&self` needed — parallelizable).
+    *     3. **Commit** (`commit_addition_tasks`): Commits encrypted files to DB (requires `&mut self`).
 
 *   **`vavavult::storage`**
     *   **Path:** `vavavult/src/storage/`
