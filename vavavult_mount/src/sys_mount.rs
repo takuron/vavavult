@@ -133,6 +133,20 @@ impl SystemMounter {
         rclone_cmd.arg("--webdav-vendor=other");
         rclone_cmd.arg("--network-mode");
 
+        // 缓存与性能参数：
+        // --vfs-cache-mode full: 启用完整 VFS 缓存，避免每次读取都发新的 HTTP 请求
+        // --dir-cache-time 30m: 目录缓存 30 分钟，减少 PROPFIND 请求频率
+        // --attr-timeout 30m: 属性缓存 30 分钟，避免 Windows Explorer 反复查询同一文件元数据
+        // --vfs-read-chunk-size 8M: 每次读取 8MB 块，减少 HTTP 请求次数
+        // --vfs-read-chunk-size-limit 64M: 自适应增长上限 64MB
+        // --vfs-read-ahead 16M: 预读缓冲区 16MB，提升顺序读取性能
+        rclone_cmd.arg("--vfs-cache-mode=full");
+        rclone_cmd.arg("--dir-cache-time=30m");
+        rclone_cmd.arg("--attr-timeout=30m");
+        rclone_cmd.arg("--vfs-read-chunk-size=8M");
+        rclone_cmd.arg("--vfs-read-chunk-size-limit=64M");
+        rclone_cmd.arg("--vfs-read-ahead=16M");
+
         if let Some(u) = user {
             rclone_cmd.arg(format!("--webdav-user={}", u));
         }
@@ -219,6 +233,14 @@ impl SystemMounter {
         rclone_cmd.arg(mount_point);
         rclone_cmd.arg(format!("--webdav-url={}", url));
         rclone_cmd.arg("--webdav-vendor=other");
+
+        // 缓存与性能参数
+        rclone_cmd.arg("--vfs-cache-mode=full");
+        rclone_cmd.arg("--dir-cache-time=30m");
+        rclone_cmd.arg("--attr-timeout=30m");
+        rclone_cmd.arg("--vfs-read-chunk-size=8M");
+        rclone_cmd.arg("--vfs-read-chunk-size-limit=64M");
+        rclone_cmd.arg("--vfs-read-ahead=16M");
 
         if let Some(u) = user {
             rclone_cmd.arg(format!("--webdav-user={}", u));
@@ -307,6 +329,14 @@ impl SystemMounter {
         rclone_cmd.arg(mount_point);
         rclone_cmd.arg(format!("--webdav-url={}", url));
         rclone_cmd.arg("--webdav-vendor=other");
+
+        // 缓存与性能参数
+        rclone_cmd.arg("--vfs-cache-mode=full");
+        rclone_cmd.arg("--dir-cache-time=30m");
+        rclone_cmd.arg("--attr-timeout=30m");
+        rclone_cmd.arg("--vfs-read-chunk-size=8M");
+        rclone_cmd.arg("--vfs-read-chunk-size-limit=64M");
+        rclone_cmd.arg("--vfs-read-ahead=16M");
 
         if let Some(u) = user {
             rclone_cmd.arg(format!("--webdav-user={}", u));

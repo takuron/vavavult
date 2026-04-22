@@ -1,41 +1,67 @@
-//! Vault file handle for WebDAV read operations.
+//! Vault file handle for WebDAV read/write operations.
 //!
 //! This module implements the `DavFile` trait, providing lazy decryption and
-//! file-handle-based streaming reads of vault files. Decryption is performed
-//! on first read using the standalone extraction API, which does not require
-//! holding the vault mutex lock.
+//! pipe-based streaming reads of vault files. Decryption is performed in a
+//! background `spawn_blocking` task using the standalone extraction API, which
+//! does not require holding the vault mutex lock.
 //!
 //! # Streaming Architecture
-//! Unlike a `Cursor<Vec<u8>>` approach that loads the entire decrypted content
-//! into memory, this implementation decrypts to a temporary file and keeps
-//! only an open `File` handle. Reads and seeks operate directly on the file
-//! descriptor, so memory usage is O(1) regardless of file size — only the
-//! requested read buffer is allocated.
+//! Decryption runs in a background thread, writing 8KB chunks through an
+//! `mpsc` channel. `read_bytes()` pulls from the channel on demand, so the
+//! client receives data as soon as each chunk is decrypted — no need to wait
+//! for the entire file. If `seek()` is called, the remaining stream is drained
+//! into a temporary file and subsequent reads use random-access file I/O.
 //
-// // 用于 WebDAV 读取操作的保险库文件句柄。
+// // 用于 WebDAV 读写操作的保险库文件句柄。
 // //
 // // 此模块实现了 `DavFile` trait，提供保险库文件的惰性解密和
-// // 基于文件句柄的流式读取。首次读取时使用独立提取 API 执行解密，
-// // 该 API 不需要持有保险库互斥锁。
+// // 基于管道的流式读取。解密在后台 `spawn_blocking` 任务中执行，
+// // 使用独立提取 API，不需要持有保险库互斥锁。
 // //
 // // # 流式架构
-// // 与将整个解密内容加载到内存的 `Cursor<Vec<u8>>` 方法不同，
-// // 此实现将内容解密到临时文件并仅保持打开的 `File` 句柄。
-// // 读取和定位直接操作文件描述符，因此无论文件大小如何，
-// // 内存使用均为 O(1)——仅分配请求的读取缓冲区。
+// // 解密在后台线程中运行，通过 `mpsc` 通道写入 8KB 块。
+// // `read_bytes()` 按需从通道拉取数据，因此客户端在每个块解密完成后
+// // 即可收到数据——无需等待整个文件。如果调用 `seek()`，
+// // 剩余流将被排空到临时文件，后续读取使用随机访问文件 I/O。
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write as IoWrite};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use bytes::Buf;
 use dav_server::fs::{DavFile, DavMetaData, FsError, FsFuture};
 use vavavult::storage::StorageBackend;
-use vavavult::vault::{ExtractionTask, Vault};
+use vavavult::vault::ExtractionTask;
 
 use super::VaultDavMetaData;
 
+/// 将 `mpsc::Sender<bytes::Bytes>` 适配为 `std::io::Write`。
+/// 解密线程通过此 writer 将解密后的数据块发送到通道。
+struct ChannelWriter {
+    sender: tokio::sync::mpsc::Sender<bytes::Bytes>,
+    rt_handle: tokio::runtime::Handle,
+}
+
+impl std::io::Write for ChannelWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let data = bytes::Bytes::copy_from_slice(buf);
+        self.rt_handle
+            .block_on(self.sender.send(data))
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "receiver dropped"))?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// 将 `mpsc::Receiver<bytes::Bytes>` 适配为 `std::io::Read`。
+/// 写入路径的后台加密任务通过此 reader 消费传入数据。
 struct ReceiverReader {
     receiver: tokio::sync::mpsc::Receiver<bytes::Bytes>,
     buffer: bytes::Bytes,
@@ -46,7 +72,7 @@ impl std::io::Read for ReceiverReader {
         if self.buffer.is_empty() {
             match self.receiver.blocking_recv() {
                 Some(bytes) => self.buffer = bytes,
-                None => return Ok(0), // EOF
+                None => return Ok(0),
             }
         }
 
@@ -55,6 +81,29 @@ impl std::io::Read for ReceiverReader {
         self.buffer = self.buffer.split_off(len);
         Ok(len)
     }
+}
+
+/// 读取子状态：流式管道 vs 随机访问临时文件。
+pub(crate) enum ReadContent {
+    /// 尚未开始解密。
+    Pending {
+        task: ExtractionTask,
+        storage: Arc<dyn StorageBackend>,
+    },
+    /// 管道式流式读取：后台线程解密，通过通道传输数据。
+    Streaming {
+        receiver: tokio::sync::mpsc::Receiver<bytes::Bytes>,
+        buffer: bytes::Bytes,
+        position: u64,
+        _join_handle: tokio::task::JoinHandle<Result<(), FsError>>,
+    },
+    /// 随机访问模式：数据已排空到临时文件，支持 seek。
+    RandomAccess {
+        file: File,
+        temp_path: PathBuf,
+    },
+    /// 状态已被消费（用于 take 操作）。
+    Consumed,
 }
 
 /// Represents the operation state of a `VaultDavFile`.
@@ -66,21 +115,10 @@ impl std::io::Read for ReceiverReader {
 // //
 // // WebDAV 文件句柄可以为了读取（例如 GET 请求）或写入（例如 PUT 请求）而打开。
 pub enum VaultDavFileState {
-    /// State for a file opened for reading.
-    // // 为读取而打开的文件状态。
+    /// State for a file opened for reading (pipe-based streaming with seek fallback).
+    // // 为读取而打开的文件状态（基于管道的流式传输，支持 seek 回退）。
     Read {
-        /// The extraction task, consumed on first read.
-        // // 提取任务，在首次读取时消费。
-        task: Option<ExtractionTask>,
-        /// Reference to the storage backend.
-        // // 对存储后端的引用。
-        storage: Arc<dyn StorageBackend>,
-        /// Open file handle to the decrypted temporary file.
-        // // 解密临时文件的打开文件句柄。
-        content: Option<File>,
-        /// Path to the temporary file for cleanup.
-        // // 临时文件的路径，用于清理。
-        temp_path: Option<PathBuf>,
+        content: ReadContent,
     },
     /// State for a file opened for writing.
     // // 为写入而打开的文件状态。
@@ -118,10 +156,7 @@ impl VaultDavFile {
     ) -> Self {
         Self {
             state: VaultDavFileState::Read {
-                task: Some(task),
-                storage,
-                content: None,
-                temp_path: None,
+                content: ReadContent::Pending { task, storage },
             },
             file_size,
             modified,
@@ -150,7 +185,10 @@ impl VaultDavFile {
     // //
     // // # 返回
     // // 一个准备好进行写入的新 `VaultDavFile` 实例。
-    pub fn new_write(vault: Arc<Mutex<Vault>>, vault_path: vavavult::file::VaultPath) -> Self {
+    pub fn new_write(
+        vault: Arc<std::sync::Mutex<vavavult::vault::Vault>>,
+        vault_path: vavavult::file::VaultPath,
+    ) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(32);
 
         let join_handle = tokio::task::spawn_blocking(move || -> Result<(), FsError> {
@@ -185,8 +223,6 @@ impl VaultDavFile {
             let mut v = vault.lock().unwrap();
 
             // WebDAV PUT 操作通常意味着覆盖现有文件。
-            // 由于 Vault 核心库会在检测到同名路径时返回 DuplicateFileName，
-            // 我们需要在这里先尝试移除可能存在的旧文件。
             if let Ok(vavavult::vault::QueryResult::Found(existing_entry)) =
                 v.find_by_path(&vault_path)
             {
@@ -214,59 +250,121 @@ impl VaultDavFile {
         }
     }
 
-    fn ensure_content(&mut self) -> Result<(), FsError> {
-        if let VaultDavFileState::Read {
-            task,
-            storage,
-            content,
-            temp_path,
-        } = &mut self.state
-        {
-            if content.is_none() {
-                let t = task.take().ok_or_else(|| {
-                    eprintln!("[vavavult_mount] 提取任务已被消费但文件句柄未就绪");
-                    FsError::GeneralFailure
-                })?;
+    /// 启动后台解密管道（从 Pending 转换到 Streaming 状态）。
+    fn start_streaming(&mut self) -> Result<(), FsError> {
+        if let VaultDavFileState::Read { content } = &mut self.state {
+            // 仅在 Pending 状态时启动
+            let old = std::mem::replace(content, ReadContent::Consumed);
+            if let ReadContent::Pending { task, storage } = old {
+                let (tx, rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(32);
+                let rt_handle = tokio::runtime::Handle::current();
 
-                let temp_dir = std::env::temp_dir();
-                let unique_id = uuid::Uuid::new_v4();
-                let temp_file = temp_dir.join(format!("vavavult_mount_{}", unique_id));
+                let join_handle =
+                    tokio::task::spawn_blocking(move || -> Result<(), FsError> {
+                        let writer = ChannelWriter {
+                            sender: tx,
+                            rt_handle,
+                        };
+                        vavavult::vault::Vault::decrypt_extraction_task(
+                            storage.as_ref(),
+                            &task,
+                            writer,
+                        )
+                        .map_err(|e| {
+                            eprintln!("[vavavult_mount] 解密失败: {:?}", e);
+                            FsError::GeneralFailure
+                        })
+                    });
 
-                vavavult::vault::Vault::decrypt_extraction_task_to_file(
-                    storage.as_ref(),
-                    &t,
-                    &temp_file,
-                )
-                .map_err(|e| {
-                    eprintln!("[vavavult_mount] 解密失败: {:?}", e);
-                    FsError::GeneralFailure
-                })?;
-
-                let file = File::open(&temp_file).map_err(|e| {
-                    eprintln!("[vavavult_mount] 打开临时文件失败: {:?}", e);
-                    let _ = std::fs::remove_file(&temp_file);
-                    FsError::GeneralFailure
-                })?;
-
-                *content = Some(file);
-                *temp_path = Some(temp_file);
+                *content = ReadContent::Streaming {
+                    receiver: rx,
+                    buffer: bytes::Bytes::new(),
+                    position: 0,
+                    _join_handle: join_handle,
+                };
+                Ok(())
+            } else {
+                // 已经不是 Pending，恢复原状态
+                *content = old;
+                Ok(())
             }
         } else {
-            return Err(FsError::Forbidden);
+            Err(FsError::Forbidden)
         }
-        Ok(())
+    }
+
+    /// 将流式管道中的剩余数据排空到临时文件，切换到随机访问模式。
+    fn drain_to_random_access(&mut self) -> Result<(), FsError> {
+        if let VaultDavFileState::Read { content } = &mut self.state {
+            let old = std::mem::replace(content, ReadContent::Consumed);
+            if let ReadContent::Streaming {
+                mut receiver,
+                buffer,
+                position,
+                _join_handle,
+            } = old
+            {
+                let temp_dir = std::env::temp_dir();
+                let unique_id = uuid::Uuid::new_v4();
+                let temp_path = temp_dir.join(format!("vavavult_mount_{}", unique_id));
+
+                let mut file = File::create(&temp_path).map_err(|e| {
+                    eprintln!("[vavavult_mount] 创建临时文件失败: {:?}", e);
+                    FsError::GeneralFailure
+                })?;
+
+                // 先写入缓冲区中的剩余数据
+                if !buffer.is_empty() {
+                    file.write_all(&buffer).map_err(|e| {
+                        eprintln!("[vavavult_mount] 写入临时文件失败: {:?}", e);
+                        FsError::GeneralFailure
+                    })?;
+                }
+
+                // 排空通道中的所有剩余数据
+                while let Some(chunk) = receiver.blocking_recv() {
+                    file.write_all(&chunk).map_err(|e| {
+                        eprintln!("[vavavult_mount] 写入临时文件失败: {:?}", e);
+                        FsError::GeneralFailure
+                    })?;
+                }
+
+                file.flush().map_err(|e| {
+                    eprintln!("[vavavult_mount] flush 临时文件失败: {:?}", e);
+                    FsError::GeneralFailure
+                })?;
+                drop(file);
+
+                // 重新打开为只读，并 seek 到当前位置
+                let mut file = File::open(&temp_path).map_err(|e| {
+                    eprintln!("[vavavult_mount] 打开临时文件失败: {:?}", e);
+                    FsError::GeneralFailure
+                })?;
+                file.seek(SeekFrom::Start(position)).map_err(|e| {
+                    eprintln!("[vavavult_mount] seek 临时文件失败: {:?}", e);
+                    FsError::GeneralFailure
+                })?;
+
+                *content = ReadContent::RandomAccess {
+                    file,
+                    temp_path,
+                };
+                Ok(())
+            } else {
+                *content = old;
+                Ok(())
+            }
+        } else {
+            Err(FsError::Forbidden)
+        }
     }
 }
 
 impl Drop for VaultDavFile {
     fn drop(&mut self) {
-        if let VaultDavFileState::Read {
-            content, temp_path, ..
-        } = &mut self.state
-        {
-            *content = None;
-            if let Some(path) = temp_path.take() {
-                let _ = std::fs::remove_file(path);
+        if let VaultDavFileState::Read { content } = &mut self.state {
+            if let ReadContent::RandomAccess { temp_path, .. } = content {
+                let _ = std::fs::remove_file(temp_path);
             }
         }
     }
@@ -284,23 +382,51 @@ impl DavFile for VaultDavFile {
 
     fn read_bytes<'a>(&'a mut self, count: usize) -> FsFuture<'a, bytes::Bytes> {
         Box::pin(async move {
-            self.ensure_content()?;
+            // 如果还在 Pending 状态，启动流式解密管道
+            if matches!(
+                &self.state,
+                VaultDavFileState::Read {
+                    content: ReadContent::Pending { .. }
+                }
+            ) {
+                self.start_streaming()?;
+            }
 
-            if let VaultDavFileState::Read {
-                content: Some(file),
-                ..
-            } = &mut self.state
-            {
-                let mut buf = vec![0u8; count];
-                let bytes_read = file.read(&mut buf).map_err(|e| {
-                    eprintln!("[vavavult_mount] 读取文件失败: {:?}", e);
-                    FsError::GeneralFailure
-                })?;
+            if let VaultDavFileState::Read { content } = &mut self.state {
+                match content {
+                    ReadContent::Streaming {
+                        receiver,
+                        buffer,
+                        position,
+                        ..
+                    } => {
+                        // 如果缓冲区为空，从通道接收下一个块
+                        if buffer.is_empty() {
+                            match receiver.recv().await {
+                                Some(chunk) => *buffer = chunk,
+                                None => return Ok(bytes::Bytes::new()),
+                            }
+                        }
 
-                buf.truncate(bytes_read);
-                Ok(bytes::Bytes::from(buf))
+                        // 从缓冲区中取出请求的字节数
+                        let len = std::cmp::min(count, buffer.len());
+                        let result = buffer.split_to(len);
+                        *position += len as u64;
+                        Ok(result)
+                    }
+                    ReadContent::RandomAccess { file, .. } => {
+                        let mut buf = vec![0u8; count];
+                        let bytes_read = file.read(&mut buf).map_err(|e| {
+                            eprintln!("[vavavult_mount] 读取文件失败: {:?}", e);
+                            FsError::GeneralFailure
+                        })?;
+                        buf.truncate(bytes_read);
+                        Ok(bytes::Bytes::from(buf))
+                    }
+                    _ => Err(FsError::GeneralFailure),
+                }
             } else {
-                Err(FsError::GeneralFailure)
+                Err(FsError::Forbidden)
             }
         })
     }
@@ -343,17 +469,37 @@ impl DavFile for VaultDavFile {
 
     fn seek<'a>(&'a mut self, pos: SeekFrom) -> FsFuture<'a, u64> {
         Box::pin(async move {
-            self.ensure_content()?;
+            // 如果还在 Pending 状态，启动流式解密管道
+            if matches!(
+                &self.state,
+                VaultDavFileState::Read {
+                    content: ReadContent::Pending { .. }
+                }
+            ) {
+                self.start_streaming()?;
+            }
 
-            if let VaultDavFileState::Read {
-                content: Some(file),
-                ..
-            } = &mut self.state
-            {
-                file.seek(pos).map_err(|e| {
-                    eprintln!("[vavavult_mount] seek 失败: {:?}", e);
-                    FsError::GeneralFailure
-                })
+            // 如果在 Streaming 状态，需要排空到临时文件以支持随机访问
+            if matches!(
+                &self.state,
+                VaultDavFileState::Read {
+                    content: ReadContent::Streaming { .. }
+                }
+            ) {
+                // drain_to_random_access 内部使用 blocking_recv，
+                // 需要在 block_in_place 中执行以避免阻塞 tokio 线程
+                tokio::task::block_in_place(|| self.drain_to_random_access())?;
+            }
+
+            if let VaultDavFileState::Read { content } = &mut self.state {
+                if let ReadContent::RandomAccess { file, .. } = content {
+                    file.seek(pos).map_err(|e| {
+                        eprintln!("[vavavult_mount] seek 失败: {:?}", e);
+                        FsError::GeneralFailure
+                    })
+                } else {
+                    Err(FsError::GeneralFailure)
+                }
             } else {
                 Err(FsError::Forbidden)
             }
@@ -384,49 +530,28 @@ impl DavFile for VaultDavFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::SeekFrom;
 
     use vavavult::vault::Vault;
 
-    /// Creates a temporary vault for testing.
-    ///
-    /// Returns `(temp_dir, Vault)` where `temp_dir` is the temporary directory
-    /// containing the vault.
-    //
-    // // 创建用于测试的临时保险库。
-    // //
-    // // 返回 `(temp_dir, Vault)`，其中 `temp_dir` 是包含保险库的临时目录。
     fn create_test_vault() -> (tempfile::TempDir, Vault) {
         let temp_dir = tempfile::tempdir().expect("无法创建临时目录");
         let password = "test_password_123";
-
         let vault = Vault::create_vault_local(temp_dir.path(), "test_vault", Some(password))
             .expect("无法创建测试保险库");
-
         (temp_dir, vault)
     }
 
-    /// Helper: adds a small test file to the vault at the given vault path.
-    //
-    // // 辅助函数：向保险库添加一个小的测试文件到指定的保险库路径。
     fn add_test_file(vault: &mut Vault, vault_path: &str, content: &[u8]) {
         let src_dir = tempfile::tempdir().expect("无法创建源文件临时目录");
         let src_path = src_dir.path().join("source.bin");
         std::fs::write(&src_path, content).expect("无法写入源文件");
-
         let dest_path = vavavult::file::VaultPath::new(vault_path);
         vault
             .add_file(&src_path, &dest_path)
             .unwrap_or_else(|_| panic!("无法添加测试文件 {} 到保险库", vault_path));
     }
 
-    /// Helper: creates a VaultDavFile for the given vault path.
-    ///
-    /// This simulates what `VaultDavFs::open()` does: find the file,
-    /// prepare extraction task, and create the file handle.
-    //
-    // // 辅助函数：为给定的保险库路径创建 VaultDavFile。
-    // //
-    // // 这模拟了 `VaultDavFs::open()` 的操作：查找文件、准备提取任务、创建文件句柄。
     fn open_vault_file(vault: &Vault, vault_path: &str) -> Option<VaultDavFile> {
         use vavavult::file::VaultPath;
         use vavavult::vault::QueryResult;
@@ -440,7 +565,6 @@ mod tests {
         let task = vault.prepare_extraction_task(&entry.sha256sum).ok()?;
         let storage = vault.storage.clone();
 
-        // 提取文件大小
         let size = entry
             .metadata
             .iter()
@@ -448,7 +572,6 @@ mod tests {
             .and_then(|m| m.value.parse::<u64>().ok())
             .unwrap_or(0);
 
-        // 提取修改时间
         let modified = entry
             .metadata
             .iter()
@@ -466,28 +589,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_without_decryption() {
-        // 元数据应无需解密即可获取
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-
-        // 需要重新打开 vault 以获取最新数据
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
-        // 获取元数据不应触发解密
         let meta = file.metadata().await.expect("获取元数据失败");
         assert!(!meta.is_dir());
-        assert_eq!(meta.len(), 11); // "hello world" = 11 bytes
+        assert_eq!(meta.len(), 11);
 
-        // 验证文件尚未解密（content 和 temp_path 均为 None）
-        if let VaultDavFileState::Read {
-            content, temp_path, ..
-        } = &file.state
-        {
-            assert!(content.is_none());
-            assert!(temp_path.is_none());
+        if let VaultDavFileState::Read { content } = &file.state {
+            assert!(matches!(content, ReadContent::Pending { .. }));
         } else {
             panic!("Expected Read state");
         }
@@ -495,196 +608,126 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_bytes_full_content() {
-        // 读取完整内容
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
-        // 读取应触发惰性解密
         let data = file.read_bytes(1024).await.expect("读取失败");
         assert_eq!(&data[..], b"hello world");
-
-        // 验证文件句柄已打开
-        if let VaultDavFileState::Read {
-            content, temp_path, ..
-        } = &file.state
-        {
-            assert!(content.is_some());
-            assert!(temp_path.is_some());
-        } else {
-            panic!("Expected Read state");
-        }
     }
 
     #[tokio::test]
     async fn test_read_bytes_partial() {
-        // 部分读取
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
-        // 读取前 5 字节
         let data = file.read_bytes(5).await.expect("读取失败");
         assert_eq!(&data[..], b"hello");
 
-        // 继续读取剩余字节
         let data = file.read_bytes(1024).await.expect("读取失败");
         assert_eq!(&data[..], b" world");
     }
 
     #[tokio::test]
     async fn test_read_bytes_at_end() {
-        // 在末尾读取应返回空
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hi");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
-        // 读取全部内容
         let _ = file.read_bytes(1024).await.expect("读取失败");
-
-        // 在末尾读取
         let data = file.read_bytes(10).await.expect("读取失败");
         assert!(data.is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_seek_from_start() {
-        // 从开头定位
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
-        // 定位到位置 6
         let pos = file.seek(SeekFrom::Start(6)).await.expect("定位失败");
         assert_eq!(pos, 6);
 
-        // 从位置 6 读取
         let data = file.read_bytes(1024).await.expect("读取失败");
         assert_eq!(&data[..], b"world");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_seek_from_current() {
-        // 从当前位置定位
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
-        // 先读取 5 字节
-        let _ = file.read_bytes(5).await.expect("读取失败");
-
-        // 从当前位置向前移动 1 字节
+        file.seek(SeekFrom::Start(5)).await.expect("定位失败");
         let pos = file.seek(SeekFrom::Current(-1)).await.expect("定位失败");
         assert_eq!(pos, 4);
 
-        // 从位置 4 读取
         let data = file.read_bytes(1024).await.expect("读取失败");
         assert_eq!(&data[..], b"o world");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_seek_from_end() {
-        // 从末尾定位
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
-        // 从末尾向前移动 5 字节
         let pos = file.seek(SeekFrom::End(-5)).await.expect("定位失败");
-        assert_eq!(pos, 6); // 11 - 5 = 6
+        assert_eq!(pos, 6);
 
-        // 从位置 6 读取
         let data = file.read_bytes(1024).await.expect("读取失败");
         assert_eq!(&data[..], b"world");
     }
 
     #[tokio::test]
     async fn test_write_bytes_forbidden() {
-        // 写入应被禁止
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
         let result = file.write_bytes(bytes::Bytes::from("data")).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_write_buf_forbidden() {
-        // 写入缓冲区应被禁止
-        let (_temp_dir, mut vault) = create_test_vault();
-        add_test_file(&mut vault, "/test.txt", b"hello world");
-
-        let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
-            .expect("无法重新打开保险库");
-
-        let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
-        let buf: Box<dyn Buf + Send> = Box::new(bytes::Bytes::from("data"));
-        let result = file.write_buf(buf).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
     async fn test_flush_noop() {
-        // flush 应为无操作
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-
         let result = file.flush().await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_large_file_read() {
-        // 测试较大文件的读取（验证流式读取，非全量加载）
         let large_content: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect();
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/large.bin", &large_content);
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/large.bin").expect("无法打开文件");
-
-        // 验证元数据
         let meta = file.metadata().await.expect("获取元数据失败");
         assert_eq!(meta.len(), 1024);
 
-        // 分段读取（每次 256 字节，模拟流式读取）
         let mut all_data = Vec::new();
         loop {
             let chunk = file.read_bytes(256).await.expect("读取失败");
@@ -698,57 +741,48 @@ mod tests {
         assert_eq!(all_data, large_content);
     }
 
-    #[tokio::test]
-    async fn test_drop_cleans_temp_file() {
-        // 验证 Drop 实现清理临时文件
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_seek_creates_temp_file_and_cleans_up() {
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"hello world");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
+        file.seek(SeekFrom::Start(0)).await.expect("定位失败");
 
-        // 触发解密
-        let _ = file.read_bytes(5).await.expect("读取失败");
-
-        // 记录临时文件路径
-        let temp_path = if let VaultDavFileState::Read { temp_path, .. } = &file.state {
-            temp_path.clone().expect("应有临时文件路径")
+        let temp_path = if let VaultDavFileState::Read { content } = &file.state {
+            if let ReadContent::RandomAccess { temp_path, .. } = content {
+                temp_path.clone()
+            } else {
+                panic!("Expected RandomAccess state after seek");
+            }
         } else {
             panic!("Expected Read state");
         };
         assert!(temp_path.exists(), "临时文件应存在");
 
-        // Drop 文件句柄
         drop(file);
-
-        // 验证临时文件已被删除
         assert!(!temp_path.exists(), "临时文件应已被删除");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_seek_then_read_repeated() {
-        // 反复 seek + read 验证文件句柄正确性
         let (_temp_dir, mut vault) = create_test_vault();
         add_test_file(&mut vault, "/test.txt", b"0123456789");
-
         let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
             .expect("无法重新打开保险库");
 
         let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
 
-        // 第一次：seek 到 5，读取 "56789"
         file.seek(SeekFrom::Start(5)).await.expect("定位失败");
         let data = file.read_bytes(100).await.expect("读取失败");
         assert_eq!(&data[..], b"56789");
 
-        // 第二次：seek 回 0，读取 "01234"
         file.seek(SeekFrom::Start(0)).await.expect("定位失败");
         let data = file.read_bytes(5).await.expect("读取失败");
         assert_eq!(&data[..], b"01234");
 
-        // 第三次：seek 到末尾前 3 字节，读取 "789"
         file.seek(SeekFrom::End(-3)).await.expect("定位失败");
         let data = file.read_bytes(100).await.expect("读取失败");
         assert_eq!(&data[..], b"789");

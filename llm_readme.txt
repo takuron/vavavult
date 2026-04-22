@@ -122,13 +122,19 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
 
 ### Streaming Architecture
 
-`VaultDavFile` uses a **file-handle-based streaming** approach rather than loading the entire decrypted content into memory:
+`VaultDavFile` uses a **pipe-based streaming** approach with a seek fallback:
 
-- Decrypted content is written to a **temporary file** on disk.
-- An open `File` handle is kept for subsequent reads and seeks.
-- `read_bytes` reads directly from the file handle into a buffer of only the requested size — **memory usage is O(1)** regardless of file size.
-- `seek` delegates to the `File` handle's native `Seek` implementation (OS `lseek` syscall) — zero memory overhead.
-- The temporary file is automatically cleaned up when `VaultDavFile` is dropped (via a `Drop` impl).
+- **Streaming mode (default):** Decryption runs in a background `spawn_blocking` task, writing 8KB chunks through an `mpsc` channel. `read_bytes()` pulls from the channel on demand, so the client receives data as soon as each chunk is decrypted — no need to wait for the entire file. Memory usage is O(chunk_size).
+- **Random-access mode (on seek):** If `seek()` is called, the remaining stream is drained into a temporary file and subsequent reads use native OS `lseek`. The temp file is cleaned up on `Drop`.
+- The state machine transitions: `Pending` → `Streaming` → (optional) `RandomAccess`.
+
+### rclone Performance Parameters
+
+When mounting via rclone, the following cache/performance parameters are applied:
+- `--vfs-cache-mode=full`: Full VFS caching to avoid repeated HTTP requests.
+- `--dir-cache-time=30m` / `--attr-timeout=30m`: Reduce PROPFIND and attribute query frequency.
+- `--vfs-read-chunk-size=8M` / `--vfs-read-chunk-size-limit=64M`: Adaptive read chunk sizing.
+- `--vfs-read-ahead=16M`: Read-ahead buffer for sequential reads.
 
 ### 3.5.2. Key Modules and Their Functions
 
@@ -136,7 +142,7 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
     *   **Path:** `vavavult_mount/src/vfs/`
     *   **Description:** The virtual filesystem layer implementing `DavFileSystem`.
     *   `mod.rs`: Defines `VaultDavFs` (the main `DavFileSystem` implementation), `VaultDavMetaData`, and `VaultDavDirEntry`. Provides `metadata()`, `read_dir()`, and `open()` methods.
-    *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy decryption to a temporary file, file-handle-based streaming reads (O(1) memory), native `File::seek` for HTTP Range requests, and automatic temp-file cleanup via `Drop`.
+    *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy decryption via a background `spawn_blocking` task, pipe-based streaming reads through `mpsc` channel, seek fallback to temporary file with native `File::seek`, and automatic temp-file cleanup via `Drop`.
 
 *   **`vavavult_mount::sys_mount`**
     *   **Path:** `vavavult_mount/src/sys_mount.rs`
@@ -161,7 +167,7 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
 ### 3.5.3. Key Public Types
 
 *   **`VaultDavFs`**: The main `DavFileSystem` implementation. Wraps `Arc<Mutex<Vault>>` and translates WebDAV paths to `VaultPath` queries.
-*   **`VaultDavFile`**: A `DavFile` implementation with lazy decryption. Stores an `ExtractionTask` and `Arc<dyn StorageBackend>`; on first read, decrypts to a temporary file and keeps an open `File` handle. Reads are streaming (O(1) memory), seeks use native OS `lseek`. Temp file is cleaned up on `Drop`.
+*   **`VaultDavFile`**: A `DavFile` implementation with lazy decryption. Stores an `ExtractionTask` and `Arc<dyn StorageBackend>`; on first read, starts a background `spawn_blocking` decryption task that streams 8KB chunks through an `mpsc` channel. Reads pull from the channel on demand (pipe-based streaming). If `seek()` is called, drains remaining stream to a temp file and switches to random-access mode. Temp file (if created) is cleaned up on `Drop`.
 *   **`VaultDavMetaData`**: Metadata for vault entries (files and directories). Carries size, directory flag, and modification time.
 *   **`VaultDavDirEntry`**: Directory entry for `read_dir()` results. Contains only the entry name (not full path), as required by WebDAV.
 *   **`MountConfig`**: Server configuration (bind address, port, read-only mode, auth, prefix).
@@ -179,11 +185,11 @@ The crate implements the `DavFileSystem` trait from the `dav-server` crate, prov
     - Metadata for root directories, files, and non-existent paths
     - Directory listing (root and subdirectories)
     - File opening (success, not found, forbidden for directories)
-    - Lazy decryption (metadata without decryption, streaming reads from file handle)
-    - Seek operations (`Start`, `Current`, `End`) via native OS `lseek`
+    - Lazy decryption (metadata without decryption, pipe-based streaming reads)
+    - Seek operations (`Start`, `Current`, `End`) with automatic drain to temp file
     - Write prohibition in read-only mode
-    - Large file reading (streaming, O(1) memory)
-    - Temporary file cleanup on `Drop`
+    - Large file reading (streaming via mpsc channel)
+    - Temporary file cleanup on `Drop` (only created when seek is used)
 
 ## 4. LLM Coding Specification
 
