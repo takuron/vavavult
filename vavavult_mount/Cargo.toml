@@ -1,0 +1,21 @@
+[package]
+name = "vavavult_mount"
+version = "0.4.3"
+edition = "2024"
+
+[dependencies]
+dav-server = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+tokio = { workspace = true }
+vavavult = { path = "../vavavult" }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+base64 = { workspace = true }
+log = { workspace = true }
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }

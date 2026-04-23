@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::file::VaultPath;
-use vavavult::vault::{AddFileError, ExtractionTask, QueryResult};
-use vavavult::vault::{execute_extraction_task_standalone, prepare_addition_task_standalone};
+use vavavult::vault::{AddFileError, ExtractionTask, PrepareAdditionRequest, QueryResult, Vault};
+use vavavult::vault::resolve_file_metadata;
 
 mod common;
 use common::{
@@ -198,7 +198,7 @@ fn test_batch_queries_and_search() {
 }
 
 /// 测试：并行 API。
-/// 模拟 CLI 的行为，使用 `encrypt_file_for_add_standalone` 和 `execute_extraction_task_standalone`
+/// 模拟 CLI 的行为，使用三阶段 API 和 `Vault::decrypt_extraction_task_to_file`
 /// 来在多个线程中并行处理加密和解密，不持有 Vault 锁。
 #[test]
 fn test_parallel_add_and_extract() {
@@ -210,24 +210,49 @@ fn test_parallel_add_and_extract() {
     let file_count = 10;
     let source_files = create_dummy_files(&dir, file_count, "parallel");
 
-    // --- 阶段 1: 并行添加 ---
+    // --- 阶段 1: 校验 ---
     // 获取 storage 引用，无需锁住 Vault
     let storage = vault_arc.lock().unwrap().storage.clone();
 
-    // 使用 Rayon 并行加密
-    let encrypted_files: Vec<_> = source_files
-        .par_iter()
+    // 先解析所有文件的元数据
+    let resolved: Vec<_> = source_files
+        .iter()
         .enumerate()
         .map(|(i, (src, _))| {
             let dest = VaultPath::from(format!("/p_file_{}.txt", i).as_str());
-            prepare_addition_task_standalone(storage.as_ref(), src, &dest).unwrap()
+            let (resolved_path, size, mtime) = resolve_file_metadata(src, &dest).unwrap();
+            (src.clone(), resolved_path, size, mtime)
         })
         .collect();
 
-    // 快速的批量提交 (持有锁时间很短)
+    let requests: Vec<PrepareAdditionRequest> = resolved
+        .iter()
+        .map(|(_, dest, size, mtime)| PrepareAdditionRequest {
+            dest_path: dest,
+            source_size: *size,
+            source_modified_time: *mtime,
+        })
+        .collect();
+
+    let pending_tasks = {
+        let v = vault_arc.lock().unwrap();
+        v.prepare_addition_tasks(&requests).unwrap()
+    };
+
+    // --- 阶段 2: 并行加密 ---
+    let encrypted_files: Vec<_> = pending_tasks
+        .into_par_iter()
+        .zip(resolved.par_iter())
+        .map(|(pending, (src, _, _, _))| {
+            let source_file = std::fs::File::open(src).unwrap();
+            Vault::encrypt_addition_task(storage.as_ref(), pending, source_file).unwrap()
+        })
+        .collect();
+
+    // --- 阶段 3: 批量提交 ---
     {
         let mut v = vault_arc.lock().unwrap();
-        v.execute_addition_tasks(encrypted_files).unwrap();
+        v.commit_addition_tasks(encrypted_files).unwrap();
     }
 
     // --- 阶段 2: 并行提取 ---
@@ -253,7 +278,7 @@ fn test_parallel_add_and_extract() {
     // 执行任务 (无锁并行)
     let storage_ext = vault_arc.lock().unwrap().storage.clone();
     tasks.par_iter().for_each(|(task, path)| {
-        execute_extraction_task_standalone(storage_ext.as_ref(), task, path).unwrap();
+        Vault::decrypt_extraction_task_to_file(storage_ext.as_ref(), task, path).unwrap();
     });
 
     assert_eq!(fs::read_dir(extract_dir).unwrap().count(), file_count);

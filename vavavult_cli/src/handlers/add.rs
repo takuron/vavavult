@@ -5,8 +5,8 @@ use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use vavavult::file::VaultPath; // [新增] 确保导入
-use vavavult::vault::{AddFileError, AdditionTask, Vault, prepare_addition_task_standalone};
+use vavavult::file::VaultPath;
+use vavavult::vault::{AddFileError, AdditionTask, PrepareAdditionRequest, Vault, resolve_file_metadata};
 use walkdir::WalkDir;
 
 /// 根据新的 CLI 规则构建最终的 VaultPath (用于单文件添加)
@@ -317,36 +317,77 @@ fn handle_add_directory_parallel(
 
     let fail_count = Arc::new(AtomicUsize::new(0));
 
-    // --- 阶段 1: 并行加密 (无锁) ---
+    // --- 阶段 1: 校验（持有库读锁）---
+    println!("Validating {} files against vault...", files_to_add.len());
 
-    // 在并行循环 *之前* 获取一次数据目录路径
-    // 这是一个快速的只读锁
+    // 先解析所有文件的元数据
+    let mut resolved: Vec<(PathBuf, VaultPath, u64, chrono::DateTime<chrono::Utc>)> = Vec::new();
+    for (source_path, vault_path) in &files_to_add {
+        match resolve_file_metadata(source_path, vault_path) {
+            Ok((resolved_path, size, mtime)) => {
+                resolved.push((source_path.clone(), resolved_path, size, mtime));
+            }
+            Err(e) => {
+                fail_count.fetch_add(1, Ordering::SeqCst);
+                eprintln!("FAILED to resolve {}: {}", vault_path.as_str(), e);
+            }
+        }
+    }
+
+    let requests: Vec<PrepareAdditionRequest> = resolved
+        .iter()
+        .map(|(_, dest, size, mtime)| PrepareAdditionRequest {
+            dest_path: dest,
+            source_size: *size,
+            source_modified_time: *mtime,
+        })
+        .collect();
+
+    let pending_tasks = {
+        let vault_guard = vault.lock().unwrap();
+        match vault_guard.prepare_addition_tasks(&requests) {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                eprintln!("FATAL: Validation failed: {}", e);
+                return Err(CliError::Unexpected(format!("Validation failed: {}", e)));
+            }
+        }
+    };
+
+    // --- 阶段 2: 并行加密（无锁）---
     let storage = vault.lock().unwrap().storage.clone();
 
-    let encryption_results: Vec<Result<AdditionTask, (String, AddFileError)>> = files_to_add
-        .into_par_iter() // <-- Rayon 并行迭代
-        .map(|(source_path, target_path)| {
-            let pb_clone = pb.clone();
+    let source_paths: Vec<PathBuf> = resolved.iter().map(|(src, _, _, _)| src.clone()).collect();
 
-            // 调用无锁的 standalone 加密函数
-            // **这里没有 vault 锁**，我们使用 clone 来的 storage 后端
-            let result = prepare_addition_task_standalone(
-                storage.as_ref(), // deref Arc -> &dyn StorageBackend
-                &source_path,
-                &target_path,
+    let encryption_results: Vec<Result<AdditionTask, (String, AddFileError)>> = pending_tasks
+        .into_par_iter()
+        .zip(source_paths.into_par_iter())
+        .map(|(pending, source_path)| {
+            let pb_clone = pb.clone();
+            let dest_str = pending.dest_path.as_str().to_string();
+
+            let source_file = match std::fs::File::open(&source_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    pb_clone.inc(1);
+                    return Err((dest_str, AddFileError::IoError(e)));
+                }
+            };
+
+            let result = Vault::encrypt_addition_task(
+                storage.as_ref(),
+                pending,
+                source_file,
             );
 
-            pb_clone.inc(1); // 更新进度条
+            pb_clone.inc(1);
 
             match result {
                 Ok(encrypted_file) => Ok(encrypted_file),
-                Err(e) => {
-                    // 如果加密失败，返回错误以便报告
-                    Err((target_path.as_str().to_string(), e))
-                }
+                Err(e) => Err((dest_str, e)),
             }
         })
-        .collect(); // 收集所有结果
+        .collect();
 
     pb.finish_with_message("Encryption complete.");
 
@@ -375,7 +416,7 @@ fn handle_add_directory_parallel(
         return Ok(());
     }
 
-    // --- 阶段 3: 批量提交 (一次性短时锁) ---
+    // --- 阶段 3: 批量提交（一次性短时锁）---
     println!(
         "Committing {} encrypted files to database...",
         files_to_commit.len()
@@ -383,7 +424,7 @@ fn handle_add_directory_parallel(
     {
         // **获取一次性的写锁**
         let mut vault_guard = vault.lock().unwrap();
-        match vault_guard.execute_addition_tasks(files_to_commit) {
+        match vault_guard.commit_addition_tasks(files_to_commit) {
             Ok(_) => {
                 println!("Batch commit successful.");
             }
