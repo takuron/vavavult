@@ -81,6 +81,7 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
         ReplCommand::Verify { targets, parallel } => {
             handlers::verify::handle_verify(Arc::clone(&vault_arc), &targets, parallel)?;
         }
+        /*
         ReplCommand::Mount {
             port,
             bind,
@@ -101,6 +102,7 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
         ReplCommand::Unmount => {
             handlers::mount::handle_unmount(app_state)?;
         }
+        */
         ReplCommand::Vault(vault_command) => match vault_command {
             VaultCommand::Rename { new_name } => {
                 let mut vault = vault_arc.lock().unwrap();
