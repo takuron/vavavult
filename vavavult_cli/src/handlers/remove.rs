@@ -1,6 +1,4 @@
-use crate::core::helpers::{
-    Target, display_path_for_entry, get_all_files_recursively, identify_target,
-};
+use crate::core::helpers::{Target, display_path_for_entry, identify_target};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -100,24 +98,14 @@ pub fn handle_remove(
                     )));
                 }
                 println!("Recursively scanning directory '{}'...", vault_path);
-                let files = get_all_files_recursively(vault, vault_path.as_str())?;
+                let files = vault.list_all_recursive(&vault_path)?;
                 let delete_targets = files
                     .into_iter()
-                    .map(|entry| {
-                        let path = vault
-                            .list_paths_by_hash(&entry.sha256sum)?
-                            .into_iter()
-                            .next()
-                            .ok_or_else(|| {
-                                CliError::EntryNotFound(format!(
-                                    "No path mapping found for file hash '{}'.",
-                                    entry.sha256sum
-                                ))
-                            })?;
+                    .map(|file_path_entry| {
                         Ok(DeleteTarget {
-                            hash: Some(entry.sha256sum),
-                            display: path.to_string(),
-                            path: Some(path),
+                            hash: Some(file_path_entry.sha256sum),
+                            display: file_path_entry.path.to_string(),
+                            path: Some(file_path_entry.path),
                         })
                     })
                     .collect::<Result<Vec<_>, CliError>>()?;

@@ -1,7 +1,4 @@
-use crate::core::helpers::{
-    Target, display_path_for_entry, first_path_for_entry, get_all_files_recursively,
-    identify_target,
-};
+use crate::core::helpers::{Target, display_path_for_entry, identify_target};
 use crate::errors::CliError;
 use vavavult::file::VaultPath;
 use vavavult::vault::{QueryResult, Vault};
@@ -60,7 +57,7 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
 
             println!("Moving directory '{}' to '{}'...", source_path, dest_path);
 
-            let files_to_move = get_all_files_recursively(vault, source_path.as_str())?;
+            let files_to_move = vault.list_all_recursive(&source_path)?;
 
             if files_to_move.is_empty() {
                 println!(
@@ -71,8 +68,8 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
             }
 
             let mut moved_count = 0;
-            for file_entry in &files_to_move {
-                let file_path = first_path_for_entry(vault, file_entry)?;
+            for file_path_entry in &files_to_move {
+                let file_path = &file_path_entry.path;
                 let relative_path = file_path
                     .as_str()
                     .strip_prefix(source_path.as_str())
@@ -85,7 +82,7 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
 
                 let new_path = dest_path.join(relative_path)?;
 
-                vault.move_file_by_path(&file_path, &new_path)?;
+                vault.move_file_by_path(file_path, &new_path)?;
                 moved_count += 1;
             }
 

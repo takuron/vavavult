@@ -14,22 +14,70 @@ pub enum QueryResult {
     Found(FileEntry),
 }
 
-/// Represents an entry in a directory listing, distinctively identifying files and subdirectories.
+/// Represents a directory path entry in the vault tree.
 ///
-/// This enum allows consumers to handle files (with full metadata) and subdirectories
-/// differently in a single pass.
+/// This struct contains the directory path, its parent directory path, and direct
+/// child counts so callers can render directory listings without resolving extra
+/// metadata.
 //
-// // 代表目录列表中的一个条目，用于区分文件和子目录。
+// // 代表保险库目录树中的目录路径条目。
 // //
-// // 此枚举允许消费者在一次遍历中以不同方式处理文件（包含完整元数据）和子目录。
+// // 此结构体包含目录路径、父目录路径以及直属子项计数，方便调用方在不解析额外元数据的情况下渲染目录列表。
 #[derive(Debug, Clone)]
-pub enum DirectoryEntry {
-    /// A subdirectory entry, containing only its path.
-    // // 子目录条目，仅包含其路径。
-    Directory(VaultPath),
-    /// A file entry, containing full details (hash, metadata, tags, etc.).
-    // // 文件条目，包含完整详细信息（哈希、元数据、标签等）。
-    File(FileEntry),
+pub struct DirectoryEntry {
+    /// The absolute vault path of this directory.
+    // // 此目录的保险库绝对路径。
+    pub path: VaultPath,
+
+    /// The absolute vault path of this directory's parent.
+    // // 此目录父目录的保险库绝对路径。
+    pub parent_path: VaultPath,
+
+    /// The number of direct file entries under this directory.
+    // // 此目录下直属文件条目的数量。
+    pub child_file_count: usize,
+
+    /// The number of direct subdirectories under this directory.
+    // // 此目录下直属子目录的数量。
+    pub child_directory_count: usize,
+}
+
+/// Represents a file path mapping in the vault tree.
+///
+/// This struct keeps only the display path and encrypted content hash, leaving
+/// heavier file metadata to explicit lookup APIs.
+//
+// // 代表保险库目录树中的文件路径映射。
+// //
+// // 此结构体仅保留显示路径和加密内容哈希，较重的文件元数据由显式查询 API 获取。
+#[derive(Debug, Clone)]
+pub struct FilePathEntry {
+    /// The absolute vault path of this file entry.
+    // // 此文件条目的保险库绝对路径。
+    pub path: VaultPath,
+
+    /// The SHA256 hash of the encrypted file content.
+    // // 加密后文件内容的 SHA256 哈希。
+    pub sha256sum: VaultHash,
+}
+
+/// Represents one item returned by `Vault::list_by_path`.
+///
+/// This enum wraps either a `DirectoryEntry` or a `FilePathEntry`, allowing path
+/// listings to describe both directories and files with lightweight path data.
+//
+// // 代表 `Vault::list_by_path` 返回的一个条目。
+// //
+// // 此枚举包装 `DirectoryEntry` 或 `FilePathEntry`，使路径列表能用轻量级路径数据描述目录和文件。
+#[derive(Debug, Clone)]
+pub enum ListPathEntry {
+    /// A subdirectory entry with path and child-count information.
+    // // 包含路径和子项计数信息的子目录条目。
+    Directory(DirectoryEntry),
+
+    /// A file path entry with path and encrypted content hash.
+    // // 包含路径和加密内容哈希的文件路径条目。
+    File(FilePathEntry),
 }
 
 /// Defines errors that can occur during a query operation.
@@ -618,7 +666,7 @@ pub(crate) fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError
 pub(crate) fn list_by_path(
     vault: &Vault,
     path: &VaultPath,
-) -> Result<Vec<DirectoryEntry>, QueryError> {
+) -> Result<Vec<ListPathEntry>, QueryError> {
     if !path.is_dir() {
         return Err(QueryError::NotADirectory(path.as_str().to_string()));
     }
@@ -629,23 +677,37 @@ pub(crate) fn list_by_path(
 
     let mut entries = Vec::new();
 
-    // 先读取子目录，构造完整目录路径。
-    let mut dir_stmt = vault
-        .database_connection
-        .prepare("SELECT name FROM directories WHERE parent_id = ?1 ORDER BY name")?;
-    let dir_names = dir_stmt
-        .query_map(params![directory_id], |row| row.get::<_, String>(0))?
+    // 先读取子目录，同时统计每个子目录的直属子项数量。
+    let mut dir_stmt = vault.database_connection.prepare(
+        "SELECT d.name,
+                (SELECT COUNT(*) FROM file_entries fe WHERE fe.directory_id = d.id),
+                (SELECT COUNT(*) FROM directories child WHERE child.parent_id = d.id)
+         FROM directories d
+         WHERE d.parent_id = ?1
+         ORDER BY d.name",
+    )?;
+    let dir_rows = dir_stmt
+        .query_map(params![directory_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    for dir_name in dir_names {
-        entries.push(DirectoryEntry::Directory(
-            path.join(&format!("{}/", dir_name))?,
-        ));
+    for (dir_name, child_file_count, child_directory_count) in dir_rows {
+        entries.push(ListPathEntry::Directory(DirectoryEntry {
+            path: path.join(&format!("{}/", dir_name))?,
+            parent_path: path.clone(),
+            child_file_count: child_file_count as usize,
+            child_directory_count: child_directory_count as usize,
+        }));
     }
 
-    // 再读取直属文件映射。
+    // 再读取直属文件映射，只返回路径和内容哈希。
     let mut file_stmt = vault.database_connection.prepare(
-        "SELECT f.sha256sum, f.original_sha256sum, f.encrypt_password
+        "SELECT fe.name, f.sha256sum
          FROM file_entries fe
          JOIN files f ON f.sha256sum = fe.file_sha256sum
          WHERE fe.directory_id = ?1
@@ -653,26 +715,28 @@ pub(crate) fn list_by_path(
     )?;
     let file_rows = file_stmt
         .query_map(params![directory_id], |row| {
-            Ok((
-                row.get::<_, VaultHash>(0)?,
-                row.get::<_, VaultHash>(1)?,
-                row.get::<_, String>(2)?,
-            ))
+            Ok((row.get::<_, String>(0)?, row.get::<_, VaultHash>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    for file_entry in process_rows_to_entries(vault, file_rows)? {
-        entries.push(DirectoryEntry::File(file_entry));
+    for (file_name, sha256sum) in file_rows {
+        if !vault.storage.exists(&sha256sum)? {
+            return Err(QueryError::FileMissing(sha256sum.to_string()));
+        }
+        entries.push(ListPathEntry::File(FilePathEntry {
+            path: path.join(&file_name)?,
+            sha256sum,
+        }));
     }
 
     Ok(entries)
 }
 
-/// 递归列出一个目录下的所有文件实体哈希。
+/// 递归列出一个目录下的所有文件路径和文件实体哈希。
 pub(crate) fn list_all_recursive(
     vault: &Vault,
     path: &VaultPath,
-) -> Result<Vec<VaultHash>, QueryError> {
+) -> Result<Vec<FilePathEntry>, QueryError> {
     if !path.is_dir() {
         return Err(QueryError::NotADirectory(path.as_str().to_string()));
     }
@@ -682,22 +746,36 @@ pub(crate) fn list_all_recursive(
     };
 
     let mut stmt = vault.database_connection.prepare(
-        "WITH RECURSIVE subtree(id) AS (
-             SELECT ?1
+        "WITH RECURSIVE subtree(id, path) AS (
+             SELECT ?1, ?2
              UNION ALL
-             SELECT d.id FROM directories d JOIN subtree s ON d.parent_id = s.id
+             SELECT d.id, subtree.path || d.name || '/'
+             FROM directories d
+             JOIN subtree ON d.parent_id = subtree.id
          )
-         SELECT DISTINCT fe.file_sha256sum
+         SELECT subtree.path || fe.name, fe.file_sha256sum
          FROM file_entries fe
-         JOIN subtree s ON fe.directory_id = s.id
-         ORDER BY fe.file_sha256sum",
+         JOIN subtree ON fe.directory_id = subtree.id
+         JOIN files f ON f.sha256sum = fe.file_sha256sum
+         ORDER BY subtree.path || fe.name",
     )?;
 
-    let hashes = stmt
-        .query_map(params![directory_id], |row| row.get::<_, VaultHash>(0))?
+    let file_entries = stmt
+        .query_map(params![directory_id, path.as_str()], |row| {
+            Ok(FilePathEntry {
+                path: row.get::<_, VaultPath>(0)?,
+                sha256sum: row.get::<_, VaultHash>(1)?,
+            })
+        })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(hashes)
+    for file_entry in &file_entries {
+        if !vault.storage.exists(&file_entry.sha256sum)? {
+            return Err(QueryError::FileMissing(file_entry.sha256sum.to_string()));
+        }
+    }
+
+    Ok(file_entries)
 }
 
 /// 按特定标签查找文件。

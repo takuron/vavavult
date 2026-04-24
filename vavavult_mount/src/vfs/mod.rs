@@ -276,26 +276,31 @@ impl DavFileSystem for VaultDavFs {
                 _ => FsError::GeneralFailure,
             })?;
 
-            // 将 DirectoryEntry 转换为 DavDirEntry
+            // 将 ListPathEntry 转换为 DavDirEntry
             let mut items: Vec<Box<dyn DavDirEntry>> = entries
                 .into_iter()
                 .map(|entry| -> Box<dyn DavDirEntry> {
                     match entry {
-                        vavavult::vault::DirectoryEntry::Directory(dir_path) => {
+                        vavavult::vault::ListPathEntry::Directory(directory_entry) => {
                             // 目录条目：仅提取目录名（非完整路径）
-                            let name = dir_path.dir_name().unwrap_or("").to_string();
+                            let name = directory_entry.path.dir_name().unwrap_or("").to_string();
                             Box::new(VaultDavDirEntry::dir(name))
                         }
-                        vavavult::vault::DirectoryEntry::File(file_entry) => {
+                        vavavult::vault::ListPathEntry::File(file_path_entry) => {
                             // 文件条目：仅提取文件名及元数据
-                            let name = vault
-                                .list_paths_by_hash(&file_entry.sha256sum)
-                                .ok()
-                                .and_then(|paths| paths.into_iter().next())
-                                .and_then(|path| path.file_name().map(str::to_string))
+                            let name = file_path_entry
+                                .path
+                                .file_name()
+                                .map(str::to_string)
                                 .unwrap_or_default();
-                            let size = extract_file_size(&file_entry);
-                            let modified = extract_modified_time(&file_entry);
+                            let (size, modified) =
+                                match vault.find_by_hash(&file_path_entry.sha256sum) {
+                                    Ok(vavavult::vault::QueryResult::Found(file_entry)) => (
+                                        extract_file_size(&file_entry),
+                                        extract_modified_time(&file_entry),
+                                    ),
+                                    _ => (0, std::time::SystemTime::UNIX_EPOCH),
+                                };
                             Box::new(VaultDavDirEntry::file(name, size, modified))
                         }
                     }
@@ -475,20 +480,19 @@ impl DavFileSystem for VaultDavFs {
                 }
                 to_path = vavavult::file::VaultPath::new(&to_path_str);
 
-                // 递归获取所有文件
+                // 递归获取所有文件路径映射
                 let files_to_move = vault.list_all_recursive(&from_path).unwrap_or_default();
-                for hash in files_to_move {
-                    if let Ok(paths) = vault.list_paths_by_hash(&hash) {
-                        if let Some(entry_path) = paths.into_iter().next()
-                            && let Some(relative) =
-                                entry_path.as_str().strip_prefix(from_path.as_str())
-                        {
-                            let new_path_str = format!("{}{}", to_path.as_str(), relative);
-                            let new_path = vavavult::file::VaultPath::new(&new_path_str);
-                            let _ = vault
-                                .move_file_by_path(&entry_path, &new_path)
-                                .map_err(|_| FsError::GeneralFailure)?;
-                        }
+                for file_path_entry in files_to_move {
+                    if let Some(relative) = file_path_entry
+                        .path
+                        .as_str()
+                        .strip_prefix(from_path.as_str())
+                    {
+                        let new_path_str = format!("{}{}", to_path.as_str(), relative);
+                        let new_path = vavavult::file::VaultPath::new(&new_path_str);
+                        let _ = vault
+                            .move_file_by_path(&file_path_entry.path, &new_path)
+                            .map_err(|_| FsError::GeneralFailure)?;
                     }
                 }
 

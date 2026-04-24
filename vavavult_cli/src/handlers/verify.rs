@@ -43,8 +43,12 @@ pub fn handle_verify(
             } else {
                 let path = VaultPath::from(target.as_str());
                 if path.is_dir() {
-                    if let Ok(hashes) = vault_guard.list_all_recursive(&path) {
-                        hashes_to_check.extend(hashes);
+                    if let Ok(file_entries) = vault_guard.list_all_recursive(&path) {
+                        hashes_to_check.extend(
+                            file_entries
+                                .into_iter()
+                                .map(|file_entry| file_entry.sha256sum),
+                        );
                     } else {
                         not_found_targets.push(target.clone());
                     }

@@ -1,6 +1,5 @@
 use crate::core::helpers::{
-    Target, determine_output_path, find_file_entry, first_path_for_entry,
-    get_all_files_recursively, identify_target,
+    Target, determine_output_path, find_file_entry, first_path_for_entry, identify_target,
 };
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
@@ -11,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{DirectoryEntry, ExtractionTask, Vault};
+use vavavult::vault::{ExtractionTask, ListPathEntry, QueryResult, Vault};
 
 #[derive(Clone)]
 struct ExtractionCandidate {
@@ -153,24 +152,32 @@ fn handle_extract_directory(
                 .list_by_path(vault_path)?
                 .into_iter()
                 .filter_map(|entry| match entry {
-                    DirectoryEntry::File(file_entry) => vault_guard
-                        .list_paths_by_hash(&file_entry.sha256sum)
-                        .ok()
-                        .and_then(|paths| paths.into_iter().next())
-                        .map(|path| ExtractionCandidate {
-                            entry: file_entry,
-                            path,
-                        }),
-                    DirectoryEntry::Directory(_) => None,
+                    ListPathEntry::File(file_path_entry) => {
+                        match vault_guard.find_by_hash(&file_path_entry.sha256sum) {
+                            Ok(QueryResult::Found(file_entry)) => Some(ExtractionCandidate {
+                                entry: file_entry,
+                                path: file_path_entry.path,
+                            }),
+                            _ => None,
+                        }
+                    }
+                    ListPathEntry::Directory(_) => None,
                 })
                 .collect::<Vec<_>>()
         } else {
             println!("(Recursive mode enabled)");
-            get_all_files_recursively(&vault_guard, vault_path.as_str())?
+            vault_guard
+                .list_all_recursive(vault_path)?
                 .into_iter()
-                .map(|entry| {
-                    first_path_for_entry(&vault_guard, &entry)
-                        .map(|path| ExtractionCandidate { entry, path })
+                .filter_map(|file_path_entry| {
+                    match vault_guard.find_by_hash(&file_path_entry.sha256sum) {
+                        Ok(QueryResult::Found(file_entry)) => Some(Ok(ExtractionCandidate {
+                            entry: file_entry,
+                            path: file_path_entry.path,
+                        })),
+                        Ok(QueryResult::NotFound) => None,
+                        Err(err) => Some(Err(CliError::from(err))),
+                    }
                 })
                 .collect::<Result<Vec<_>, CliError>>()?
         }

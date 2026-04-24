@@ -2,6 +2,7 @@
 
 use crate::errors::CliError;
 use chrono::{DateTime, ParseError, Utc};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
 use vavavult::common::hash::VaultHash;
@@ -136,13 +137,17 @@ pub fn get_all_files_recursively(
         };
     }
 
-    // 2. [修改] 调用新的 `list_all_recursive` API 获取哈希列表
-    let hashes = vault.list_all_recursive(&dir_vault_path)?;
+    // 2. 调用路径化递归列表 API 获取文件路径映射。
+    let file_path_entries = vault.list_all_recursive(&dir_vault_path)?;
 
-    // 3. [修改] 遍历哈希，查找完整的 FileEntry
+    // 3. 按哈希去重后查找完整的 FileEntry。
     let mut all_files = Vec::new();
-    for hash in hashes {
-        match vault.find_by_hash(&hash)? {
+    let mut seen_hashes = HashSet::new();
+    for file_path_entry in file_path_entries {
+        if !seen_hashes.insert(file_path_entry.sha256sum) {
+            continue;
+        }
+        match vault.find_by_hash(&file_path_entry.sha256sum)? {
             QueryResult::Found(entry) => all_files.push(entry),
             QueryResult::NotFound => {
                 // 数据库不一致，但我们暂时忽略

@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::file::VaultPath;
-use vavavult::vault::resolve_file_metadata;
 use vavavult::vault::{AddFileError, ExtractionTask, PrepareAdditionRequest, QueryResult, Vault};
+use vavavult::vault::{ListPathEntry, resolve_file_metadata};
 
 mod common;
 use common::{
@@ -250,6 +250,39 @@ fn test_batch_queries_and_search() {
     // 4. 目录层级列表
     let entries = vault.list_by_path(&VaultPath::from("/docs/")).unwrap();
     assert_eq!(entries.len(), 2); // deep/, file_B.md
+
+    let mut has_deep_directory = false;
+    let mut has_file_b = false;
+    for entry in entries {
+        match entry {
+            ListPathEntry::Directory(directory_entry) => {
+                assert_eq!(directory_entry.path, VaultPath::from("/docs/deep/"));
+                assert_eq!(directory_entry.parent_path, VaultPath::from("/docs/"));
+                assert_eq!(directory_entry.child_file_count, 1);
+                assert_eq!(directory_entry.child_directory_count, 0);
+                has_deep_directory = true;
+            }
+            ListPathEntry::File(file_path_entry) => {
+                assert_eq!(file_path_entry.path, VaultPath::from("/docs/file_B.md"));
+                has_file_b = true;
+            }
+        }
+    }
+    assert!(has_deep_directory);
+    assert!(has_file_b);
+
+    let recursive_entries = vault
+        .list_all_recursive(&VaultPath::from("/docs/"))
+        .unwrap();
+    assert_eq!(recursive_entries.len(), 2);
+    assert!(
+        recursive_entries
+            .iter()
+            .any(|entry| entry.path == VaultPath::from("/docs/file_B.md"))
+    );
+    assert!(recursive_entries.iter().any(|entry| {
+        entry.path == VaultPath::from("/docs/deep/file_C.jpg") && entry.sha256sum == hash_c
+    }));
 }
 
 /// 测试：并行 API。

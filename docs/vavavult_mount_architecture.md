@@ -200,7 +200,7 @@ pub struct VaultDavFs {
 | trait 方法 | 实现策略 |
 |---|---|
 | `metadata(path)` | 锁定 Vault → 将 WebDAV 路径转为 `VaultPath` → 调用 `vault.find_by_path()` → 将 `FileEntry` 转为 `DavMetaData` |
-| `read_dir(path, meta)` | 锁定 Vault → 调用 `vault.list_by_path()` → 将 `Vec<DirectoryEntry>` 转为 `DavDirEntry` 流 |
+| `read_dir(path, meta)` | 锁定 Vault → 调用 `vault.list_by_path()` → 将 `Vec<ListPathEntry>` 转为 `DavDirEntry` 流 |
 | `open(path, options)` | **两阶段操作**：锁定 Vault → `prepare_extraction_task()` (阶段1) → 释放锁 → `spawn_blocking` 中执行 `execute_extraction_task_standalone()` (阶段2) → 返回 `VaultDavFile` |
 | `create_dir(path)` | 只读模式返回 403；读写模式可直接返回 Ok（Vault 目录是隐式的） |
 | `remove_file(path)` | 只读模式返回 403；读写模式锁定 Vault → `find_by_path()` → `remove_file()` |
@@ -359,7 +359,7 @@ pub fn get_creation_date(entry: &FileEntry) -> Option<DateTime<chrono::Utc>> {
 
 #### 目录元数据
 
-对于目录（`DirectoryEntry::Directory`），没有对应的 `FileEntry`，需要返回合成的元数据：
+对于目录（`ListPathEntry::Directory(DirectoryEntry)`），没有对应的 `FileEntry`，需要返回合成的元数据：
 - `content-length`: 0
 - `is_dir`: true
 - `last-modified`: 可使用 Vault 的 `_vavavult_update_time`（通过 `vault.get_vault_metadata()` 获取）
@@ -593,7 +593,7 @@ handle_unmount(app_state):
 | 方法 | 用途 |
 |---|---|
 | `vault.find_by_path(&VaultPath)` | 根据路径查找文件 → 返回 `QueryResult` |
-| `vault.list_by_path(&VaultPath)` | 列出目录内容 → 返回 `Vec<DirectoryEntry>` |
+| `vault.list_by_path(&VaultPath)` | 列出目录内容 → 返回 `Vec<ListPathEntry>` |
 | `vault.prepare_extraction_task(&VaultHash)` | 阶段 1: 准备文件提取任务 (需要锁) |
 | `vault.execute_extraction_task(&ExtractionTask, &Path)` | 阶段 2: 执行解密 (可在锁外) |
 | `vault.get_vault_metadata(&str)` | 获取 vault 级别的元数据 |

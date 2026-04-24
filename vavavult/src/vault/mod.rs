@@ -66,7 +66,9 @@ pub use extract::{ExtractError, ExtractionTask};
 pub use fix::FixError;
 pub use metadata::MetadataError;
 pub use open::OpenError;
-pub use query::{DirectoryEntry, ListResult, QueryError, QueryResult};
+pub use query::{
+    DirectoryEntry, FilePathEntry, ListPathEntry, ListResult, QueryError, QueryResult,
+};
 pub use rekey::{RekeyError, RekeyTask};
 pub use remove::{ForceRemoveError, RemoveError};
 pub use tags::TagError;
@@ -531,47 +533,48 @@ impl Vault {
     //     list_by_path(self, path)
     // }
 
-    /// Lists entries (files or subdirectories) directly under a given directory path.
+    /// Lists path entries directly under a given directory path.
     ///
-    /// Unlike `list_by_path` which might only return paths, this method returns:
-    /// - `DirectoryEntry::File(FileEntry)` for files, providing full metadata (tags, size, time, etc.).
-    /// - `DirectoryEntry::Directory(VaultPath)` for subdirectories.
+    /// This method returns lightweight path-oriented entries:
+    /// - `ListPathEntry::File(FilePathEntry)` for files, providing the path and encrypted hash.
+    /// - `ListPathEntry::Directory(DirectoryEntry)` for subdirectories, providing path, parent path,
+    ///   and direct child counts.
     ///
-    /// This enables UI/CLI applications to display detailed file information in a list view
-    /// without performing N+1 queries.
+    /// This enables UI/CLI applications to display directory contents without loading
+    /// full file metadata for every file.
     ///
     /// # Arguments
     /// * `path` - The directory path to list (e.g., "/docs/").
     ///
     /// # Returns
-    /// A vector of `DirectoryEntry` objects representing the immediate contents.
+    /// A vector of `ListPathEntry` objects representing the immediate contents.
     ///
     /// # Errors
     /// Returns `QueryError::NotADirectory` if `path` is a file path.
     /// Returns `QueryError` on database failures.
     //
-    // // 列出直接位于给定目录路径下的条目（文件或子目录）。
+    // // 列出直接位于给定目录路径下的路径条目。
     // //
-    // // 与仅返回路径的方法不同，此方法返回：
-    // // - 对于文件，返回 `DirectoryEntry::File(FileEntry)`，提供完整元数据（标签、大小、时间等）。
-    // // - 对于子目录，返回 `DirectoryEntry::Directory(VaultPath)`。
+    // // 此方法返回轻量级、面向路径的条目：
+    // // - 对于文件，返回 `ListPathEntry::File(FilePathEntry)`，提供路径和加密哈希。
+    // // - 对于子目录，返回 `ListPathEntry::Directory(DirectoryEntry)`，提供路径、父目录路径和直属子项数量。
     // //
-    // // 这使得 UI/CLI 应用程序能够在列表视图中显示详细的文件信息，而无需执行 N+1 次查询。
+    // // 这使得 UI/CLI 应用程序能够显示目录内容，而无需为每个文件加载完整文件元数据。
     // //
     // // # 参数
     // // * `path` - 要列出的目录路径 (例如 "/docs/")。
     // //
     // // # 返回
-    // // 代表直接内容的 `DirectoryEntry` 对象向量。
+    // // 代表直接内容的 `ListPathEntry` 对象向量。
     // //
     // // # 错误
     // // 如果 `path` 是一个文件路径，则返回 `QueryError::NotADirectory`。
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn list_by_path(&self, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
+    pub fn list_by_path(&self, path: &VaultPath) -> Result<Vec<ListPathEntry>, QueryError> {
         list_by_path(self, path)
     }
 
-    /// Recursively lists all files under a given directory path and returns their `VaultHash`es.
+    /// Recursively lists all file path mappings under a given directory path.
     ///
     /// This is optimized for bulk operations (like mass extraction or deletion).
     ///
@@ -579,13 +582,13 @@ impl Vault {
     /// * `path` - The root directory path to start listing from.
     ///
     /// # Returns
-    /// A vector of `VaultHash`es for all files found recursively.
+    /// A vector of `FilePathEntry` objects for all files found recursively.
     ///
     /// # Errors
     /// Returns `QueryError::NotADirectory` if `path` is a file path.
     /// Returns `QueryError` on database failures.
     //
-    // // 递归列出一个目录下的所有文件，并返回它们的 `VaultHash`。
+    // // 递归列出一个目录下的所有文件路径映射。
     // //
     // // 这针对批量操作（如批量提取或删除）进行了优化。
     // //
@@ -593,12 +596,12 @@ impl Vault {
     // // * `path` - 开始列出的根目录路径。
     // //
     // // # 返回
-    // // 递归找到的所有文件的 `VaultHash` 向量。
+    // // 递归找到的所有文件的 `FilePathEntry` 对象向量。
     // //
     // // # 错误
     // // 如果 `path` 是一个文件路径，则返回 `QueryError::NotADirectory`。
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn list_all_recursive(&self, path: &VaultPath) -> Result<Vec<VaultHash>, QueryError> {
+    pub fn list_all_recursive(&self, path: &VaultPath) -> Result<Vec<FilePathEntry>, QueryError> {
         list_all_recursive(self, path)
     }
 
