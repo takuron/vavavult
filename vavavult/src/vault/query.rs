@@ -200,6 +200,69 @@ pub(crate) fn insert_file_entry_in_conn(
     Ok(())
 }
 
+/// 删除指定路径上的文件映射，并返回它指向的文件哈希。
+pub(crate) fn remove_file_entry_by_path_in_conn(
+    conn: &Connection,
+    path: &VaultPath,
+) -> Result<Option<VaultHash>, QueryError> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let parent_path = path.parent()?;
+    let Some(directory_id) = resolve_directory_in_conn(conn, &parent_path)? else {
+        return Ok(None);
+    };
+    let Some(file_name) = path.file_name() else {
+        return Ok(None);
+    };
+
+    let row = conn
+        .query_row(
+            "SELECT id, file_sha256sum FROM file_entries WHERE directory_id = ?1 AND name = ?2",
+            params![directory_id, file_name],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, VaultHash>(1)?)),
+        )
+        .optional()?;
+
+    if let Some((entry_id, file_sha256sum)) = row {
+        conn.execute("DELETE FROM file_entries WHERE id = ?1", params![entry_id])?;
+        Ok(Some(file_sha256sum))
+    } else {
+        Ok(None)
+    }
+}
+
+/// 删除指定哈希的一条文件映射，并返回是否删除了映射。
+pub(crate) fn remove_first_file_entry_by_hash_in_conn(
+    conn: &Connection,
+    hash: &VaultHash,
+) -> Result<bool, QueryError> {
+    let rows = conn.execute(
+        "DELETE FROM file_entries
+         WHERE id = (
+             SELECT id FROM file_entries WHERE file_sha256sum = ?1 ORDER BY id LIMIT 1
+         )",
+        params![hash],
+    )?;
+
+    Ok(rows > 0)
+}
+
+/// 统计指定文件实体当前仍被多少路径映射引用。
+pub(crate) fn file_entry_ref_count_in_conn(
+    conn: &Connection,
+    hash: &VaultHash,
+) -> Result<i64, QueryError> {
+    let count = conn.query_row(
+        "SELECT COUNT(*) FROM file_entries WHERE file_sha256sum = ?1",
+        params![hash],
+        |row| row.get::<_, i64>(0),
+    )?;
+
+    Ok(count)
+}
+
 fn fetch_file_core_by_path(
     conn: &Connection,
     path: &VaultPath,

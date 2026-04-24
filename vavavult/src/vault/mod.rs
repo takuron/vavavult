@@ -51,11 +51,11 @@ use crate::vault::query::{
     get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files,
     list_all_recursive, list_by_path, list_paths_by_hash,
 };
-use crate::vault::remove::{force_remove_file, remove_file};
+use crate::vault::remove::{force_remove_file, remove_file, remove_file_by_path};
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
 use crate::vault::update::{
-    enable_vault_feature, move_file, rename_file_inplace, set_name,
-    update_password as _update_password,
+    enable_vault_feature, move_file, move_file_by_path, rename_file_inplace,
+    rename_file_inplace_by_path, set_name, update_password as _update_password,
 };
 
 //- Public API type re-exports
@@ -1250,6 +1250,37 @@ impl Vault {
         touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
     }
 
+    /// Moves a specific vault path mapping to a new path.
+    ///
+    /// This updates only the directory entry, leaving the underlying file entity
+    /// and encrypted payload untouched.
+    ///
+    /// # Arguments
+    /// * `source_path` - The existing vault path mapping.
+    /// * `target_path` - The new path or destination directory.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` on name collision or if the source path is not found.
+    //
+    // // 将指定的保险库路径映射移动到新路径。
+    // //
+    // // 这只更新目录项，底层文件实体和加密载荷保持不变。
+    // //
+    // // # 参数
+    // // * `source_path` - 现有保险库路径映射。
+    // // * `target_path` - 新路径或目标目录。
+    // //
+    // // # 错误
+    // // 如果名称冲突或源路径未找到，返回 `UpdateError`。
+    pub fn move_file_by_path(
+        &mut self,
+        source_path: &VaultPath,
+        target_path: &VaultPath,
+    ) -> Result<(), UpdateError> {
+        move_file_by_path(self, source_path, target_path)?;
+        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
+    }
+
     /// Renames a file in its current directory (In-place).
     ///
     /// # Arguments
@@ -1273,6 +1304,37 @@ impl Vault {
         new_filename: &str,
     ) -> Result<(), UpdateError> {
         rename_file_inplace(self, hash, new_filename)?;
+        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
+    }
+
+    /// Renames a specific vault path mapping in its current directory.
+    ///
+    /// This updates only the directory entry name, leaving the underlying file
+    /// entity and encrypted payload untouched.
+    ///
+    /// # Arguments
+    /// * `source_path` - The existing vault path mapping.
+    /// * `new_filename` - The new filename without path separators.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` if filename is invalid, source path is not found, or name collision.
+    //
+    // // 在当前目录中重命名指定的保险库路径映射。
+    // //
+    // // 这只更新目录项名称，底层文件实体和加密载荷保持不变。
+    // //
+    // // # 参数
+    // // * `source_path` - 现有保险库路径映射。
+    // // * `new_filename` - 不包含路径分隔符的新文件名。
+    // //
+    // // # 错误
+    // // 如果文件名无效、源路径未找到或名称冲突，则返回 `UpdateError`。
+    pub fn rename_file_inplace_by_path(
+        &mut self,
+        source_path: &VaultPath,
+        new_filename: &str,
+    ) -> Result<(), UpdateError> {
+        rename_file_inplace_by_path(self, source_path, new_filename)?;
         touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
     }
 
@@ -1301,6 +1363,32 @@ impl Vault {
     // // 如果文件未找到或删除失败，则返回 `RemoveError`。
     pub fn remove_file(&mut self, hash: &VaultHash) -> Result<(), RemoveError> {
         remove_file(self, hash)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
+    /// Removes one path mapping from the vault.
+    ///
+    /// If this path is the final reference to the file entity, the database
+    /// record and encrypted payload are also removed.
+    ///
+    /// # Arguments
+    /// * `path` - The vault path mapping to remove.
+    ///
+    /// # Errors
+    /// Returns `RemoveError` if the path is not found or deletion fails.
+    //
+    // // 从保险库中移除一条路径映射。
+    // //
+    // // 如果该路径是文件实体的最后一个引用，则同时删除数据库记录和加密载荷。
+    // //
+    // // # 参数
+    // // * `path` - 要移除的保险库路径映射。
+    // //
+    // // # 错误
+    // // 如果路径未找到或删除失败，则返回 `RemoveError`。
+    pub fn remove_file_by_path(&mut self, path: &VaultPath) -> Result<(), RemoveError> {
+        remove_file_by_path(self, path)?;
         touch_vault_update_time(self)?;
         Ok(())
     }

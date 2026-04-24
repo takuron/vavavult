@@ -1,4 +1,4 @@
-use crate::common::constants::META_VAULT_FEATURES;
+﻿use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
 use crate::crypto::encrypt::{EncryptError, create_v3_encrypt_check, verify_v3_encrypt_check};
@@ -112,23 +112,13 @@ pub enum UpdateError {
     EncryptCheck(#[from] EncryptError),
 }
 
-/// Moves a file within the vault to a new path.
-pub(crate) fn move_file(
+fn move_file_mapping(
     vault: &Vault,
     hash: &VaultHash,
+    original_vault_path: &VaultPath,
     target_path: &VaultPath,
 ) -> Result<(), UpdateError> {
-    // 1. Find original entry
-    match query::check_by_hash(vault, hash)? {
-        QueryResult::Found(_) => {}
-        QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
-    };
-    let original_vault_path = query::list_paths_by_hash(vault, hash)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| UpdateError::FileNotFound(hash.to_string()))?;
-
-    // 2. Resolve final path
+    // 1. 根据目标类型解析最终路径。
     let final_path = if target_path.is_dir() {
         let original_filename = original_vault_path
             .file_name()
@@ -138,9 +128,9 @@ pub(crate) fn move_file(
         target_path.clone()
     };
 
-    // 3. Check for duplicates
+    // 2. 检查目标路径是否已经被其他映射占用。
     if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
-        return if existing.sha256sum != *hash {
+        return if existing.sha256sum != *hash || &final_path != original_vault_path {
             Err(UpdateError::DuplicateTargetPath(
                 final_path.as_str().to_string(),
             ))
@@ -149,7 +139,7 @@ pub(crate) fn move_file(
         };
     }
 
-    // 4. Execute update
+    // 3. 自动创建目标目录，并只更新 file_entries 映射。
     let original_parent_id = query::resolve_directory(vault, &original_vault_path.parent()?)?
         .ok_or_else(|| UpdateError::FileNotFound(hash.to_string()))?;
     let final_parent_id =
@@ -174,35 +164,56 @@ pub(crate) fn move_file(
         return Err(UpdateError::FileNotFound(hash.to_string()));
     }
 
-    // 5. Update timestamp (using metadata module)
     metadata::touch_file_update_time(vault, hash)?;
     Ok(())
 }
 
-/// Renames a file in-place (keeping the same parent directory).
-pub(crate) fn rename_file_inplace(
+/// Moves the first path mapping of a file entity within the vault.
+pub(crate) fn move_file(
     vault: &Vault,
     hash: &VaultHash,
-    new_filename: &str,
+    target_path: &VaultPath,
 ) -> Result<(), UpdateError> {
-    if new_filename.contains('/') || new_filename.contains('\\') {
-        return Err(UpdateError::InvalidFilename(new_filename.to_string()));
-    }
-
     match query::check_by_hash(vault, hash)? {
         QueryResult::Found(_) => {}
         QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
     };
 
-    let original_path = query::list_paths_by_hash(vault, hash)?
+    // 兼容旧 hash API：多路径时默认移动第一条映射。
+    let original_vault_path = query::list_paths_by_hash(vault, hash)?
         .into_iter()
         .next()
         .ok_or_else(|| UpdateError::FileNotFound(hash.to_string()))?;
+
+    move_file_mapping(vault, hash, &original_vault_path, target_path)
+}
+
+/// Moves a specific path mapping within the vault.
+pub(crate) fn move_file_by_path(
+    vault: &Vault,
+    source_path: &VaultPath,
+    target_path: &VaultPath,
+) -> Result<(), UpdateError> {
+    let entry = match query::check_by_path(vault, source_path)? {
+        QueryResult::Found(entry) => entry,
+        QueryResult::NotFound => return Err(UpdateError::FileNotFound(source_path.to_string())),
+    };
+
+    move_file_mapping(vault, &entry.sha256sum, source_path, target_path)
+}
+
+fn rename_file_mapping(
+    vault: &Vault,
+    hash: &VaultHash,
+    original_path: &VaultPath,
+    new_filename: &str,
+) -> Result<(), UpdateError> {
+    // 1. 构造同目录下的新路径并检查占用。
     let parent_dir = original_path.parent()?;
     let final_path = parent_dir.join(new_filename)?;
 
     if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
-        if existing.sha256sum != *hash {
+        if existing.sha256sum != *hash || &final_path != original_path {
             return Err(UpdateError::DuplicateTargetPath(
                 final_path.as_str().to_string(),
             ));
@@ -211,6 +222,7 @@ pub(crate) fn rename_file_inplace(
         }
     }
 
+    // 2. 仅更新 file_entries.name。
     let parent_id = query::resolve_directory(vault, &parent_dir)?
         .ok_or_else(|| UpdateError::FileNotFound(hash.to_string()))?;
     let rows_affected = vault.database_connection.execute(
@@ -226,6 +238,47 @@ pub(crate) fn rename_file_inplace(
     Ok(())
 }
 
+/// Renames the first path mapping of a file entity in-place.
+pub(crate) fn rename_file_inplace(
+    vault: &Vault,
+    hash: &VaultHash,
+    new_filename: &str,
+) -> Result<(), UpdateError> {
+    if new_filename.contains('/') || new_filename.contains('\\') {
+        return Err(UpdateError::InvalidFilename(new_filename.to_string()));
+    }
+
+    match query::check_by_hash(vault, hash)? {
+        QueryResult::Found(_) => {}
+        QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
+    };
+
+    // 兼容旧 hash API：多路径时默认重命名第一条映射。
+    let original_path = query::list_paths_by_hash(vault, hash)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| UpdateError::FileNotFound(hash.to_string()))?;
+
+    rename_file_mapping(vault, hash, &original_path, new_filename)
+}
+
+/// Renames a specific file path in-place.
+pub(crate) fn rename_file_inplace_by_path(
+    vault: &Vault,
+    source_path: &VaultPath,
+    new_filename: &str,
+) -> Result<(), UpdateError> {
+    if new_filename.contains('/') || new_filename.contains('\\') {
+        return Err(UpdateError::InvalidFilename(new_filename.to_string()));
+    }
+
+    let entry = match query::check_by_path(vault, source_path)? {
+        QueryResult::Found(entry) => entry,
+        QueryResult::NotFound => return Err(UpdateError::FileNotFound(source_path.to_string())),
+    };
+
+    rename_file_mapping(vault, &entry.sha256sum, source_path, new_filename)
+}
 // --- Vault Config Operations ---
 
 /// Sets the vault name.

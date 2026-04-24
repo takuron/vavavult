@@ -1,5 +1,5 @@
 use crate::core::helpers::{
-    Target, determine_output_path, display_path_for_entry, find_file_entry, first_path_for_entry,
+    Target, determine_output_path, find_file_entry, first_path_for_entry,
     get_all_files_recursively, identify_target,
 };
 use crate::errors::CliError;
@@ -87,8 +87,9 @@ fn handle_extract_single_file(
     output_name: Option<String>,
     delete: bool,
 ) -> Result<(), CliError> {
-    let (final_path, display_path) = {
+    let (final_path, display_path, source_path) = {
         let vault_guard = vault.lock().unwrap();
+        let source_path = first_path_for_entry(&vault_guard, &file_entry)?;
         (
             determine_output_path(
                 &vault_guard,
@@ -96,7 +97,8 @@ fn handle_extract_single_file(
                 destination.to_path_buf(),
                 output_name,
             ),
-            display_path_for_entry(&vault_guard, &file_entry),
+            source_path.to_string(),
+            source_path,
         )
     };
 
@@ -124,7 +126,7 @@ fn handle_extract_single_file(
     if delete {
         println!("Deleting '{}' from vault...", display_path);
         let mut vault_guard = vault.lock().unwrap();
-        vault_guard.remove_file(&file_entry.sha256sum)?;
+        vault_guard.remove_file_by_path(&source_path)?;
         println!("File successfully deleted from vault.");
     }
     Ok(())
@@ -261,7 +263,7 @@ fn run_directory_extract_single_threaded(
         match vault_guard.extract_file(&candidate.entry.sha256sum, &final_path) {
             Ok(_) => {
                 success_count += 1;
-                successfully_extracted.push(candidate.entry.clone());
+                successfully_extracted.push(candidate.clone());
             }
             Err(e) => {
                 fail_count += 1;
@@ -290,10 +292,10 @@ fn run_directory_extract_single_threaded(
                 .progress_chars("#>-"),
         );
 
-        for entry in successfully_extracted {
+        for candidate in successfully_extracted {
             let mut vault_guard = vault.lock().unwrap();
-            let display_path = display_path_for_entry(&vault_guard, &entry);
-            match vault_guard.remove_file(&entry.sha256sum) {
+            let display_path = candidate.path.to_string();
+            match vault_guard.remove_file_by_path(&candidate.path) {
                 Ok(_) => pb_delete.println(format!("Deleted {}.", display_path)),
                 Err(e) => pb_delete.println(format!("Failed to delete {}: {}", display_path, e)),
             }
@@ -323,7 +325,7 @@ fn run_directory_extract_parallel(
             .progress_chars("#>-"),
     );
 
-    let tasks: Vec<(ExtractionTask, PathBuf, FileEntry, String)> = {
+    let tasks: Vec<(ExtractionTask, PathBuf, ExtractionCandidate)> = {
         let vault_guard = vault.lock().unwrap();
         files_to_extract
             .into_iter()
@@ -331,12 +333,7 @@ fn run_directory_extract_parallel(
                 let task = vault_guard.prepare_extraction_task(&candidate.entry.sha256sum)?;
                 let relative_path_str = relative_vault_path(&candidate.path, base_vault_path);
                 let final_path = destination.join(relative_path_str);
-                Ok((
-                    task,
-                    final_path,
-                    candidate.entry,
-                    candidate.path.to_string(),
-                ))
+                Ok((task, final_path, candidate))
             })
             .collect::<Result<Vec<_>, CliError>>()?
     };
@@ -344,11 +341,12 @@ fn run_directory_extract_parallel(
     let storage = vault.lock().unwrap().storage.clone();
     let fail_count = Arc::new(AtomicUsize::new(0));
 
-    let extraction_results: Vec<(FileEntry, Result<(), CliError>)> = tasks
+    let extraction_results: Vec<(ExtractionCandidate, Result<(), CliError>)> = tasks
         .into_par_iter()
-        .map(|(task, final_path, entry, display_path)| {
+        .map(|(task, final_path, candidate)| {
             let pb_clone = pb.clone();
             let fail_count_clone = Arc::clone(&fail_count);
+            let display_path = candidate.path.to_string();
 
             let execution_result = (|| -> Result<(), CliError> {
                 if let Some(parent) = final_path.parent() {
@@ -364,7 +362,7 @@ fn run_directory_extract_parallel(
             }
 
             pb_clone.inc(1);
-            (entry, execution_result)
+            (candidate, execution_result)
         })
         .collect();
 
@@ -374,10 +372,10 @@ fn run_directory_extract_parallel(
     let successes = total_count - failures;
     println!("{} succeeded, {} failed.", successes, failures);
 
-    let successfully_extracted: Vec<FileEntry> = extraction_results
+    let successfully_extracted: Vec<ExtractionCandidate> = extraction_results
         .into_iter()
         .filter(|(_, result)| result.is_ok())
-        .map(|(entry, _)| entry)
+        .map(|(candidate, _)| candidate)
         .collect();
 
     if delete && successes > 0 {
@@ -396,10 +394,10 @@ fn run_directory_extract_parallel(
                 .progress_chars("#>-"),
         );
 
-        for entry in successfully_extracted {
+        for candidate in successfully_extracted {
             let mut vault_guard = vault.lock().unwrap();
-            let display_path = display_path_for_entry(&vault_guard, &entry);
-            if let Err(e) = vault_guard.remove_file(&entry.sha256sum) {
+            let display_path = candidate.path.to_string();
+            if let Err(e) = vault_guard.remove_file_by_path(&candidate.path) {
                 pb_delete.println(format!("FAILED to delete {}: {}", display_path, e));
             }
             pb_delete.inc(1);

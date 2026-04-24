@@ -120,10 +120,10 @@
 - [x] 从 `FileEntry` 移除 `path` 属性；CLI/VFS 需要路径显示时暂时调用 `list_paths_by_hash` 并取第一条。
 
 ### 阶段 3：写入与更新逻辑适配 (`vavavult/src/vault/add.rs`, `remove.rs`, `update.rs`)
-- [ ] 修改 `commit_addition_tasks`，自动逐级创建缺失目录，并在 `file_entries` 中插入映射。利用新结构自动实现相同文件实体的去重复用。
-- [ ] 修改 `remove_file`，仅解除 `file_entries` 映射。当最后一条映射被解除时（引用计数清零），清理 `files` 表和物理存储。
-- [ ] 修改 `move_file` 和 `rename_file_inplace`，仅更新 `file_entries` 中的 `directory_id` 或 `name`，极速完成重命名/移动，避免操作底层文件实体。
+- [x] 修改 `commit_addition_tasks`，自动逐级创建缺失目录，并在 `file_entries` 中插入映射。利用新结构自动实现相同文件实体的去重复用。
+- [x] 修改 `remove_file`，仅解除 `file_entries` 映射。当最后一条映射被解除时（引用计数清零），清理 `files` 表和物理存储。
+- [x] 修改 `move_file` 和 `rename_file_inplace`，仅更新 `file_entries` 中的 `directory_id` 或 `name`，极速完成重命名/移动，避免操作底层文件实体。
 
 ### 阶段 4：测试与验证
-- [ ] 运行并修复回归测试（文件生命周期、重命名、重索引等）。
-- [ ] 新增多路径映射与引用计数删除的专项断言测试，确保文件实体在最后一次引用解除前不被误删。
+- [x] 运行并修复回归测试（文件生命周期、重命名、重索引等）。
+- [x] 新增多路径映射与引用计数删除的专项断言测试，确保文件实体在最后一次引用解除前不被误删。

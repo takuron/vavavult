@@ -428,14 +428,8 @@ impl DavFileSystem for VaultDavFs {
 
             let mut vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
 
-            let file_entry = match vault.find_by_path(&vault_path) {
-                Ok(vavavult::vault::QueryResult::Found(entry)) => entry,
-                Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),
-                Err(_) => return Err(FsError::GeneralFailure),
-            };
-
             let _ = vault
-                .remove_file(&file_entry.sha256sum)
+                .remove_file_by_path(&vault_path)
                 .map_err(|_| FsError::GeneralFailure)?;
             Ok(())
         })
@@ -492,7 +486,7 @@ impl DavFileSystem for VaultDavFs {
                             let new_path_str = format!("{}{}", to_path.as_str(), relative);
                             let new_path = vavavult::file::VaultPath::new(&new_path_str);
                             let _ = vault
-                                .move_file(&hash, &new_path)
+                                .move_file_by_path(&entry_path, &new_path)
                                 .map_err(|_| FsError::GeneralFailure)?;
                         }
                     }
@@ -518,14 +512,14 @@ impl DavFileSystem for VaultDavFs {
             }
 
             // 单个文件重命名
-            let file_entry = match vault.find_by_path(&from_path) {
-                Ok(vavavult::vault::QueryResult::Found(entry)) => entry,
+            match vault.find_by_path(&from_path) {
+                Ok(vavavult::vault::QueryResult::Found(_)) => {}
                 Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),
                 Err(_) => return Err(FsError::GeneralFailure),
             };
 
             let _ = vault
-                .move_file(&file_entry.sha256sum, &to_path)
+                .move_file_by_path(&from_path, &to_path)
                 .map_err(|_| FsError::GeneralFailure)?;
             Ok(())
         })

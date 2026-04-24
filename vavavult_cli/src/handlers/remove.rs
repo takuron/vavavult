@@ -4,7 +4,15 @@ use crate::core::helpers::{
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
+use vavavult::common::hash::VaultHash;
+use vavavult::file::VaultPath;
 use vavavult::vault::{QueryResult, Vault};
+
+struct DeleteTarget {
+    hash: Option<VaultHash>,
+    path: Option<VaultPath>,
+    display: String,
+}
 
 /// 处理 'rm' (Remove) 命令
 pub fn handle_remove(
@@ -18,64 +26,72 @@ pub fn handle_remove(
 
     let (files_to_delete, target_description) = match target_obj {
         Target::Hash(hash) => {
-            // --- 案例 1: 按哈希删除 ---
             if recursive {
                 println!("Warning: -r (recursive) has no effect when deleting by hash.");
             }
 
-            let file_entry = if force {
-                // 强制模式: 遍历所有文件以查找哈希，绕过验证
-                let all_files = vault.list_all()?;
-                all_files
-                    .into_iter()
-                    .find(|f| f.sha256sum == hash)
-                    .ok_or_else(|| CliError::EntryNotFound("File not found by hash.".to_string()))?
+            if force {
+                let display = hash.to_string();
+                (
+                    vec![DeleteTarget {
+                        hash: Some(hash),
+                        path: None,
+                        display: display.clone(),
+                    }],
+                    format!("file '{}' (by hash)", display),
+                )
             } else {
-                // 普通模式: 使用标准查找 (会验证文件存在性)
-                match vault.find_by_hash(&hash)? {
+                let file_entry = match vault.find_by_hash(&hash)? {
                     QueryResult::Found(entry) => entry,
                     QueryResult::NotFound => {
                         return Err(CliError::EntryNotFound(
                             "File not found by hash.".to_string(),
                         ));
                     }
-                }
-            };
-            let description = format!(
-                "file '{}' (by hash)",
-                display_path_for_entry(vault, &file_entry)
-            );
-            (vec![file_entry], description)
+                };
+                let display = display_path_for_entry(vault, &file_entry);
+                (
+                    vec![DeleteTarget {
+                        hash: Some(file_entry.sha256sum),
+                        path: None,
+                        display: display.clone(),
+                    }],
+                    format!("file '{}' (by hash)", display),
+                )
+            }
         }
         Target::Path(vault_path) => {
-            // --- 案例 2: 按路径删除 ---
             if vault_path.is_file() {
-                // 2a: 路径是文件
-                let file_entry = if force {
-                    // 强制模式: 列出父目录以查找文件，绕过验证
-                    match vault.find_by_path(&vault_path)? {
-                        QueryResult::Found(entry) => entry,
-                        QueryResult::NotFound => {
-                            return Err(CliError::EntryNotFound(
-                                "File not found by path.".to_string(),
-                            ));
-                        }
-                    }
+                if force {
+                    let description = format!("file '{}'", vault_path);
+                    (
+                        vec![DeleteTarget {
+                            hash: None,
+                            path: Some(vault_path.clone()),
+                            display: vault_path.to_string(),
+                        }],
+                        description,
+                    )
                 } else {
-                    // 普通模式: 使用标准查找
-                    match vault.find_by_path(&vault_path)? {
+                    let file_entry = match vault.find_by_path(&vault_path)? {
                         QueryResult::Found(entry) => entry,
                         QueryResult::NotFound => {
                             return Err(CliError::EntryNotFound(
                                 "File not found by path.".to_string(),
                             ));
                         }
-                    }
-                };
-                let description = format!("file '{}'", vault_path);
-                (vec![file_entry], description)
+                    };
+                    let description = format!("file '{}'", vault_path);
+                    (
+                        vec![DeleteTarget {
+                            hash: Some(file_entry.sha256sum),
+                            path: Some(vault_path.clone()),
+                            display: vault_path.to_string(),
+                        }],
+                        description,
+                    )
+                }
             } else {
-                // 2b: 路径是目录
                 let description = format!("directory '{}'", vault_path);
                 if !recursive {
                     return Err(CliError::InvalidTarget(format!(
@@ -85,12 +101,31 @@ pub fn handle_remove(
                 }
                 println!("Recursively scanning directory '{}'...", vault_path);
                 let files = get_all_files_recursively(vault, vault_path.as_str())?;
-                (files, description)
+                let delete_targets = files
+                    .into_iter()
+                    .map(|entry| {
+                        let path = vault
+                            .list_paths_by_hash(&entry.sha256sum)?
+                            .into_iter()
+                            .next()
+                            .ok_or_else(|| {
+                                CliError::EntryNotFound(format!(
+                                    "No path mapping found for file hash '{}'.",
+                                    entry.sha256sum
+                                ))
+                            })?;
+                        Ok(DeleteTarget {
+                            hash: Some(entry.sha256sum),
+                            display: path.to_string(),
+                            path: Some(path),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, CliError>>()?;
+                (delete_targets, description)
             }
         }
     };
 
-    // --- 确认阶段 ---
     if files_to_delete.is_empty() {
         println!(
             "No files found matching {}. Nothing to delete.",
@@ -119,7 +154,6 @@ pub fn handle_remove(
         }
     }
 
-    // --- 删除阶段 ---
     let total_count = files_to_delete.len();
     let pb = ProgressBar::new(total_count as u64);
     if total_count > 1 {
@@ -136,28 +170,24 @@ pub fn handle_remove(
     let mut success_count = 0;
     let mut fail_count = 0;
 
-    for entry in files_to_delete {
-        let result = if force {
-            vault
-                .force_remove_file(&entry.sha256sum)
-                .map_err(|e| e.to_string())
+    for target in files_to_delete {
+        let result = if let Some(path) = &target.path {
+            vault.remove_file_by_path(path).map_err(|e| e.to_string())
+        } else if let Some(hash) = &target.hash {
+            if force {
+                vault.force_remove_file(hash).map_err(|e| e.to_string())
+            } else {
+                vault.remove_file(hash).map_err(|e| e.to_string())
+            }
         } else {
-            vault
-                .remove_file(&entry.sha256sum)
-                .map_err(|e| e.to_string())
+            Err("Internal delete target has neither path nor hash.".to_string())
         };
 
         match result {
-            Ok(_) => {
-                success_count += 1;
-            }
+            Ok(_) => success_count += 1,
             Err(e) => {
                 fail_count += 1;
-                pb.println(format!(
-                    "Failed to delete {}: {}",
-                    display_path_for_entry(vault, &entry),
-                    e
-                ));
+                pb.println(format!("Failed to delete {}: {}", target.display, e));
             }
         }
         if total_count > 1 {

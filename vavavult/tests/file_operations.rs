@@ -42,10 +42,8 @@ fn test_add_file_and_extract_file_cycle() {
     );
 }
 
-/// 测试：添加文件时的各种错误情况。
-/// 验证：
-/// 1. 相同路径不能添加两次 (DuplicateFileName)。
-/// 2. 相同内容不能添加两次 (去重机制, DuplicateOriginalContent)。
+/// 测试：添加文件时的路径重复错误。
+/// 验证：相同路径不能添加两次 (DuplicateFileName)。
 #[test]
 fn test_add_file_paths_and_errors() {
     let dir = tempdir().unwrap();
@@ -61,12 +59,69 @@ fn test_add_file_paths_and_errors() {
         vault.add_file(&file2_path, &path1).unwrap_err(),
         AddFileError::DuplicateFileName(_)
     ));
+}
 
-    // 错误 2: 尝试添加内容完全相同的文件 (即使路径不同)
-    let path2 = VaultPath::from("/file1_copy.txt");
+/// 测试：相同内容添加到不同路径时复用同一个文件实体。
+#[test]
+fn test_duplicate_content_creates_hardlink_mapping() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "shared.txt", "same content");
+
+    let path1 = VaultPath::from("/a/shared.txt");
+    let path2 = VaultPath::from("/b/shared-copy.txt");
+
+    let hash1 = vault.add_file(&file_path, &path1).unwrap();
+    let hash2 = vault.add_file(&file_path, &path2).unwrap();
+
+    assert_eq!(hash1, hash2);
+    assert_eq!(
+        vault.list_paths_by_hash(&hash1).unwrap(),
+        vec![path1.clone(), path2.clone()]
+    );
+
     assert!(matches!(
-        vault.add_file(&file1_path, &path2).unwrap_err(),
-        AddFileError::DuplicateOriginalContent(_, _)
+        vault.find_by_path(&path1).unwrap(),
+        QueryResult::Found(_)
+    ));
+    assert!(matches!(
+        vault.find_by_path(&path2).unwrap(),
+        QueryResult::Found(_)
+    ));
+}
+
+/// 测试：移除一个硬链接路径不会删除仍被其他路径引用的文件实体。
+#[test]
+fn test_hardlink_remove_keeps_storage_until_last_reference() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "shared-remove.txt", "shared remove content");
+
+    let path1 = VaultPath::from("/a/shared.txt");
+    let path2 = VaultPath::from("/b/shared.txt");
+    let hash = vault.add_file(&file_path, &path1).unwrap();
+    let second_hash = vault.add_file(&file_path, &path2).unwrap();
+    assert_eq!(hash, second_hash);
+
+    let internal_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
+    assert!(internal_path.exists());
+
+    vault.remove_file_by_path(&path1).unwrap();
+    assert!(internal_path.exists());
+    assert!(matches!(
+        vault.find_by_path(&path1).unwrap(),
+        QueryResult::NotFound
+    ));
+    assert!(matches!(
+        vault.find_by_path(&path2).unwrap(),
+        QueryResult::Found(_)
+    ));
+
+    vault.remove_file_by_path(&path2).unwrap();
+    assert!(!internal_path.exists());
+    assert!(matches!(
+        vault.find_by_hash(&hash).unwrap(),
+        QueryResult::NotFound
     ));
 }
 

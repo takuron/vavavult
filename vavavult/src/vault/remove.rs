@@ -77,34 +77,57 @@ pub enum ForceRemoveError {
     HashParseError(#[from] HashParseError),
 }
 
-/// 从保险库中删除一个文件。
+/// 从保险库中删除一个文件映射。
 ///
-/// 此操作会：
-/// 1. 从数据库中删除文件的记录 (级联删除标签和元数据)。
-/// 2. 从文件系统 (`data/` 子目录) 中删除物理文件。
-///
-/// # Arguments
-/// * `vault` - 一个 Vault 实例。
-/// * `sha256sum` - 要删除的文件的加密后内容的 Base64 哈希。
+/// 此操作会先解除该哈希的一条路径映射；当引用计数清零时，才删除文件实体和物理存储。
 pub(crate) fn remove_file(vault: &Vault, sha256sum: &VaultHash) -> Result<(), RemoveError> {
     // 1. 确认文件存在于数据库中
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(RemoveError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 2. 从存储后端删除物理文件
-    // 后端实现通常是幂等的（如果文件不存在则不报错），但我们已经检查了数据库存在
-    vault.storage.delete(sha256sum)?;
+    // 2. 先删除一条 dentry 映射。
+    if !query::remove_first_file_entry_by_hash_in_conn(&vault.database_connection, sha256sum)? {
+        return Err(RemoveError::FileNotFound(sha256sum.to_string()));
+    }
 
-    // 3. 从数据库中删除记录 (SQL 语句不变，外键级联删除)
-    let rows_affected = vault
+    // 3. 如果仍有其他路径引用该实体，则保留物理文件和 files 记录。
+    if query::file_entry_ref_count_in_conn(&vault.database_connection, sha256sum)? > 0 {
+        return Ok(());
+    }
+
+    // 4. 引用计数清零，删除文件实体和物理存储。
+    vault.storage.delete(sha256sum)?;
+    vault
         .database_connection
         .execute("DELETE FROM files WHERE sha256sum = ?1", params![sha256sum])?;
 
-    if rows_affected == 0 {
-        // 理论上不应该发生，因为我们先检查了文件是否存在
-        return Err(RemoveError::FileNotFound(sha256sum.to_string()));
+    Ok(())
+}
+
+/// 从保险库中删除指定路径上的文件映射。
+pub(crate) fn remove_file_by_path(
+    vault: &Vault,
+    path: &crate::file::VaultPath,
+) -> Result<(), RemoveError> {
+    // 1. 查找并删除路径映射。
+    let Some(sha256sum) =
+        query::remove_file_entry_by_path_in_conn(&vault.database_connection, path)?
+    else {
+        return Err(RemoveError::FileNotFound(path.as_str().to_string()));
+    };
+
+    // 2. 仍有引用时保留实体。
+    if query::file_entry_ref_count_in_conn(&vault.database_connection, &sha256sum)? > 0 {
+        return Ok(());
     }
+
+    // 3. 最后一条引用已解除，删除物理文件与 files 记录。
+    vault.storage.delete(&sha256sum)?;
+    vault.database_connection.execute(
+        "DELETE FROM files WHERE sha256sum = ?1",
+        params![&sha256sum],
+    )?;
 
     Ok(())
 }
@@ -132,9 +155,7 @@ pub(crate) fn force_remove_file(
         // 如果是 NotFound，则忽略错误并继续
     }
 
-    // 2. 从数据库中强制删除记录。
-    // 我们不关心文件是否真的在数据库中，只要确保操作后它不存在即可。
-    // 因此，我们不检查 `rows_affected` 或文件是否先前存在。
+    // 2. 从数据库中强制删除记录和全部路径映射。
     vault
         .database_connection
         .execute("DELETE FROM files WHERE sha256sum = ?1", params![sha256sum])?;

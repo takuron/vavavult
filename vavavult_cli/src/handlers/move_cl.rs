@@ -34,8 +34,8 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
 
         // --- 情况2：源是文件路径 ---
         Target::Path(source_path) if source_path.is_file() => {
-            let file_entry = match vault.find_by_path(&source_path)? {
-                QueryResult::Found(entry) => entry,
+            match vault.find_by_path(&source_path)? {
+                QueryResult::Found(_) => {}
                 QueryResult::NotFound => {
                     return Err(CliError::EntryNotFound(format!(
                         "File not found at path '{}'.",
@@ -44,7 +44,7 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
                 }
             };
             println!("Moving file '{}' to '{}'...", source_path, dest_path);
-            vault.move_file(&file_entry.sha256sum, &dest_path)?;
+            vault.move_file_by_path(&source_path, &dest_path)?;
             println!("File successfully moved.");
         }
 
@@ -85,7 +85,7 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
 
                 let new_path = dest_path.join(relative_path)?;
 
-                vault.move_file(&file_entry.sha256sum, &new_path)?;
+                vault.move_file_by_path(&file_path, &new_path)?;
                 moved_count += 1;
             }
 

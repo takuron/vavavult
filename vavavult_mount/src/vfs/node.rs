@@ -214,10 +214,11 @@ impl VaultDavFile {
             let mut v = vault.lock().unwrap();
 
             // WebDAV PUT 操作通常意味着覆盖现有文件。
-            if let Ok(vavavult::vault::QueryResult::Found(existing_entry)) =
-                v.find_by_path(&vault_path)
-            {
-                if let Err(e) = v.remove_file(&existing_entry.sha256sum) {
+            if matches!(
+                v.find_by_path(&vault_path),
+                Ok(vavavult::vault::QueryResult::Found(_))
+            ) {
+                if let Err(e) = v.remove_file_by_path(&vault_path) {
                     eprintln!("[vavavult_mount] 覆盖文件前移除旧文件失败: {:?}", e);
                     return Err(FsError::GeneralFailure);
                 }
