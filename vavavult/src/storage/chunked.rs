@@ -1,19 +1,19 @@
 use crate::common::hash::VaultHash;
 use crate::crypto::chunked::{ChunkedCryptoError, ChunkedEncryptor, ChunkedReader};
-use crate::storage::{StagingToken, StorageBackend, StorageReader, StorageWriter};
-use std::io;
+use crate::storage::{StagingToken, StorageBackend, StorageWriter};
+use std::io::{self, Read, Seek};
 use std::sync::Arc;
 
 /// A helper wrapper that applies chunked encryption on top of a storage backend.
 ///
 /// The wrapper keeps the physical `StorageBackend` focused on byte storage while
 /// offering convenience methods that automatically wrap backend writers with
-/// `ChunkedEncryptor` and backend readers with `ChunkedReader`.
+/// `ChunkedEncryptor` and backend readers with an opaque `Read + Seek` stream.
 //
 // // 在存储后端之上应用分块加密的辅助包装类。
 // //
 // // 该包装类让物理 `StorageBackend` 继续专注于字节存储，同时提供便捷方法，
-// // 自动用 `ChunkedEncryptor` 包装后端写入器，并用 `ChunkedReader` 包装后端读取器。
+// // 自动用 `ChunkedEncryptor` 包装后端写入器，并用不透明的 `Read + Seek` 流包装后端读取器。
 #[derive(Debug, Clone)]
 pub struct ChunkedStorage {
     backend: Arc<dyn StorageBackend>,
@@ -87,7 +87,7 @@ impl ChunkedStorage {
     /// * `password` - The per-file decryption password.
     ///
     /// # Returns
-    /// A random-access `ChunkedReader` over the backend reader.
+    /// A random-access plaintext stream over the backend reader.
     ///
     /// # Errors
     /// Returns `io::Error` if the backend reader cannot be opened or the chunked
@@ -100,7 +100,7 @@ impl ChunkedStorage {
     // // * `password` - 每文件解密密码。
     // //
     // // # 返回
-    // // 基于后端读取器的随机访问 `ChunkedReader`。
+    // // 基于后端读取器的随机访问明文流。
     // //
     // // # 错误
     // // 如果后端读取器无法打开，或分块加密流无效，则返回 `io::Error`。
@@ -108,7 +108,7 @@ impl ChunkedStorage {
         &self,
         hash: &VaultHash,
         password: &str,
-    ) -> io::Result<ChunkedReader<Box<dyn StorageReader>>> {
+    ) -> io::Result<impl Read + Seek + Send + 'static> {
         let reader = self.backend.reader(hash)?;
         ChunkedReader::new(reader, password).map_err(to_io_error)
     }

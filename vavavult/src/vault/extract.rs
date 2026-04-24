@@ -206,7 +206,7 @@ pub(crate) fn decrypt_extraction_task(
 /// * `task` - The extraction ticket from Stage 1.
 ///
 /// # Returns
-/// A `ChunkedReader` over the encrypted backend object.
+/// An opaque plaintext stream over the encrypted backend object.
 ///
 /// # Errors
 /// Returns `ExtractError` if the backend object cannot be opened or its chunked
@@ -221,7 +221,7 @@ pub(crate) fn decrypt_extraction_task(
 // // * `task` - 来自阶段 1 的提取票据。
 // //
 // // # 返回
-// // 基于后端加密对象的 `ChunkedReader`。
+// // 基于后端加密对象的不透明明文流。
 // //
 // // # 错误
 // // 如果后端对象无法打开，或其分块加密格式无效，则返回 `ExtractError`。

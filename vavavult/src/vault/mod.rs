@@ -17,11 +17,11 @@ mod update;
 
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
-use crate::crypto::chunked::ChunkedReader;
 pub use crate::file::FileEntry;
 use crate::file::VaultPath;
+use crate::storage::StorageBackend;
 use crate::storage::local::LocalStorage;
-use crate::storage::{StorageBackend, StorageReader};
+use std::io::{Read, Seek};
 
 //- Internal implementation imports
 use crate::vault::add::{
@@ -1020,7 +1020,7 @@ impl Vault {
 
     /// Stage 2 (Extract): Opens a prepared extraction task as a random-access reader.
     ///
-    /// This associated function returns a pull-based `ChunkedReader` that decrypts
+    /// This associated function returns a pull-based plaintext stream that decrypts
     /// and authenticates only the chunk needed by each read or seek operation.
     ///
     /// # Arguments
@@ -1028,28 +1028,28 @@ impl Vault {
     /// * `task` - The extraction ticket from Stage 1.
     ///
     /// # Returns
-    /// A `ChunkedReader` over the backend object.
+    /// An opaque stream implementing `Read + Seek + Send` over plaintext bytes.
     ///
     /// # Errors
     /// Returns `ExtractError` if the object cannot be opened or authenticated.
     //
     // // 阶段 2 (提取): 将已准备好的提取任务打开为随机访问读取器。
     // //
-    // // 此关联函数返回拉取式 `ChunkedReader`，每次 read 或 seek 只解密并认证所需块。
+    // // 此关联函数返回拉取式明文流，每次 read 或 seek 只解密并认证所需块。
     // //
     // // # 参数
     // // * `storage` - 用于读取加密数据的存储后端。
     // // * `task` - 来自阶段 1 的提取票据。
     // //
     // // # 返回
-    // // 基于后端对象的 `ChunkedReader`。
+    // // 基于后端对象并实现 `Read + Seek + Send` 的不透明流。
     // //
     // // # 错误
     // // 如果对象无法打开或认证失败，则返回 `ExtractError`。
     pub fn open_extraction_task_reader(
         storage: &dyn StorageBackend,
         task: &ExtractionTask,
-    ) -> Result<ChunkedReader<Box<dyn StorageReader>>, ExtractError> {
+    ) -> Result<impl Read + Seek + Send + 'static, ExtractError> {
         _open_extraction_task_reader(storage, task)
     }
 
@@ -1062,7 +1062,7 @@ impl Vault {
     /// * `hash` - The `VaultHash` of the file to open.
     ///
     /// # Returns
-    /// A `ChunkedReader` that implements `Read + Seek` over plaintext bytes.
+    /// An opaque stream implementing `Read + Seek + Send` over plaintext bytes.
     ///
     /// # Errors
     /// Returns `ExtractError` if metadata lookup, storage access, or chunk
@@ -1076,14 +1076,14 @@ impl Vault {
     // // * `hash` - 要打开的文件的 `VaultHash`。
     // //
     // // # 返回
-    // // 在明文字节上实现 `Read + Seek` 的 `ChunkedReader`。
+    // // 在明文字节上实现 `Read + Seek + Send` 的不透明流。
     // //
     // // # 错误
     // // 如果元数据查询、存储访问或块认证失败，则返回 `ExtractError`。
     pub fn open_file_for_read(
         &self,
         hash: &VaultHash,
-    ) -> Result<ChunkedReader<Box<dyn StorageReader>>, ExtractError> {
+    ) -> Result<impl Read + Seek + Send + 'static, ExtractError> {
         let task = prepare_extraction_task(self, hash)?;
         _open_extraction_task_reader(self.storage.as_ref(), &task)
     }

@@ -276,7 +276,7 @@ impl<W: Write + Seek> Write for ChunkedEncryptor<W> {
 // //
 // // 读取器会将逻辑明文 seek 映射到物理块偏移，一次解密并认证一个块，
 // // 并在内存中保留当前明文块以支持字节级精确读取。
-pub struct ChunkedReader<R: Read + Seek> {
+pub(crate) struct ChunkedReader<R: Read + Seek> {
     reader: R,
     key: [u8; KEY_LEN],
     base_iv: [u8; IV_LEN],
@@ -306,7 +306,7 @@ impl<R: Read + Seek> ChunkedReader<R> {
     // //
     // // # 错误
     // // 如果文件头无效、密钥派生失败或加密布局格式错误，则返回 `ChunkedCryptoError`。
-    pub fn new(mut reader: R, password: &str) -> Result<Self, ChunkedCryptoError> {
+    pub(crate) fn new(mut reader: R, password: &str) -> Result<Self, ChunkedCryptoError> {
         let encrypted_len = reader.seek(SeekFrom::End(0))?;
         let (plaintext_len, block_count) = parse_plaintext_layout(encrypted_len)?;
 
@@ -336,20 +336,6 @@ impl<R: Read + Seek> ChunkedReader<R> {
         }
 
         Ok(chunked_reader)
-    }
-
-    /// Returns the plaintext length represented by this encrypted stream.
-    //
-    // // 返回该加密流表示的明文长度。
-    pub fn plaintext_len(&self) -> u64 {
-        self.plaintext_len
-    }
-
-    /// Returns `true` if the plaintext stream is empty.
-    //
-    // // 如果明文流为空，则返回 `true`。
-    pub fn is_empty(&self) -> bool {
-        self.plaintext_len == 0
     }
 
     fn buffer_end(&self) -> u64 {

@@ -47,7 +47,7 @@ Provides the core logic for managing encrypted file vaults.
     *   **Path:** `vavavult/src/storage/`
     *   **Description:** Implements the storage backend abstraction.
     *   `mod.rs`: Defines the `StorageBackend` trait, which abstracts file storage operations (read, write, delete, etc.). Storage backends now expose `StorageReader` (`Read + Seek + Send`) and `StorageWriter` (`Write + Seek + Send`) trait objects so the chunked encryption architecture can perform random-access reads and explicit-position writes.
-    *   `chunked.rs`: Provides `ChunkedStorage`, a helper wrapper that automatically wraps backend writers in `ChunkedEncryptor` and backend readers in `ChunkedReader`.
+    *   `chunked.rs`: Provides `ChunkedStorage`, a helper wrapper that automatically wraps backend writers in `ChunkedEncryptor` and backend readers in an opaque `Read + Seek` plaintext stream.
     *   `local.rs`: Provides `LocalStorage`, the default implementation of `StorageBackend` that stores encrypted file data on the local filesystem within the vault's `data` directory.
 
 *   **`vavavult::crypto`**
