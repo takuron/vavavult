@@ -288,7 +288,12 @@ impl DavFileSystem for VaultDavFs {
                         }
                         vavavult::vault::DirectoryEntry::File(file_entry) => {
                             // 文件条目：仅提取文件名及元数据
-                            let name = file_entry.path.file_name().unwrap_or("").to_string();
+                            let name = vault
+                                .list_paths_by_hash(&file_entry.sha256sum)
+                                .ok()
+                                .and_then(|paths| paths.into_iter().next())
+                                .and_then(|path| path.file_name().map(str::to_string))
+                                .unwrap_or_default();
                             let size = extract_file_size(&file_entry);
                             let modified = extract_modified_time(&file_entry);
                             Box::new(VaultDavDirEntry::file(name, size, modified))
@@ -479,10 +484,10 @@ impl DavFileSystem for VaultDavFs {
                 // 递归获取所有文件
                 let files_to_move = vault.list_all_recursive(&from_path).unwrap_or_default();
                 for hash in files_to_move {
-                    if let Ok(vavavult::vault::QueryResult::Found(entry)) =
-                        vault.find_by_hash(&hash)
-                    {
-                        if let Some(relative) = entry.path.as_str().strip_prefix(from_path.as_str())
+                    if let Ok(paths) = vault.list_paths_by_hash(&hash) {
+                        if let Some(entry_path) = paths.into_iter().next()
+                            && let Some(relative) =
+                                entry_path.as_str().strip_prefix(from_path.as_str())
                         {
                             let new_path_str = format!("{}{}", to_path.as_str(), relative);
                             let new_path = vavavult::file::VaultPath::new(&new_path_str);

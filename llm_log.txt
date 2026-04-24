@@ -4,3 +4,4 @@
 [2026-04-24T13:44:54+08:00] Hide ChunkedReader behind opaque Read+Seek APIs.
 [2026-04-24T14:45:33+08:00] Designed database schema and development plan for removing path from files table and introducing many-to-one hardlink architecture via directories and file_entries tables. Wrote plan to docs/TODO.md.
 [2026-04-24T14:57:30+08:00] Implemented Phase 1 hardlink schema: removed path from files, added directories and file_entries tables with root directory initialization, added schema regression test, and updated TODO/readme docs.
+[2026-04-24T15:51:37+08:00] Implemented Phase 2 hardlink query adaptation: removed FileEntry.path, rewrote path/hash/list queries over directories and file_entries, added list_paths_by_hash, and adapted CLI/VFS display paths to query the first linked path.

@@ -40,7 +40,13 @@ pub fn handle_list(
     let colors_enabled = vault.is_feature_enabled("colorfulTag").unwrap_or(false);
 
     // 3. Pass to printer
-    print_list_result(&list_result, long, colors_enabled, &target_vault_path);
+    print_list_result(
+        vault,
+        &list_result,
+        long,
+        colors_enabled,
+        &target_vault_path,
+    );
 
     Ok(())
 }

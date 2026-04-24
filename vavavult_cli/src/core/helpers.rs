@@ -70,15 +70,53 @@ pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, CliErro
     }
 }
 
+/// Returns the first vault path currently linked to a file entry.
+//
+// // 返回当前链接到某个文件条目的第一条保险库路径。
+pub fn first_path_for_entry(vault: &Vault, entry: &FileEntry) -> Result<VaultPath, CliError> {
+    vault
+        .list_paths_by_hash(&entry.sha256sum)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            CliError::EntryNotFound(format!(
+                "No path mapping found for file hash '{}'.",
+                entry.sha256sum
+            ))
+        })
+}
+
+/// Returns a display path for a file entry, falling back to its hash.
+//
+// // 返回文件条目的显示路径，如果没有路径映射则回退到哈希。
+pub fn display_path_for_entry(vault: &Vault, entry: &FileEntry) -> String {
+    first_path_for_entry(vault, entry)
+        .map(|path| path.to_string())
+        .unwrap_or_else(|_| entry.sha256sum.to_string())
+}
+
+/// Returns a display filename for a file entry, falling back to its hash.
+//
+// // 返回文件条目的显示文件名，如果没有路径映射则回退到哈希。
+pub fn display_name_for_entry(vault: &Vault, entry: &FileEntry) -> String {
+    first_path_for_entry(vault, entry)
+        .ok()
+        .and_then(|path| path.file_name().map(str::to_string))
+        .unwrap_or_else(|| entry.sha256sum.to_string())
+}
+
 /// 确定最终的输出路径
 pub fn determine_output_path(
+    vault: &Vault,
     entry: &FileEntry,
     dest_dir: PathBuf,
     output_name: Option<String>,
 ) -> PathBuf {
     let final_filename = output_name.unwrap_or_else(|| {
-        // [修改] 使用 VaultPath::file_name() 代替 Path::new()
-        entry.path.file_name().unwrap_or("unnamed_file").to_string()
+        first_path_for_entry(vault, entry)
+            .ok()
+            .and_then(|path| path.file_name().map(str::to_string))
+            .unwrap_or_else(|| "unnamed_file".to_string())
     });
     dest_dir.join(final_filename)
 }

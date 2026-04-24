@@ -6,19 +6,15 @@ pub use path::{PathError, VaultPath};
 
 /// Represents a record of a file stored in the vault database.
 ///
-/// This struct contains all metadata associated with a file, including its
-/// location, cryptographic hashes, encryption parameters, and custom tags/metadata.
+/// This struct contains all metadata associated with a file content entity,
+/// including cryptographic hashes, encryption parameters, and custom tags/metadata.
 //
 // // 代表存储在保险库数据库中的文件记录。
 // //
-// // 此结构体包含与文件关联的所有元数据，包括其位置、
+// // 此结构体包含与文件内容实体关联的所有元数据，包括
 // // 加密哈希、加密参数以及自定义标签/元数据。
 #[derive(Debug, Clone)]
 pub struct FileEntry {
-    /// The unique path of the file within the vault (e.g., "/docs/report.txt").
-    // // 文件在保险库中的唯一路径 (例如 "/docs/report.txt")。
-    pub path: VaultPath,
-
     /// The SHA256 hash of the *encrypted* file content.
     /// This serves as the primary key and the storage filename in the data directory.
     // // *加密后* 文件内容的 SHA256 哈希值。

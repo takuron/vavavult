@@ -1,8 +1,10 @@
-use crate::core::helpers::{Target, get_all_files_recursively, identify_target};
+use crate::core::helpers::{
+    Target, display_path_for_entry, get_all_files_recursively, identify_target,
+};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
-use vavavult::vault::{DirectoryEntry, QueryResult, Vault};
+use vavavult::vault::{QueryResult, Vault};
 
 /// 处理 'rm' (Remove) 命令
 pub fn handle_remove(
@@ -39,7 +41,10 @@ pub fn handle_remove(
                     }
                 }
             };
-            let description = format!("file '{}' (by hash)", file_entry.path);
+            let description = format!(
+                "file '{}' (by hash)",
+                display_path_for_entry(vault, &file_entry)
+            );
             (vec![file_entry], description)
         }
         Target::Path(vault_path) => {
@@ -48,17 +53,14 @@ pub fn handle_remove(
                 // 2a: 路径是文件
                 let file_entry = if force {
                     // 强制模式: 列出父目录以查找文件，绕过验证
-                    let parent_path = vault_path.parent().unwrap();
-                    let entries = vault.list_by_path(&parent_path)?;
-                    entries
-                        .into_iter()
-                        .find_map(|entry| match entry {
-                            DirectoryEntry::File(f) if f.path == vault_path => Some(f),
-                            _ => None,
-                        })
-                        .ok_or_else(|| {
-                            CliError::EntryNotFound("File not found by path.".to_string())
-                        })?
+                    match vault.find_by_path(&vault_path)? {
+                        QueryResult::Found(entry) => entry,
+                        QueryResult::NotFound => {
+                            return Err(CliError::EntryNotFound(
+                                "File not found by path.".to_string(),
+                            ));
+                        }
+                    }
                 } else {
                     // 普通模式: 使用标准查找
                     match vault.find_by_path(&vault_path)? {
@@ -70,7 +72,7 @@ pub fn handle_remove(
                         }
                     }
                 };
-                let description = format!("file '{}'", file_entry.path);
+                let description = format!("file '{}'", vault_path);
                 (vec![file_entry], description)
             } else {
                 // 2b: 路径是目录
@@ -151,7 +153,11 @@ pub fn handle_remove(
             }
             Err(e) => {
                 fail_count += 1;
-                pb.println(format!("Failed to delete {}: {}", entry.path, e));
+                pb.println(format!(
+                    "Failed to delete {}: {}",
+                    display_path_for_entry(vault, &entry),
+                    e
+                ));
             }
         }
         if total_count > 1 {

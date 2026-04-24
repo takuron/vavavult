@@ -112,10 +112,12 @@
 - [x] 在新建保险库时，默认插入一条根目录记录作为挂载点。
 
 ### 阶段 2：核心查询与路径解析逻辑适配 (`vavavult/src/vault/query.rs` 等)
-- [ ] 实现路径解析辅助方法 `resolve_directory(path: &VaultPath)`，按层级解析目录返回 `directory_id`。
-- [ ] 重写 `find_by_path`，通过 `directories` 和 `file_entries` 表解析最终引用的文件，保持返回 `FileEntry` 结构体不变。
-- [ ] 重写 `find_by_hash`，通过 CTE 向上追溯完整路径，多路径时默认返回第一条。
-- [ ] 重写 `list_directory`，支持同时从 `directories` 和 `file_entries` 获取子目录和文件列表。
+- [x] 实现路径解析辅助方法 `resolve_directory(path: &VaultPath)`，按层级解析目录返回 `directory_id`。
+- [x] 重写 `find_by_path`，通过 `directories` 和 `file_entries` 表解析最终引用的文件，保持返回 `FileEntry` 结构体不变。
+- [x] 重写 `find_by_hash`，按内容实体返回 `FileEntry`，不再依赖 `files.path`。
+- [x] 新增 `list_paths_by_hash`，通过 CTE 向上追溯对应文件哈希的所有完整路径。
+- [x] 重写 `list_directory`，支持同时从 `directories` 和 `file_entries` 获取子目录和文件列表。
+- [x] 从 `FileEntry` 移除 `path` 属性；CLI/VFS 需要路径显示时暂时调用 `list_paths_by_hash` 并取第一条。
 
 ### 阶段 3：写入与更新逻辑适配 (`vavavult/src/vault/add.rs`, `remove.rs`, `update.rs`)
 - [ ] 修改 `commit_addition_tasks`，自动逐级创建缺失目录，并在 `file_entries` 中插入映射。利用新结构自动实现相同文件实体的去重复用。

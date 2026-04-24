@@ -55,7 +55,10 @@ fn test_rekey_file_e2e() {
 
     // c. 验证新条目的元数据是否正确
     assert_eq!(new_entry.sha256sum, new_hash);
-    assert_eq!(new_entry.path, dest_path);
+    assert_eq!(
+        vault.list_paths_by_hash(&new_hash).unwrap(),
+        vec![dest_path]
+    );
     assert_eq!(new_entry.original_sha256sum, old_entry.original_sha256sum);
     assert_ne!(new_entry.encrypt_password, old_entry.encrypt_password);
 
@@ -100,7 +103,11 @@ fn update_password_e2e() {
         QueryResult::Found(entry) => entry,
         QueryResult::NotFound => panic!("File should still exist after password update"),
     };
-    assert_eq!(entry_after_update.path.as_str(), "/secret.txt");
+    assert_eq!(entry_after_update.sha256sum, file_hash);
+    assert_eq!(
+        vault_after_update.list_paths_by_hash(&file_hash).unwrap(),
+        vec![VaultPath::from("/secret.txt")]
+    );
 
     // c. 提取并验证文件内容
     let extracted_path = dir.path().join("extracted_secret.txt");

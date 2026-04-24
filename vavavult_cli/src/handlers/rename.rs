@@ -1,4 +1,4 @@
-use crate::core::helpers::find_file_entry;
+use crate::core::helpers::{display_path_for_entry, find_file_entry};
 use crate::errors::CliError;
 use vavavult::vault::Vault;
 
@@ -6,7 +6,7 @@ use vavavult::vault::Vault;
 pub fn handle_file_rename(vault: &mut Vault, target: &str, new_name: &str) -> Result<(), CliError> {
     // 1. 查找要重命名的文件
     let file_entry = find_file_entry(vault, target)?;
-    let old_name = file_entry.path.clone();
+    let old_name = display_path_for_entry(vault, &file_entry);
 
     // 2. 验证 new_name 是纯文件名
     if new_name.contains('/') || new_name.contains('\\') {

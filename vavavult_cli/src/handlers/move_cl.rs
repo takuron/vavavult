@@ -1,4 +1,7 @@
-use crate::core::helpers::{Target, get_all_files_recursively, identify_target};
+use crate::core::helpers::{
+    Target, display_path_for_entry, first_path_for_entry, get_all_files_recursively,
+    identify_target,
+};
 use crate::errors::CliError;
 use vavavult::file::VaultPath;
 use vavavult::vault::{QueryResult, Vault};
@@ -20,7 +23,11 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
                     )));
                 }
             };
-            println!("Moving file '{}' to '{}'...", file_entry.path, dest_path);
+            println!(
+                "Moving file '{}' to '{}'...",
+                display_path_for_entry(vault, &file_entry),
+                dest_path
+            );
             vault.move_file(&file_entry.sha256sum, &dest_path)?;
             println!("File successfully moved.");
         }
@@ -65,14 +72,14 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
 
             let mut moved_count = 0;
             for file_entry in &files_to_move {
-                let relative_path = file_entry
-                    .path
+                let file_path = first_path_for_entry(vault, file_entry)?;
+                let relative_path = file_path
                     .as_str()
                     .strip_prefix(source_path.as_str())
                     .ok_or_else(|| {
                         CliError::Unexpected(format!(
                             "Failed to create relative path for '{}' from base '{}'",
-                            file_entry.path, source_path
+                            file_path, source_path
                         ))
                     })?;
 

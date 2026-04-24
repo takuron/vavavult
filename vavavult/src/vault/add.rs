@@ -151,6 +151,9 @@ pub struct AdditionTask {
     /// The `FileEntry` struct to be inserted into the database.
     // // 将要插入数据库的 `FileEntry` 结构体。
     pub file_entry: FileEntry,
+    /// The target path mapping to insert for this file entity.
+    // // 要为此文件实体插入的目标路径映射。
+    pub dest_path: VaultPath,
     /// The token representing the staged data in the storage backend.
     // // 代表存储后端中暂存数据的令牌。
     pub staging_token: Box<dyn StagingToken>,
@@ -325,7 +328,6 @@ pub(crate) fn encrypt_addition_task(
     ];
 
     let file_entry = FileEntry {
-        path: pending.dest_path,
         sha256sum: encrypted_sha256sum,
         original_sha256sum,
         encrypt_password: per_file_password,
@@ -335,6 +337,7 @@ pub(crate) fn encrypt_addition_task(
 
     Ok(AdditionTask {
         file_entry,
+        dest_path: pending.dest_path,
         staging_token,
     })
 }
@@ -381,26 +384,31 @@ pub(crate) fn commit_addition_tasks(
 
     for file_to_add in &files {
         let entry = &file_to_add.file_entry;
+        let dest_path = &file_to_add.dest_path;
 
         // 路径重复检查（防御性：阶段1已检查，但提交时可能有并发变更）
-        if let QueryResult::Found(_) = query::check_by_path(vault, &entry.path)? {
-            return Err(AddFileError::DuplicateFileName(entry.path.to_string()));
+        if let QueryResult::Found(_) = query::check_by_path(vault, dest_path)? {
+            return Err(AddFileError::DuplicateFileName(dest_path.to_string()));
         }
-        if !paths_in_batch.insert(&entry.path) {
-            return Err(AddFileError::DuplicateFileName(entry.path.to_string()));
+        if !paths_in_batch.insert(dest_path) {
+            return Err(AddFileError::DuplicateFileName(dest_path.to_string()));
         }
 
         // 原始哈希重复检查
         if let QueryResult::Found(existing) =
             query::check_by_original_hash(vault, &entry.original_sha256sum)?
         {
+            let existing_path = query::list_paths_by_hash(vault, &existing.sha256sum)?
+                .into_iter()
+                .next()
+                .map(|path| path.to_string())
+                .unwrap_or_else(|| existing.sha256sum.to_string());
             return Err(AddFileError::DuplicateOriginalContent(
                 entry.original_sha256sum.to_string(),
-                existing.path.to_string(),
+                existing_path,
             ));
         }
-        if let Some(existing_path) =
-            originals_in_batch.insert(&entry.original_sha256sum, &entry.path)
+        if let Some(existing_path) = originals_in_batch.insert(&entry.original_sha256sum, dest_path)
         {
             return Err(AddFileError::DuplicateOriginalContent(
                 entry.original_sha256sum.to_string(),
@@ -418,7 +426,7 @@ pub(crate) fn commit_addition_tasks(
     let tx = vault.database_connection.transaction()?;
     {
         let mut file_stmt = tx.prepare(
-            "INSERT INTO files (sha256sum, path, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3, ?4)"
+            "INSERT INTO files (sha256sum, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3)",
         )?;
         let mut meta_stmt = tx.prepare(
             "INSERT INTO metadata (file_sha256sum, meta_key, meta_value) VALUES (?1, ?2, ?3)",
@@ -428,10 +436,10 @@ pub(crate) fn commit_addition_tasks(
             let entry = &file_to_add.file_entry;
             file_stmt.execute((
                 &entry.sha256sum,
-                &entry.path,
                 &entry.original_sha256sum,
                 &entry.encrypt_password,
             ))?;
+            query::insert_file_entry_in_conn(&tx, &file_to_add.dest_path, &entry.sha256sum)?;
             for meta in &entry.metadata {
                 meta_stmt.execute((&entry.sha256sum, &meta.key, &meta.value))?;
             }

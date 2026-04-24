@@ -96,12 +96,19 @@ pub(crate) fn prepare_extraction_task(
         return Err(ExtractError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 3. 打包为 "工作票据"
+    // 3. 查询第一条路径用于兼容旧的错误信息字段。
+    let original_vault_path = query::list_paths_by_hash(vault, sha256sum)?
+        .into_iter()
+        .next()
+        .map(|path| path.to_string())
+        .unwrap_or_else(|| sha256sum.to_string());
+
+    // 4. 打包为 "工作票据"
     Ok(ExtractionTask {
         file_hash: sha256sum.clone(),
         password: file_entry.encrypt_password,
         expected_original_hash: file_entry.original_sha256sum,
-        original_vault_path: file_entry.path.to_string(),
+        original_vault_path,
     })
 }
 

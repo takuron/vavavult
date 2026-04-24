@@ -2,7 +2,7 @@ use crate::core::helpers::is_hash_like;
 use crate::errors::CliError;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -60,19 +60,17 @@ pub fn handle_verify(
             }
         }
 
-        // Second pass: build the final list of (hash, path) tuples.
-        // A HashMap is used for quick lookups.
-        // // 第二遍：构建最终的 (哈希, 路径) 元组列表。
-        // // 使用 HashMap 以提高查找效率。
-        let all_files = vault_guard.list_all().unwrap_or_default();
-        let hash_to_path_map: HashMap<VaultHash, String> = all_files
-            .into_iter()
-            .map(|f| (f.sha256sum, f.path.to_string()))
-            .collect();
-
         let files_to_verify: Vec<(VaultHash, String)> = hashes_to_check
             .into_iter()
-            .filter_map(|h| hash_to_path_map.get(&h).map(|p| (h, p.clone())))
+            .map(|hash| {
+                let path = vault_guard
+                    .list_paths_by_hash(&hash)
+                    .ok()
+                    .and_then(|paths| paths.into_iter().next())
+                    .map(|path| path.to_string())
+                    .unwrap_or_else(|| hash.to_string());
+                (hash, path)
+            })
             .collect();
 
         (files_to_verify, not_found_targets)

@@ -119,11 +119,14 @@ pub(crate) fn move_file(
     target_path: &VaultPath,
 ) -> Result<(), UpdateError> {
     // 1. Find original entry
-    let original_entry = match query::check_by_hash(vault, hash)? {
-        QueryResult::Found(entry) => entry,
+    match query::check_by_hash(vault, hash)? {
+        QueryResult::Found(_) => {}
         QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
     };
-    let original_vault_path = original_entry.path.clone();
+    let original_vault_path = query::list_paths_by_hash(vault, hash)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| UpdateError::FileNotFound(hash.to_string()))?;
 
     // 2. Resolve final path
     let final_path = if target_path.is_dir() {
@@ -147,9 +150,24 @@ pub(crate) fn move_file(
     }
 
     // 4. Execute update
+    let original_parent_id = query::resolve_directory(vault, &original_vault_path.parent()?)?
+        .ok_or_else(|| UpdateError::FileNotFound(hash.to_string()))?;
+    let final_parent_id =
+        query::ensure_directory_in_conn(&vault.database_connection, &final_path.parent()?)?;
+    let final_name = final_path
+        .file_name()
+        .ok_or_else(|| UpdateError::VaultPathError(PathError::JoinToFile))?;
+
     let rows_affected = vault.database_connection.execute(
-        "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
-        params![final_path.as_str(), hash],
+        "UPDATE file_entries SET directory_id = ?1, name = ?2
+         WHERE directory_id = ?3 AND name = ?4 AND file_sha256sum = ?5",
+        params![
+            final_parent_id,
+            final_name,
+            original_parent_id,
+            original_vault_path.file_name().unwrap_or_default(),
+            hash
+        ],
     )?;
 
     if rows_affected == 0 {
@@ -171,12 +189,16 @@ pub(crate) fn rename_file_inplace(
         return Err(UpdateError::InvalidFilename(new_filename.to_string()));
     }
 
-    let original_entry = match query::check_by_hash(vault, hash)? {
-        QueryResult::Found(entry) => entry,
+    match query::check_by_hash(vault, hash)? {
+        QueryResult::Found(_) => {}
         QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
     };
 
-    let parent_dir = original_entry.path.parent()?;
+    let original_path = query::list_paths_by_hash(vault, hash)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| UpdateError::FileNotFound(hash.to_string()))?;
+    let parent_dir = original_path.parent()?;
     let final_path = parent_dir.join(new_filename)?;
 
     if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
@@ -189,9 +211,11 @@ pub(crate) fn rename_file_inplace(
         }
     }
 
+    let parent_id = query::resolve_directory(vault, &parent_dir)?
+        .ok_or_else(|| UpdateError::FileNotFound(hash.to_string()))?;
     let rows_affected = vault.database_connection.execute(
-        "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
-        params![final_path.as_str(), hash],
+        "UPDATE file_entries SET name = ?1 WHERE directory_id = ?2 AND name = ?3 AND file_sha256sum = ?4",
+        params![new_filename, parent_id, original_path.file_name().unwrap_or_default(), hash],
     )?;
 
     if rows_affected == 0 {

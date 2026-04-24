@@ -49,7 +49,7 @@ use crate::vault::query::{
     check_by_hash, check_by_hash_no_validation, check_by_original_hash, check_by_path,
     check_by_path_no_validation, find_by_hashes, find_by_keyword, find_by_paths, find_by_tag,
     get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files,
-    list_all_recursive, list_by_path,
+    list_all_recursive, list_by_path, list_paths_by_hash,
 };
 use crate::vault::remove::{force_remove_file, remove_file};
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
@@ -285,6 +285,37 @@ impl Vault {
     // // 如果发生数据库故障，则返回 `QueryError`。
     pub fn find_by_hash(&self, hash: &VaultHash) -> Result<QueryResult, QueryError> {
         check_by_hash(self, hash)
+    }
+
+    /// Lists all vault paths that reference a file content hash.
+    ///
+    /// With the hardlink-style schema, a single file entity may be referenced by
+    /// multiple paths. This method returns all paths currently linked to `hash`.
+    ///
+    /// # Arguments
+    /// * `hash` - The SHA256 hash of the encrypted file content.
+    ///
+    /// # Returns
+    /// A vector of `VaultPath`s that point to the file entity.
+    ///
+    /// # Errors
+    /// Returns `QueryError` on database failures.
+    //
+    // // 列出引用某个文件内容哈希的所有保险库路径。
+    // //
+    // // 在硬链接风格 schema 中，一个文件实体可以被多个路径引用。
+    // // 此方法返回当前链接到 `hash` 的所有路径。
+    // //
+    // // # 参数
+    // // * `hash` - 加密文件内容的 SHA256 哈希。
+    // //
+    // // # 返回
+    // // 指向该文件实体的 `VaultPath` 向量。
+    // //
+    // // # 错误
+    // // 如果发生数据库故障，则返回 `QueryError`。
+    pub fn list_paths_by_hash(&self, hash: &VaultHash) -> Result<Vec<VaultPath>, QueryError> {
+        list_paths_by_hash(self, hash)
     }
 
     /// Finds multiple file entries by their `VaultHash`es in a single batch query.

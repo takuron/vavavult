@@ -137,24 +137,19 @@ pub fn execute_rekey_tasks(vault: &mut Vault, tasks: Vec<RekeyTask>) -> Result<(
         // --- Database Operations ---
         // 1. Fetch existing tags and metadata for the old hash, inside the transaction
         let old_entry = {
-            let core_info: Option<(VaultHash, crate::file::VaultPath, VaultHash, String)> = tx.query_row(
-                "SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files WHERE sha256sum = ?1",
+            let core_info: Option<(VaultHash, VaultHash, String)> = tx.query_row(
+                "SELECT sha256sum, original_sha256sum, encrypt_password FROM files WHERE sha256sum = ?1",
                 params![&task.old_hash],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             ).optional()?;
 
-            if let Some((sha256sum, path, original_sha256sum, encrypt_password)) = core_info {
-                query::fetch_full_entry(
-                    &tx,
-                    &sha256sum,
-                    path,
-                    &original_sha256sum,
-                    &encrypt_password,
-                )?
+            if let Some((sha256sum, original_sha256sum, encrypt_password)) = core_info {
+                query::fetch_full_entry(&tx, &sha256sum, &original_sha256sum, &encrypt_password)?
             } else {
                 continue; // Already processed or gone, skip
             }
         };
+        let old_paths = query::list_paths_by_hash_in_conn(&tx, &task.old_hash)?;
 
         tx.execute(
             "DELETE FROM tags WHERE file_sha256sum = ?1",
@@ -170,14 +165,17 @@ pub fn execute_rekey_tasks(vault: &mut Vault, tasks: Vec<RekeyTask>) -> Result<(
         )?;
 
         tx.execute(
-            "INSERT INTO files (sha256sum, path, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO files (sha256sum, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3)",
             params![
                 &task.new_file_entry.sha256sum,
-                &task.new_file_entry.path,
                 &task.new_file_entry.original_sha256sum,
                 &task.new_file_entry.encrypt_password,
             ],
         )?;
+
+        for old_path in old_paths {
+            query::insert_file_entry_in_conn(&tx, &old_path, &task.new_file_entry.sha256sum)?;
+        }
 
         if !old_entry.tags.is_empty() {
             let mut tag_stmt =

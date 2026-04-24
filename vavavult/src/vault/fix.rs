@@ -160,16 +160,16 @@ pub(crate) fn fix_file(
             params![&old_entry.sha256sum],
         )?;
 
-        // 6b. 插入新的文件记录
+        // 6b. 插入新的文件实体与原路径映射
         tx.execute(
-            "INSERT INTO files (sha256sum, path, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO files (sha256sum, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3)",
             params![
                 &new_entry.sha256sum,
-                &new_entry.path,
                 &new_entry.original_sha256sum,
                 &new_entry.encrypt_password,
             ],
         )?;
+        crate::vault::query::insert_file_entry_in_conn(&tx, vault_path, &new_entry.sha256sum)?;
 
         // 6c. 重新添加tag和metadata
         let mut meta_stmt = tx.prepare(

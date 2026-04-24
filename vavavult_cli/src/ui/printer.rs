@@ -1,19 +1,19 @@
 //! Functions for printing vault items to the console.
 
-use crate::core::helpers::parse_rfc3339_string;
+use crate::core::helpers::{display_name_for_entry, display_path_for_entry, parse_rfc3339_string};
 use crate::handlers::list::ListResult;
 use crate::handlers::vault::VaultStatus;
 use crate::ui::formatter::{colorize_string, get_file_color};
 use chrono::{DateTime, Local, Utc};
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::DirectoryEntry;
+use vavavult::vault::{DirectoryEntry, Vault};
 
 /// 打印递归文件列表中的单个条目 (风格 1)
-pub fn print_recursive_file_item(entry: &FileEntry, colors_enabled: bool) {
+pub fn print_recursive_file_item(vault: &Vault, entry: &FileEntry, colors_enabled: bool) {
     let short_hash = &entry.sha256sum.to_string()[..12];
 
     // 如果启用了颜色且文件有颜色标签，则对整个路径进行着色
-    let mut display_path = entry.path.to_string();
+    let mut display_path = display_path_for_entry(vault, entry);
     if colors_enabled {
         if let Some(color) = get_file_color(&entry.tags) {
             display_path = colorize_string(&display_path, color);
@@ -26,7 +26,7 @@ pub fn print_recursive_file_item(entry: &FileEntry, colors_enabled: bool) {
 
 /// 打印目录条目 (用于 ls)
 /// 替代旧的 print_shallow_list_item，不再需要查询数据库
-pub fn print_directory_entry(entry: &DirectoryEntry, colors_enabled: bool) {
+pub fn print_directory_entry(vault: &Vault, entry: &DirectoryEntry, colors_enabled: bool) {
     match entry {
         DirectoryEntry::Directory(path) => {
             // 风格 2: 目录
@@ -39,7 +39,7 @@ pub fn print_directory_entry(entry: &DirectoryEntry, colors_enabled: bool) {
             let hash_prefix = &file_entry.sha256sum.to_string()[..12];
 
             // 处理颜色
-            let mut display_path = file_entry.path.to_string();
+            let mut display_path = display_path_for_entry(vault, file_entry);
             if colors_enabled {
                 if let Some(color) = get_file_color(&file_entry.tags) {
                     display_path = colorize_string(&display_path, color);
@@ -52,7 +52,7 @@ pub fn print_directory_entry(entry: &DirectoryEntry, colors_enabled: bool) {
 }
 
 /// 打印单个文件的详细信息 (风格 3)
-pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
+pub fn print_file_details(vault: &Vault, entry: &FileEntry, colors_enabled: bool) {
     println!("----------------------------------------");
 
     // 1. 获取颜色 (如果功能开启)
@@ -63,16 +63,19 @@ pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
     };
 
     // 2. 处理文件名显示 (仅对文件名变色)
-    let filename = entry.path.file_name().unwrap_or("?");
+    let filename = display_name_for_entry(vault, entry);
     let display_name = if let Some(c) = color_tag {
-        colorize_string(filename, c)
+        colorize_string(&filename, c)
     } else {
-        filename.to_string()
+        filename
     };
 
     println!("  Name:            {}", display_name);
     println!("  Type:            File");
-    println!("  Path:            {}", entry.path);
+    println!(
+        "  Path:            {}",
+        display_path_for_entry(vault, entry)
+    );
     println!("  SHA256 (ID):     {}", entry.sha256sum);
     println!("  Original SHA256: {}", entry.original_sha256sum);
 
@@ -147,6 +150,7 @@ pub fn print_dir_details(path: &VaultPath) {
 
 /// Takes the result from the list handler and prints it to the console.
 pub fn print_list_result(
+    vault: &Vault,
     result: &ListResult,
     long: bool,
     colors_enabled: bool,
@@ -166,11 +170,11 @@ pub fn print_list_result(
                     match entry {
                         DirectoryEntry::Directory(path) => print_dir_details(path),
                         DirectoryEntry::File(file_entry) => {
-                            print_file_details(file_entry, colors_enabled)
+                            print_file_details(vault, file_entry, colors_enabled)
                         }
                     }
                 } else {
-                    print_directory_entry(entry, colors_enabled);
+                    print_directory_entry(vault, entry, colors_enabled);
                 }
             }
             if long && !entries.is_empty() {
@@ -191,9 +195,9 @@ pub fn print_list_result(
 
             for file in all_files {
                 if long {
-                    print_file_details(file, colors_enabled);
+                    print_file_details(vault, file, colors_enabled);
                 } else {
-                    print_recursive_file_item(file, colors_enabled);
+                    print_recursive_file_item(vault, file, colors_enabled);
                 }
             }
             if long && !all_files.is_empty() {

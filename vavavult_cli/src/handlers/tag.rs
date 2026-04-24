@@ -1,4 +1,6 @@
-use crate::core::helpers::{Target, get_all_files_recursively, identify_target};
+use crate::core::helpers::{
+    Target, display_path_for_entry, get_all_files_recursively, identify_target,
+};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -20,7 +22,10 @@ fn get_files_to_tag(vault: &Vault, target: &str) -> Result<(Vec<FileEntry>, Stri
                     ));
                 }
             };
-            let description = format!("file '{}' (by hash)", file_entry.path);
+            let description = format!(
+                "file '{}' (by hash)",
+                display_path_for_entry(vault, &file_entry)
+            );
             Ok((vec![file_entry], description))
         }
         Target::Path(vault_path) => {
@@ -35,7 +40,7 @@ fn get_files_to_tag(vault: &Vault, target: &str) -> Result<(Vec<FileEntry>, Stri
                         ));
                     }
                 };
-                let description = format!("file '{}'", file_entry.path);
+                let description = format!("file '{}'", display_path_for_entry(vault, &file_entry));
                 Ok((vec![file_entry], description))
             } else {
                 // 2b: 路径是目录 (自动递归)
@@ -113,7 +118,11 @@ pub fn handle_tag_add(vault: &mut Vault, target: &str, tags: &[String]) -> Resul
             Err(e) => {
                 fail_count += 1;
 
-                pb.println(format!("Failed to tag {}: {}", entry.path, e));
+                pb.println(format!(
+                    "Failed to tag {}: {}",
+                    display_path_for_entry(vault, entry),
+                    e
+                ));
             }
         }
 
@@ -206,7 +215,9 @@ pub fn handle_tag_remove(vault: &mut Vault, target: &str, tags: &[String]) -> Re
             if let Err(e) = vault.remove_tag(&entry.sha256sum, tag) {
                 pb.println(format!(
                     "Failed to remove tag '{}' from {}: {}",
-                    tag, entry.path, e
+                    tag,
+                    display_path_for_entry(vault, entry),
+                    e
                 ));
 
                 all_tags_removed_for_this_file = false;
@@ -294,7 +305,11 @@ pub fn handle_tag_clear(vault: &mut Vault, target: &str) -> Result<(), CliError>
             Ok(_) => success_count += 1,
             Err(e) => {
                 fail_count += 1;
-                pb.println(format!("Failed to clear tags for {}: {}", entry.path, e));
+                pb.println(format!(
+                    "Failed to clear tags for {}: {}",
+                    display_path_for_entry(vault, entry),
+                    e
+                ));
             }
         }
         if total_count > 1 {
@@ -369,7 +384,8 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
                 if let Err(e) = vault.remove_tag(&entry.sha256sum, old_tag) {
                     pb.println(format!(
                         "Failed to remove old color from {}: {}",
-                        entry.path, e
+                        display_path_for_entry(vault, entry),
+                        e
                     ));
                     fail_count += 1;
                     continue;
@@ -380,7 +396,11 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
         if color_lower != "none" {
             let new_tag = format!("_color:{}", color_lower);
             if let Err(e) = vault.add_tag(&entry.sha256sum, &new_tag) {
-                pb.println(format!("Failed to set color for {}: {}", entry.path, e));
+                pb.println(format!(
+                    "Failed to set color for {}: {}",
+                    display_path_for_entry(vault, entry),
+                    e
+                ));
                 fail_count += 1;
             } else {
                 success_count += 1;

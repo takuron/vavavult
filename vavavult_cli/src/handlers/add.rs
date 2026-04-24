@@ -158,11 +158,11 @@ fn handle_add_directory_single_threaded(
     println!("Fetching existing file list from vault...");
     let existing_vault_paths: std::collections::HashSet<VaultPath> = {
         let vault_guard = vault.lock().unwrap();
-        vault_guard
-            .list_all()?
-            .into_iter()
-            .map(|entry| entry.path)
-            .collect()
+        let mut paths = std::collections::HashSet::new();
+        for entry in vault_guard.list_all()? {
+            paths.extend(vault_guard.list_paths_by_hash(&entry.sha256sum)?);
+        }
+        paths
     };
     println!(
         "Found {} files in the vault. Scanning local directory...",
@@ -255,11 +255,11 @@ fn handle_add_directory_parallel(
     println!("Fetching existing file list from vault...");
     let existing_vault_paths: std::collections::HashSet<VaultPath> = {
         let vault_guard = vault.lock().unwrap();
-        vault_guard
-            .list_all()?
-            .into_iter()
-            .map(|entry| entry.path)
-            .collect()
+        let mut paths = std::collections::HashSet::new();
+        for entry in vault_guard.list_all()? {
+            paths.extend(vault_guard.list_paths_by_hash(&entry.sha256sum)?);
+        }
+        paths
     };
     println!(
         "Found {} files in the vault. Scanning local directory (parallel mode)...",
