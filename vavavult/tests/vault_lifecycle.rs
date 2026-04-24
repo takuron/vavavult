@@ -42,6 +42,62 @@ fn test_create_non_encrypted_vault_success() {
     assert_eq!(create_time, update_time);
 }
 
+/// 测试：新建保险库时初始化多对一硬链接数据库结构。
+/// 验证点：
+/// 1. `files` 表不再包含完整路径 `path` 字段。
+/// 2. `directories` 和 `file_entries` 表存在。
+/// 3. `directories` 表默认包含一条根目录记录。
+#[test]
+fn test_create_vault_initializes_hardlink_schema() {
+    let dir = tempdir().unwrap();
+    let vault_path = dir.path().join("hardlink-schema");
+
+    let vault = Vault::create_vault_local(&vault_path, "schema-test", None).unwrap();
+    let conn = &vault.database_connection;
+
+    let file_columns = conn
+        .prepare("PRAGMA table_info(files)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        file_columns,
+        vec!["sha256sum", "original_sha256sum", "encrypt_password"]
+    );
+
+    let directory_columns = conn
+        .prepare("PRAGMA table_info(directories)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(directory_columns, vec!["id", "parent_id", "name"]);
+
+    let file_entry_columns = conn
+        .prepare("PRAGMA table_info(file_entries)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        file_entry_columns,
+        vec!["id", "directory_id", "name", "file_sha256sum"]
+    );
+
+    let root_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM directories WHERE id = 1 AND parent_id IS NULL AND name = ''",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(root_count, 1);
+}
+
 /// 测试：成功创建一个加密的保险库。
 /// 验证点：
 /// 1. 配置中 `encrypted` 标志为 true。

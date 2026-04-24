@@ -100,16 +100,16 @@
 
 ---
 
-## 破坏性重构：移除 name 字段，实现多对一硬链接架构
+## 破坏性重构：实现多对一硬链接架构
 
 > 注意：此重构放弃向后兼容，主要更改数据库结构，将原本存储在 `files` 表中的完整路径 `path` 移除。
 > 引入类似于文件系统 inode 和 dentry 的结构，分离文件内容实体与目录/文件名映射，从而允许一个文件实体被多个路径引用。外部暴露的 `FileEntry` API 保持向下兼容。
 
 ### 阶段 1：底层数据库定义修改 (`vavavult/src/vault/create.rs`)
-- [ ] 移除 `files` 表的 `path` 字段。
-- [ ] 新增 `directories` 表，用于维护目录树结构 (`id`, `parent_id`, `name`)。
-- [ ] 新增 `file_entries` 表，用于维护文件映射/硬链接 (`id`, `directory_id`, `name`, `file_sha256sum`)。
-- [ ] 在新建保险库时，默认插入一条根目录记录作为挂载点。
+- [x] 移除 `files` 表的 `path` 字段。
+- [x] 新增 `directories` 表，用于维护目录树结构 (`id`, `parent_id`, `name`)。
+- [x] 新增 `file_entries` 表，用于维护文件映射/硬链接 (`id`, `directory_id`, `name`, `file_sha256sum`)。
+- [x] 在新建保险库时，默认插入一条根目录记录作为挂载点。
 
 ### 阶段 2：核心查询与路径解析逻辑适配 (`vavavult/src/vault/query.rs` 等)
 - [ ] 实现路径解析辅助方法 `resolve_directory(path: &VaultPath)`，按层级解析目录返回 `directory_id`。

@@ -98,10 +98,37 @@ pub(crate) fn create_vault(
 
          CREATE TABLE IF NOT EXISTS files (
             sha256sum           CHAR(43) PRIMARY KEY NOT NULL,
-            path                TEXT NOT NULL UNIQUE,
             original_sha256sum  CHAR(43) NOT NULL UNIQUE,
             encrypt_password    TEXT NOT NULL
          );
+
+         CREATE TABLE IF NOT EXISTS directories (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_id           INTEGER,
+            name                TEXT NOT NULL,
+            FOREIGN KEY (parent_id) REFERENCES directories(id) ON DELETE CASCADE,
+            CHECK ((parent_id IS NULL AND name = '') OR (parent_id IS NOT NULL AND name <> ''))
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_directories_root
+            ON directories(name)
+            WHERE parent_id IS NULL;
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_directories_parent_name
+            ON directories(parent_id, name)
+            WHERE parent_id IS NOT NULL;
+
+         CREATE TABLE IF NOT EXISTS file_entries (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            directory_id        INTEGER NOT NULL,
+            name                TEXT NOT NULL,
+            file_sha256sum      CHAR(43) NOT NULL,
+            FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE,
+            FOREIGN KEY (file_sha256sum) REFERENCES files(sha256sum) ON DELETE CASCADE,
+            CHECK (name <> '')
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_file_entries_directory_name
+            ON file_entries(directory_id, name);
+         CREATE INDEX IF NOT EXISTS idx_file_entries_file_sha256sum
+            ON file_entries(file_sha256sum);
 
          CREATE TABLE IF NOT EXISTS tags (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,6 +146,12 @@ pub(crate) fn create_vault(
             FOREIGN KEY (file_sha256sum) REFERENCES files(sha256sum) ON DELETE CASCADE
          );
          CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_link ON metadata(file_sha256sum, meta_key);",
+    )?;
+
+    // 插入固定的根目录记录，作为新目录树的挂载点。
+    conn.execute(
+        "INSERT INTO directories (id, parent_id, name) VALUES (1, NULL, '')",
+        [],
     )?;
 
     // 将保险库元数据插入到新表中
