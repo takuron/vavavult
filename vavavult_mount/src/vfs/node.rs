@@ -255,7 +255,7 @@ impl VaultDavFile {
                         sender: tx,
                         rt_handle,
                     };
-                    // 缓冲大小对齐 stream_cipher 的 BUFFER_LEN (8192)，
+                    // 缓冲大小保持 8 KiB，便于向 WebDAV 客户端平滑发送数据，
                     // 每个解密块写入刚好填满缓冲区，立即 flush 一次 channel send
                     let writer = std::io::BufWriter::with_capacity(8192, channel_writer);
                     vavavult::vault::Vault::decrypt_extraction_task(storage.as_ref(), &task, writer)

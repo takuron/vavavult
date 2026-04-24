@@ -16,14 +16,17 @@
 - [x] 修改 `StorageBackend` 抽象及底层实现（如 `local.rs`）：明确要求后端必须返回完全支持 `Read + Seek` 的 Reader 和 `Write + Seek` 的 Writer。
 
 ### 阶段 2：核心密码学层与 API 层重构 (`vavavult/src/crypto/chunked.rs` & `vavavult/src/vault/`)
-- [ ] 创建 `ChunkedEncryptor<W: Write + Seek>`：包装支持 Seek 的底层写入器，流式接收数据，满 4MB 缓冲后使用 AES-256-GCM 加密，并将 `密文 + Tag` 刷入底层写入器。实时计算原始哈希和加密哈希。
-- [ ] 创建 `ChunkedReader<R: Read + Seek>`：包装支持 Seek 的原始存储后端读取器。拦截 `seek` 调用，计算物理块边界 (`Header + N * (4MB + 16 bytes)`)，读取对应的块，使用 `Base IV ^ N` 解密并验证 Tag，内部维护 4MB 明文缓冲以提供字节级精确读取。
-- [ ] 彻底移除原有的连续流加密 (`stream_cipher.rs`) 及其所有桥接实现。
+- [x] 创建 `ChunkedEncryptor<W: Write + Seek>`：包装支持 Seek 的底层写入器，流式接收数据，满 4MB 缓冲后使用 AES-256-GCM 加密，并将 `密文 + Tag` 刷入底层写入器。实时计算原始哈希和加密哈希。
+- [x] 创建 `ChunkedReader<R: Read + Seek>`：包装支持 Seek 的原始存储后端读取器。拦截 `seek` 调用，计算物理块边界 (`Header + N * (4MB + 16 bytes)`)，读取对应的块，使用 `Base IV ^ N` 解密并验证 Tag，内部维护 4MB 明文缓冲以提供字节级精确读取。
+- [x] 彻底移除原有的连续流加密 (`stream_cipher.rs`) 及其所有桥接实现。
+
+### 追加任务：分块存储包装类
+- [x] 新增 `ChunkedStorage` 包装类，用于在 `StorageBackend` 之上自动构造 `ChunkedEncryptor` 与 `ChunkedReader`。
 
 ### 阶段 3：API抽象重构
 
-- [ ] 修改 `Vault::encrypt_addition_task` 等所有写入桥梁：直接通过新包装的 `ChunkedEncryptor` 将数据写入支持 Seek 的 StorageWriter。
-- [ ] 重构解密/提取 API 等所有读取桥梁：新增 `Vault::open_file_for_read(hash) -> Result<ChunkedReader<Box<dyn StorageReader>>, Error>`，直接返回支持 $O(1)$ seek 的拉取式读取器。
+- [x] 修改 `Vault::encrypt_addition_task` 等所有写入桥梁：直接通过新包装的 `ChunkedEncryptor` 将数据写入支持 Seek 的 StorageWriter。
+- [x] 重构解密/提取 API 等所有读取桥梁：新增 `Vault::open_file_for_read(hash) -> Result<ChunkedReader<Box<dyn StorageReader>>, Error>`，直接返回支持 $O(1)$ seek 的拉取式读取器。
 - [ ] 清理和移除旧的基于推模型的 `Vault::decrypt_extraction_task` 和 `Vault::decrypt_extraction_task_to_file`，统一使用新拉取式的包装读写器。
 
 ### 阶段 4：WebDAV 挂载层重构 (`vavavult_mount/src/vfs/node.rs`)

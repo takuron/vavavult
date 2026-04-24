@@ -127,7 +127,7 @@ fn test_remove_file() {
 
 /// 测试：大文件完整性。
 /// 验证流式加密/解密逻辑在处理超出缓冲区大小的文件时是否正确。
-/// 这是一个关键的测试，用于验证 `stream_cipher` 的逻辑。
+/// 这是一个关键的测试，用于验证分块加密的逻辑。
 #[test]
 fn test_large_file_integrity() {
     let dir = tempdir().unwrap();

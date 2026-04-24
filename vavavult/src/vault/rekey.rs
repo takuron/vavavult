@@ -1,6 +1,6 @@
 //! Implements the logic for re-keying a file in the vault.
 use crate::common::hash::VaultHash;
-use crate::crypto::stream_cipher;
+use crate::crypto::chunked::{ChunkedCryptoError, chunked_re_encrypt};
 use crate::file::FileEntry;
 use crate::storage::{StagingToken, StorageBackend};
 use crate::utils::random::generate_random_password;
@@ -32,11 +32,11 @@ pub enum RekeyError {
     #[error("Database query error: {0}")]
     Query(#[from] QueryError),
 
-    /// An error occurred in the underlying stream cipher during encryption or decryption.
+    /// An error occurred in the underlying chunked cipher during encryption or decryption.
     //
-    // // 在加密或解密期间，底层流密码发生错误。
+    // // 在加密或解密期间，底层分块密码发生错误。
     #[error("Encryption/Decryption error: {0}")]
-    StreamCipher(#[from] stream_cipher::StreamCipherError),
+    ChunkedCrypto(#[from] ChunkedCryptoError),
 
     /// An error occurred during a metadata operation.
     //
@@ -91,7 +91,7 @@ pub fn prepare_rekey_task(
     let new_password = generate_random_password(16);
 
     // Perform the in-memory streaming re-encryption.
-    let (new_encrypted_hash, original_hash) = stream_cipher::stream_re_encrypt(
+    let (new_encrypted_hash, original_hash) = chunked_re_encrypt(
         &mut encrypted_reader,
         &mut staging_writer,
         &file_entry.encrypt_password,

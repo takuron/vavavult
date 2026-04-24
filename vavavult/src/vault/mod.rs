@@ -17,10 +17,11 @@ mod update;
 
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
+use crate::crypto::chunked::ChunkedReader;
 pub use crate::file::FileEntry;
 use crate::file::VaultPath;
-use crate::storage::StorageBackend;
 use crate::storage::local::LocalStorage;
+use crate::storage::{StorageBackend, StorageReader};
 
 //- Internal implementation imports
 use crate::vault::add::{
@@ -34,7 +35,8 @@ use crate::vault::create::create_vault;
 use crate::vault::extract::{
     decrypt_extraction_task as _decrypt_extraction_task,
     decrypt_extraction_task_to_file as _decrypt_extraction_task_to_file, extract_file,
-    prepare_extraction_task, prepare_extraction_tasks as _prepare_extraction_tasks,
+    open_extraction_task_reader as _open_extraction_task_reader, prepare_extraction_task,
+    prepare_extraction_tasks as _prepare_extraction_tasks,
 };
 use crate::vault::fix::fix_file as _fix_file;
 use crate::vault::metadata::{
@@ -1014,6 +1016,76 @@ impl Vault {
         writer: impl std::io::Write,
     ) -> Result<(), ExtractError> {
         _decrypt_extraction_task(storage, task, writer)
+    }
+
+    /// Stage 2 (Extract): Opens a prepared extraction task as a random-access reader.
+    ///
+    /// This associated function returns a pull-based `ChunkedReader` that decrypts
+    /// and authenticates only the chunk needed by each read or seek operation.
+    ///
+    /// # Arguments
+    /// * `storage` - The storage backend to read encrypted data from.
+    /// * `task` - The extraction ticket from Stage 1.
+    ///
+    /// # Returns
+    /// A `ChunkedReader` over the backend object.
+    ///
+    /// # Errors
+    /// Returns `ExtractError` if the object cannot be opened or authenticated.
+    //
+    // // 阶段 2 (提取): 将已准备好的提取任务打开为随机访问读取器。
+    // //
+    // // 此关联函数返回拉取式 `ChunkedReader`，每次 read 或 seek 只解密并认证所需块。
+    // //
+    // // # 参数
+    // // * `storage` - 用于读取加密数据的存储后端。
+    // // * `task` - 来自阶段 1 的提取票据。
+    // //
+    // // # 返回
+    // // 基于后端对象的 `ChunkedReader`。
+    // //
+    // // # 错误
+    // // 如果对象无法打开或认证失败，则返回 `ExtractError`。
+    pub fn open_extraction_task_reader(
+        storage: &dyn StorageBackend,
+        task: &ExtractionTask,
+    ) -> Result<ChunkedReader<Box<dyn StorageReader>>, ExtractError> {
+        _open_extraction_task_reader(storage, task)
+    }
+
+    /// Opens a vault file by hash as a random-access reader.
+    ///
+    /// This convenience method combines extraction preparation and pull-based
+    /// chunked reader construction.
+    ///
+    /// # Arguments
+    /// * `hash` - The `VaultHash` of the file to open.
+    ///
+    /// # Returns
+    /// A `ChunkedReader` that implements `Read + Seek` over plaintext bytes.
+    ///
+    /// # Errors
+    /// Returns `ExtractError` if metadata lookup, storage access, or chunk
+    /// authentication fails.
+    //
+    // // 按哈希将保险库文件打开为随机访问读取器。
+    // //
+    // // 此便捷方法组合了提取准备和拉取式分块读取器构建。
+    // //
+    // // # 参数
+    // // * `hash` - 要打开的文件的 `VaultHash`。
+    // //
+    // // # 返回
+    // // 在明文字节上实现 `Read + Seek` 的 `ChunkedReader`。
+    // //
+    // // # 错误
+    // // 如果元数据查询、存储访问或块认证失败，则返回 `ExtractError`。
+    pub fn open_file_for_read(
+        &self,
+        hash: &VaultHash,
+    ) -> Result<ChunkedReader<Box<dyn StorageReader>>, ExtractError> {
+        let task = prepare_extraction_task(self, hash)?;
+        _open_extraction_task_reader(self.storage.as_ref(), &task)
     }
 
     /// Stage 2 shortcut: Decrypts a prepared extraction task to a local file.

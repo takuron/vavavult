@@ -1,5 +1,6 @@
 use crate::common::hash::VaultHash;
-use crate::crypto::stream_cipher;
+use crate::crypto::chunked;
+use crate::crypto::chunked::ChunkedCryptoError;
 use crate::utils::random::generate_random_string;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use std::fs;
@@ -19,11 +20,11 @@ pub enum EncryptError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// An error occurred in the underlying stream cipher encryption/decryption.
+    /// An error occurred in the underlying chunked cipher encryption/decryption.
     //
-    // // 底层流密码加密/解密过程中发生错误。
-    #[error("Stream cipher error: {0}")]
-    StreamCipher(#[from] stream_cipher::StreamCipherError),
+    // // 底层分块密码加密/解密过程中发生错误。
+    #[error("Chunked cipher error: {0}")]
+    ChunkedCrypto(#[from] ChunkedCryptoError),
 
     /// A string conversion failed because the byte sequence is not valid UTF-8.
     //
@@ -104,7 +105,7 @@ pub fn _encrypt_file(
     let mut dest_file = File::create(dest_path)?;
 
     let (encrypted_sha256, original_sha256) =
-        stream_cipher::stream_encrypt_and_hash(&mut source_file, &mut dest_file, password)?;
+        chunked::chunked_encrypt_and_hash(&mut source_file, &mut dest_file, password)?;
     Ok((encrypted_sha256, original_sha256))
 }
 
@@ -129,10 +130,10 @@ pub fn _decrypt_file(
     //    这可以确保我们在同一个文件系统上，使重命名(persist)操作是原子的。
     let mut temp_file = NamedTempFile::new_in(parent_dir)?;
 
-    // 3. 将流式解密写入临时文件
-    //    stream_decrypt 现在会流式写入，并在最后验证 GCM 标签。
+    // 3. 将分块流式解密写入临时文件
+    //    chunked_decrypt 现在会流式写入，并按块验证 GCM 标签。
     //    如果标签无效，它会返回 Err，temp_file 会被自动删除。
-    let original_hash = stream_cipher::stream_decrypt(&mut source_file, &mut temp_file, password)?;
+    let original_hash = chunked::chunked_decrypt(&mut source_file, &mut temp_file, password)?;
 
     // 4. 认证成功，将临时文件重命名为最终目标路径
     temp_file.persist(dest_path)?;
@@ -144,10 +145,11 @@ pub fn _decrypt_file(
 /// 加密一个字符串，并返回 Base64 编码的密文。
 pub fn encrypt_string(plaintext: &str, password: &str) -> Result<String, EncryptError> {
     let source = Cursor::new(plaintext.as_bytes());
-    let mut destination_bytes = Vec::new();
 
     // [修改] 底层函数现在返回两个哈希值，我们忽略它们
-    stream_cipher::stream_encrypt_and_hash(source, &mut destination_bytes, password)?;
+    let mut destination = Cursor::new(Vec::new());
+    chunked::chunked_encrypt_and_hash(source, &mut destination, password)?;
+    let destination_bytes = destination.into_inner();
 
     // 将原始字节编码为 Base64 字符串
     let encrypted_base64 = BASE64_STANDARD.encode(&destination_bytes);
@@ -162,7 +164,7 @@ pub fn decrypt_string(ciphertext_base64: &str, password: &str) -> Result<String,
     // 2. 使用底层流处理函数解密字节
     let mut source = Cursor::new(ciphertext_bytes);
     let mut destination_bytes = Vec::new();
-    stream_cipher::stream_decrypt(&mut source, &mut destination_bytes, password)?;
+    chunked::chunked_decrypt(&mut source, &mut destination_bytes, password)?;
 
     // 3. 将解密后的字节转换为 UTF-8 字符串
     let plaintext = String::from_utf8(destination_bytes)?;

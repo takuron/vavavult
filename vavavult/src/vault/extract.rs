@@ -1,7 +1,7 @@
 use crate::common::hash::{HashParseError, VaultHash};
+use crate::crypto::chunked::{ChunkedCryptoError, ChunkedReader, chunked_decrypt};
 use crate::crypto::encrypt::EncryptError;
-use crate::crypto::stream_cipher;
-use crate::storage::StorageBackend;
+use crate::storage::{StorageBackend, StorageReader};
 use crate::vault::{QueryResult, Vault, query};
 use std::fs;
 use std::io::Write;
@@ -57,11 +57,11 @@ pub enum ExtractError {
         calculated: String,
     },
 
-    /// An error occurred during the stream decryption process.
+    /// An error occurred during the chunked decryption process.
     //
-    // // 流解密过程中发生错误。
-    #[error("Stream cipher error: {0}")]
-    StreamCipherError(#[from] stream_cipher::StreamCipherError),
+    // // 分块解密过程中发生错误。
+    #[error("Chunked cipher error: {0}")]
+    ChunkedCryptoError(#[from] ChunkedCryptoError),
 }
 
 /// A "ticket" containing all necessary information to perform a file extraction.
@@ -180,9 +180,9 @@ pub(crate) fn decrypt_extraction_task(
     // 1. 从存储后端获取读取器
     let mut encrypted_reader = storage.reader(&task.file_hash)?;
 
-    // 2. 执行解密，写入到调用方提供的 writer
+    // 2. 执行分块解密，写入到调用方提供的 writer
     let calculated_original_hash =
-        stream_cipher::stream_decrypt(&mut encrypted_reader, &mut writer, &task.password)?;
+        chunked_decrypt(&mut encrypted_reader, &mut writer, &task.password)?;
 
     // 3. 完整性检查
     if calculated_original_hash != task.expected_original_hash {
@@ -194,6 +194,46 @@ pub(crate) fn decrypt_extraction_task(
     }
 
     Ok(())
+}
+
+/// Opens a prepared extraction task as a random-access chunked reader.
+///
+/// This is a pull-based read API that avoids decrypting the whole file when the
+/// caller only needs selected ranges.
+///
+/// # Arguments
+/// * `storage` - The storage backend to read encrypted data from.
+/// * `task` - The extraction ticket from Stage 1.
+///
+/// # Returns
+/// A `ChunkedReader` over the encrypted backend object.
+///
+/// # Errors
+/// Returns `ExtractError` if the backend object cannot be opened or its chunked
+/// encrypted format is invalid.
+//
+// // 将已准备好的提取任务打开为随机访问分块读取器。
+// //
+// // 这是拉取式读取 API，可避免调用方只读取部分范围时解密整个文件。
+// //
+// // # 参数
+// // * `storage` - 用于读取加密数据的存储后端。
+// // * `task` - 来自阶段 1 的提取票据。
+// //
+// // # 返回
+// // 基于后端加密对象的 `ChunkedReader`。
+// //
+// // # 错误
+// // 如果后端对象无法打开，或其分块加密格式无效，则返回 `ExtractError`。
+pub(crate) fn open_extraction_task_reader(
+    storage: &dyn StorageBackend,
+    task: &ExtractionTask,
+) -> Result<ChunkedReader<Box<dyn StorageReader>>, ExtractError> {
+    // 1. 从后端打开可寻址物理读取器。
+    let encrypted_reader = storage.reader(&task.file_hash)?;
+
+    // 2. 包装为按需解密的分块读取器。
+    Ok(ChunkedReader::new(encrypted_reader, &task.password)?)
 }
 
 /// Stage 2 shortcut: Decrypts a prepared extraction task to a local file.

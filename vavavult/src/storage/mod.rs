@@ -1,6 +1,9 @@
+pub mod chunked;
 pub mod local;
 
 use crate::common::hash::VaultHash;
+
+pub use chunked::ChunkedStorage;
 use std::any::Any;
 use std::fmt::Debug;
 use std::io::{self, Read, Seek, Write};

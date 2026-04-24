@@ -47,13 +47,14 @@ Provides the core logic for managing encrypted file vaults.
     *   **Path:** `vavavult/src/storage/`
     *   **Description:** Implements the storage backend abstraction.
     *   `mod.rs`: Defines the `StorageBackend` trait, which abstracts file storage operations (read, write, delete, etc.). Storage backends now expose `StorageReader` (`Read + Seek + Send`) and `StorageWriter` (`Write + Seek + Send`) trait objects so the chunked encryption architecture can perform random-access reads and explicit-position writes.
+    *   `chunked.rs`: Provides `ChunkedStorage`, a helper wrapper that automatically wraps backend writers in `ChunkedEncryptor` and backend readers in `ChunkedReader`.
     *   `local.rs`: Provides `LocalStorage`, the default implementation of `StorageBackend` that stores encrypted file data on the local filesystem within the vault's `data` directory.
 
 *   **`vavavult::crypto`**
     *   **Path:** `vavavult/src/crypto/`
     *   **Description:** Handles all cryptographic operations.
+    *   `chunked.rs`: Implements the mandatory chunked AES-256-GCM file format. `ChunkedEncryptor<W: Write + Seek>` writes `Header + N * (ciphertext + tag)` blocks, and `ChunkedReader<R: Read + Seek>` provides authenticated random-access plaintext reads.
     *   `encrypt.rs`: Contains functions for encrypting and decrypting data using `openssl`.
-    *   `stream_cipher.rs`: Implements stream-based encryption and decryption, suitable for large files.
     *   The metadata database is encrypted using SQLCipher, configured via `rusqlite` with the `bundled-sqlcipher` feature.
 
 *   **`vavavult::file`**

@@ -3,9 +3,8 @@ use crate::common::constants::{
 };
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
+use crate::crypto::chunked::{ChunkedCryptoError, chunked_encrypt_and_hash};
 use crate::crypto::encrypt::EncryptError;
-use crate::crypto::stream_cipher;
-use crate::crypto::stream_cipher::StreamCipherError;
 use crate::file::PathError;
 use crate::file::path::VaultPath;
 use crate::storage::{StagingToken, StorageBackend};
@@ -70,10 +69,10 @@ pub enum AddFileError {
     // // 文件加密期间发生错误。
     #[error("File encryption failed: {0}")]
     EncryptionError(#[from] EncryptError),
-    /// An error occurred in the underlying stream cipher.
-    // // 底层流加密器发生错误。
-    #[error("Stream cipher error: {0}")]
-    StreamCipherError(#[from] StreamCipherError),
+    /// An error occurred in the underlying chunked cipher.
+    // // 底层分块加密器发生错误。
+    #[error("Chunked cipher error: {0}")]
+    ChunkedCryptoError(#[from] ChunkedCryptoError),
     /// Failed to update the vault's last-modified timestamp.
     // // 更新保险库的最后修改时间戳失败。
     #[error("Failed to update vault timestamp: {0}")]
@@ -288,9 +287,9 @@ pub(crate) fn encrypt_addition_task(
         count: 0,
     };
 
-    // 3. 执行流式加密
+    // 3. 执行分块流式加密
     let per_file_password = generate_random_password(16);
-    let (encrypted_sha256sum, original_sha256sum) = stream_cipher::stream_encrypt_and_hash(
+    let (encrypted_sha256sum, original_sha256sum) = chunked_encrypt_and_hash(
         &mut counting_reader,
         &mut staging_writer,
         &per_file_password,
