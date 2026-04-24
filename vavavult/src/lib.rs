@@ -1,7 +1,7 @@
 pub mod common;
 pub mod file;
-pub mod vault;
 pub mod storage;
+pub mod vault;
 
-mod utils;
 mod crypto;
+mod utils;

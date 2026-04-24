@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use vavavult::file::VaultPath;
-use vavavult::vault::{AddFileError, AdditionTask, PrepareAdditionRequest, Vault, resolve_file_metadata};
+use vavavult::vault::{
+    AddFileError, AdditionTask, PrepareAdditionRequest, Vault, resolve_file_metadata,
+};
 use walkdir::WalkDir;
 
 /// 根据新的 CLI 规则构建最终的 VaultPath (用于单文件添加)
@@ -374,11 +376,7 @@ fn handle_add_directory_parallel(
                 }
             };
 
-            let result = Vault::encrypt_addition_task(
-                storage.as_ref(),
-                pending,
-                source_file,
-            );
+            let result = Vault::encrypt_addition_task(storage.as_ref(), pending, source_file);
 
             pb_clone.inc(1);
 

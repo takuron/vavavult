@@ -8,12 +8,12 @@
 
 ---
 
-## 破坏性重构：支持真 Seek 的分块加密架构
+## 破坏性重构：分块加密架构
 
 > 注意：此重构放弃向后兼容，已通过拦截旧有格式 API 和升级文件库版本号处理。所有的文件将强制使用分块加密算法。
 
 ### 阶段 1：底层存储抽象重构 (`vavavult/src/storage/`)
-- [ ] 修改 `StorageBackend` 抽象及底层实现（如 `local.rs`）：明确要求后端必须返回完全支持 `Read + Seek` 的 Reader 和 `Write + Seek` 的 Writer。
+- [x] 修改 `StorageBackend` 抽象及底层实现（如 `local.rs`）：明确要求后端必须返回完全支持 `Read + Seek` 的 Reader 和 `Write + Seek` 的 Writer。
 
 ### 阶段 2：核心密码学层与 API 层重构 (`vavavult/src/crypto/chunked.rs` & `vavavult/src/vault/`)
 - [ ] 创建 `ChunkedEncryptor<W: Write + Seek>`：包装支持 Seek 的底层写入器，流式接收数据，满 4MB 缓冲后使用 AES-256-GCM 加密，并将 `密文 + Tag` 刷入底层写入器。实时计算原始哈希和加密哈希。

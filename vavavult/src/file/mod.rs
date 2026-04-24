@@ -1,8 +1,8 @@
 use crate::common::metadata::MetadataEntry;
 
 pub mod path;
-pub use path::{PathError, VaultPath};
 use crate::common::hash::VaultHash;
+pub use path::{PathError, VaultPath};
 
 /// Represents a record of a file stored in the vault database.
 ///
@@ -13,7 +13,7 @@ use crate::common::hash::VaultHash;
 // //
 // // 此结构体包含与文件关联的所有元数据，包括其位置、
 // // 加密哈希、加密参数以及自定义标签/元数据。
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct FileEntry {
     /// The unique path of the file within the vault (e.g., "/docs/report.txt").
     // // 文件在保险库中的唯一路径 (例如 "/docs/report.txt")。

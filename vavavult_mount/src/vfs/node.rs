@@ -110,9 +110,7 @@ pub(crate) enum ReadContent {
 pub enum VaultDavFileState {
     /// State for a file opened for reading (pipe-based streaming with seek fallback).
     // // 为读取而打开的文件状态（基于管道的流式传输，支持 seek 回退）。
-    Read {
-        content: ReadContent,
-    },
+    Read { content: ReadContent },
     /// State for a file opened for writing.
     // // 为写入而打开的文件状态。
     Write {
@@ -252,28 +250,20 @@ impl VaultDavFile {
                 let (tx, rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(32);
                 let rt_handle = tokio::runtime::Handle::current();
 
-                let join_handle =
-                    tokio::task::spawn_blocking(move || -> Result<(), FsError> {
-                        let channel_writer = ChannelWriter {
-                            sender: tx,
-                            rt_handle,
-                        };
-                        // 缓冲大小对齐 stream_cipher 的 BUFFER_LEN (8192)，
-                        // 每个解密块写入刚好填满缓冲区，立即 flush 一次 channel send
-                        let writer = std::io::BufWriter::with_capacity(
-                            8192,
-                            channel_writer,
-                        );
-                        vavavult::vault::Vault::decrypt_extraction_task(
-                            storage.as_ref(),
-                            &task,
-                            writer,
-                        )
+                let join_handle = tokio::task::spawn_blocking(move || -> Result<(), FsError> {
+                    let channel_writer = ChannelWriter {
+                        sender: tx,
+                        rt_handle,
+                    };
+                    // 缓冲大小对齐 stream_cipher 的 BUFFER_LEN (8192)，
+                    // 每个解密块写入刚好填满缓冲区，立即 flush 一次 channel send
+                    let writer = std::io::BufWriter::with_capacity(8192, channel_writer);
+                    vavavult::vault::Vault::decrypt_extraction_task(storage.as_ref(), &task, writer)
                         .map_err(|e| {
                             eprintln!("[vavavult_mount] 解密失败: {:?}", e);
                             FsError::GeneralFailure
                         })
-                    });
+                });
 
                 *content = ReadContent::Streaming {
                     receiver: rx,
@@ -291,7 +281,6 @@ impl VaultDavFile {
             Err(FsError::Forbidden)
         }
     }
-
 }
 
 impl Drop for VaultDavFile {

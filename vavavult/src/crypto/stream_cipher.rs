@@ -633,7 +633,7 @@ mod tests {
             original_hash, decrypted_hash,
             "SHA512 hash of decrypted file does not match the original file's hash."
         );
-}
+    }
 
     #[test]
     fn test_re_encryption_roundtrip() {

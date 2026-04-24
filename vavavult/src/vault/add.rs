@@ -40,7 +40,9 @@ pub enum AddFileError {
     DatabaseError(#[from] rusqlite::Error),
     /// The target `VaultPath` was a directory path, but a file path was required.
     // // 目标 `VaultPath` 是一个目录路径，但需要的是文件路径。
-    #[error("The provided vault path is invalid: '{0}' (must be a file path, not a directory path)")]
+    #[error(
+        "The provided vault path is invalid: '{0}' (must be a file path, not a directory path)"
+    )]
     InvalidFilePath(String),
     /// A database query failed during pre-checks.
     // // 在预检查期间数据库查询失败。
@@ -56,7 +58,9 @@ pub enum AddFileError {
     DuplicateContent(String),
     /// A file with the same *original* content hash already exists.
     // // 具有相同 *原始* 内容哈希的文件已存在。
-    #[error("A file with the same original content (Original SHA256: {0}) already exists at path '{1}' or in this batch.")]
+    #[error(
+        "A file with the same original content (Original SHA256: {0}) already exists at path '{1}' or in this batch."
+    )]
     DuplicateOriginalContent(String, String),
     /// The source file path has no filename (e.g., ".") and cannot be added to a directory.
     // // 源文件路径没有文件名 (例如 ".") 并且无法添加到目录中。
@@ -279,7 +283,10 @@ pub(crate) fn encrypt_addition_task(
             Ok(n)
         }
     }
-    let mut counting_reader = CountingReader { inner: reader, count: 0 };
+    let mut counting_reader = CountingReader {
+        inner: reader,
+        count: 0,
+    };
 
     // 3. 执行流式加密
     let per_file_password = generate_random_password(16);
@@ -293,12 +300,25 @@ pub(crate) fn encrypt_addition_task(
 
     // 4. 构建 FileEntry
     let now = now_as_rfc3339_string();
-    let file_size = if pending.source_size > 0 { pending.source_size } else { actual_size };
+    let file_size = if pending.source_size > 0 {
+        pending.source_size
+    } else {
+        actual_size
+    };
 
     let metadata = vec![
-        MetadataEntry { key: META_FILE_ADD_TIME.to_string(), value: now.clone() },
-        MetadataEntry { key: META_FILE_UPDATE_TIME.to_string(), value: now },
-        MetadataEntry { key: META_FILE_SIZE.to_string(), value: file_size.to_string() },
+        MetadataEntry {
+            key: META_FILE_ADD_TIME.to_string(),
+            value: now.clone(),
+        },
+        MetadataEntry {
+            key: META_FILE_UPDATE_TIME.to_string(),
+            value: now,
+        },
+        MetadataEntry {
+            key: META_FILE_SIZE.to_string(),
+            value: file_size.to_string(),
+        },
         MetadataEntry {
             key: META_SOURCE_MODIFIED_TIME.to_string(),
             value: pending.source_modified_time.to_rfc3339(),
@@ -314,7 +334,10 @@ pub(crate) fn encrypt_addition_task(
         metadata,
     };
 
-    Ok(AdditionTask { file_entry, staging_token })
+    Ok(AdditionTask {
+        file_entry,
+        staging_token,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -405,7 +428,10 @@ pub(crate) fn commit_addition_tasks(
         for file_to_add in &files {
             let entry = &file_to_add.file_entry;
             file_stmt.execute((
-                &entry.sha256sum, &entry.path, &entry.original_sha256sum, &entry.encrypt_password,
+                &entry.sha256sum,
+                &entry.path,
+                &entry.original_sha256sum,
+                &entry.encrypt_password,
             ))?;
             for meta in &entry.metadata {
                 meta_stmt.execute((&entry.sha256sum, &meta.key, &meta.value))?;
@@ -490,8 +516,10 @@ pub(crate) fn add_file(
     let final_dest_path = resolve_final_path(source_path, dest_path)?;
     let source_metadata = fs::metadata(source_path).map_err(AddFileError::IoError)?;
     let file_size = source_metadata.len();
-    let source_modified_time: DateTime<Utc> =
-        source_metadata.modified().map_err(AddFileError::IoError)?.into();
+    let source_modified_time: DateTime<Utc> = source_metadata
+        .modified()
+        .map_err(AddFileError::IoError)?
+        .into();
 
     // 阶段 1
     let requests = [PrepareAdditionRequest {
@@ -603,11 +631,15 @@ pub(crate) fn resolve_file_metadata(
     }
     let final_dest_path = resolve_final_path(source_path, dest_path)?;
     if !final_dest_path.is_file() {
-        return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
+        return Err(AddFileError::InvalidFilePath(
+            final_dest_path.as_str().to_string(),
+        ));
     }
     let source_metadata = fs::metadata(source_path).map_err(AddFileError::IoError)?;
     let file_size = source_metadata.len();
-    let source_modified_time: DateTime<Utc> =
-        source_metadata.modified().map_err(AddFileError::IoError)?.into();
+    let source_modified_time: DateTime<Utc> = source_metadata
+        .modified()
+        .map_err(AddFileError::IoError)?
+        .into();
     Ok((final_dest_path, file_size, source_modified_time))
 }

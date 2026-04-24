@@ -1,7 +1,7 @@
-use rusqlite::params;
 use crate::common::hash::VaultHash;
-use crate::vault::{query, QueryResult, Vault};
-use crate::vault::metadata::{touch_file_update_time, MetadataError};
+use crate::vault::metadata::{MetadataError, touch_file_update_time};
+use crate::vault::{QueryResult, Vault, query};
+use rusqlite::params;
 
 /// Defines errors that can occur during tag operations.
 //
@@ -48,13 +48,18 @@ pub(crate) fn add_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result
 }
 
 /// Adds multiple tags to a file in a transaction.
-pub(crate) fn add_tags(vault: &mut Vault, sha256sum: &VaultHash, tags: &[&str]) -> Result<(), TagError> {
+pub(crate) fn add_tags(
+    vault: &mut Vault,
+    sha256sum: &VaultHash,
+    tags: &[&str],
+) -> Result<(), TagError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(TagError::FileNotFound(sha256sum.to_string()));
     }
     let tx = vault.database_connection.transaction()?;
     {
-        let mut stmt = tx.prepare("INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES (?1, ?2)")?;
+        let mut stmt =
+            tx.prepare("INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES (?1, ?2)")?;
         for tag in tags {
             stmt.execute(params![sha256sum, tag])?;
         }

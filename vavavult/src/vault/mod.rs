@@ -33,10 +33,8 @@ use crate::vault::add::{
 use crate::vault::create::create_vault;
 use crate::vault::extract::{
     decrypt_extraction_task as _decrypt_extraction_task,
-    decrypt_extraction_task_to_file as _decrypt_extraction_task_to_file,
-    extract_file,
-    prepare_extraction_task,
-    prepare_extraction_tasks as _prepare_extraction_tasks,
+    decrypt_extraction_task_to_file as _decrypt_extraction_task_to_file, extract_file,
+    prepare_extraction_task, prepare_extraction_tasks as _prepare_extraction_tasks,
 };
 use crate::vault::fix::fix_file as _fix_file;
 use crate::vault::metadata::{

@@ -1,8 +1,8 @@
-use std::fmt::{Display, Formatter};
-use std::path::{Path, PathBuf};
 use rusqlite::ToSql;
 use rusqlite::types::{FromSql, FromSqlResult, ToSqlOutput, Value, ValueRef};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt::{Display, Formatter};
+use std::path::{Path, PathBuf};
 
 /// Defines errors that can occur during `VaultPath` operations.
 //
@@ -85,7 +85,10 @@ impl VaultPath {
                     // 定义非法字符集合
                     const ILLEGAL_CHARS: &[char] = &['\0', '<', '>', ':', '"', '|', '?', '*'];
                     // 使用 filter 移除非法字符
-                    let sanitized_comp: String = comp.chars().filter(|c| !ILLEGAL_CHARS.contains(c)).collect();
+                    let sanitized_comp: String = comp
+                        .chars()
+                        .filter(|c| !ILLEGAL_CHARS.contains(c))
+                        .collect();
 
                     // 只有在清理后的段不为空时才添加
                     if !sanitized_comp.is_empty() {
@@ -161,7 +164,9 @@ impl VaultPath {
         };
 
         match path_to_parse.rfind('/') {
-            Some(0) => Ok(VaultPath { inner: "/".to_string() }), // 父目录是根
+            Some(0) => Ok(VaultPath {
+                inner: "/".to_string(),
+            }), // 父目录是根
             Some(idx) => Ok(VaultPath {
                 // 父目录总是以 / 结尾
                 inner: format!("{}/", &path_to_parse[..idx]),
@@ -260,9 +265,7 @@ impl VaultPath {
             relative_path = &relative_path[..relative_path.len() - 1];
         }
 
-        relative_path
-            .split('/')
-            .collect::<PathBuf>()
+        relative_path.split('/').collect::<PathBuf>()
     }
 }
 
@@ -389,13 +392,16 @@ mod tests {
         assert_eq!(VaultPath::new("/a/b?c/").as_str(), "/a/bc/");
         assert_eq!(VaultPath::new("/a*b.txt").as_str(), "/ab.txt");
         // 混合移除
-        assert_eq!(VaultPath::new("/a/b*<c>?.d:e|f\"g\\h").as_str(), "/a/bc.defg/h");
+        assert_eq!(
+            VaultPath::new("/a/b*<c>?.d:e|f\"g\\h").as_str(),
+            "/a/bc.defg/h"
+        );
         // 如果移除后段为空，则忽略该段
         assert_eq!(VaultPath::new("/a/<>/b").as_str(), "/a/b");
         assert_eq!(VaultPath::new("/a/*/").as_str(), "/a/"); // 移除*后段为空，被忽略
-        assert_eq!(VaultPath::new("/*/a").as_str(), "/a");   // 同上
-        assert_eq!(VaultPath::new("/*?/").as_str(), "/");    // 移除后都为空，只剩根
-        assert_eq!(VaultPath::new("?").as_str(), "/");       // 移除后为空，只剩根
+        assert_eq!(VaultPath::new("/*/a").as_str(), "/a"); // 同上
+        assert_eq!(VaultPath::new("/*?/").as_str(), "/"); // 移除后都为空，只剩根
+        assert_eq!(VaultPath::new("?").as_str(), "/"); // 移除后为空，只剩根
     }
 
     #[test]
@@ -409,7 +415,10 @@ mod tests {
 
     #[test]
     fn test_parent() {
-        assert_eq!(VaultPath::new("/a/b/c.txt").parent().unwrap().as_str(), "/a/b/");
+        assert_eq!(
+            VaultPath::new("/a/b/c.txt").parent().unwrap().as_str(),
+            "/a/b/"
+        );
         assert_eq!(VaultPath::new("/a/b/").parent().unwrap().as_str(), "/a/");
         assert_eq!(VaultPath::new("/a.txt").parent().unwrap().as_str(), "/");
         assert_eq!(VaultPath::new("/a/").parent().unwrap().as_str(), "/");
@@ -445,7 +454,10 @@ mod tests {
     fn test_join_with_illegal_segment_removal() {
         let p_dir = VaultPath::new("/a/b/");
         // join 会调用 VaultPath::new，应该移除非法字符
-        assert_eq!(p_dir.join("illegal*char?.txt").unwrap().as_str(), "/a/b/illegalchar.txt");
+        assert_eq!(
+            p_dir.join("illegal*char?.txt").unwrap().as_str(),
+            "/a/b/illegalchar.txt"
+        );
         // 如果 segment 移除后为空，join 的结果应该不变
         assert_eq!(p_dir.join("?*/").unwrap().as_str(), "/a/b/");
         assert_eq!(p_dir.join("<>").unwrap().as_str(), "/a/b"); // 加入空文件名？VaultPath::new 会返回 "/" ? join 会 panic 还是？-> join 应该返回 Ok("/a/b/")
@@ -454,17 +466,22 @@ mod tests {
         assert_eq!(p_dir.join("<>:\"?/").unwrap().as_str(), "/a/b/"); // join 一个空目录名，得到父目录
     }
 
-
     #[test]
     fn test_as_os_path() {
         let p_file = VaultPath::new("/a/b/c.txt");
-        assert_eq!(p_file.as_os_path(), PathBuf::from("a").join("b").join("c.txt"));
+        assert_eq!(
+            p_file.as_os_path(),
+            PathBuf::from("a").join("b").join("c.txt")
+        );
         let p_dir = VaultPath::new("/a/b/");
         assert_eq!(p_dir.as_os_path(), PathBuf::from("a").join("b"));
         let p_root = VaultPath::new("/");
         assert_eq!(p_root.as_os_path(), PathBuf::from(""));
         // 测试包含非法字符的路径（它们应该已被移除）
         let p_illegal = VaultPath::new("/a/b*c/d?e.txt");
-        assert_eq!(p_illegal.as_os_path(), PathBuf::from("a").join("bc").join("de.txt"));
+        assert_eq!(
+            p_illegal.as_os_path(),
+            PathBuf::from("a").join("bc").join("de.txt")
+        );
     }
 }

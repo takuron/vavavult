@@ -1,9 +1,9 @@
-use rusqlite::params;
 use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_UPDATE_TIME};
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
 use crate::utils::time::now_as_rfc3339_string;
-use crate::vault::{query, QueryResult, Vault};
+use crate::vault::{QueryResult, Vault, query};
+use rusqlite::params;
 
 /// Defines errors that can occur during metadata operations.
 //
@@ -41,7 +41,7 @@ pub enum MetadataError {
 pub(crate) fn set_file_metadata(
     vault: &Vault,
     sha256sum: &VaultHash,
-    metadata: MetadataEntry
+    metadata: MetadataEntry,
 ) -> Result<(), MetadataError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(MetadataError::FileNotFound(sha256sum.to_string()));
@@ -62,7 +62,7 @@ pub(crate) fn set_file_metadata(
 pub(crate) fn remove_file_metadata(
     vault: &Vault,
     sha256sum: &VaultHash,
-    key: &str
+    key: &str,
 ) -> Result<(), MetadataError> {
     if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(MetadataError::FileNotFound(sha256sum.to_string()));
@@ -79,7 +79,10 @@ pub(crate) fn remove_file_metadata(
 }
 
 /// Updates the `_vavavult_update_time` metadata for a file.
-pub(crate) fn touch_file_update_time(vault: &Vault, sha256sum: &VaultHash) -> Result<(), MetadataError> {
+pub(crate) fn touch_file_update_time(
+    vault: &Vault,
+    sha256sum: &VaultHash,
+) -> Result<(), MetadataError> {
     let now = now_as_rfc3339_string();
     let metadata_entry = MetadataEntry {
         key: META_FILE_UPDATE_TIME.to_string(),
@@ -93,21 +96,27 @@ pub(crate) fn touch_file_update_time(vault: &Vault, sha256sum: &VaultHash) -> Re
 
 /// Retrieves a vault-level metadata value.
 pub(crate) fn get_vault_metadata(vault: &Vault, key: &str) -> Result<String, MetadataError> {
-    vault.database_connection.query_row(
-        "SELECT meta_value FROM vault_metadata WHERE meta_key = ?1",
-        params![key],
-        |row| row.get(0)
-    ).map_err(|e| {
-        if let rusqlite::Error::QueryReturnedNoRows = e {
-            MetadataError::MetadataKeyNotFound(key.to_string())
-        } else {
-            MetadataError::DatabaseError(e)
-        }
-    })
+    vault
+        .database_connection
+        .query_row(
+            "SELECT meta_value FROM vault_metadata WHERE meta_key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            if let rusqlite::Error::QueryReturnedNoRows = e {
+                MetadataError::MetadataKeyNotFound(key.to_string())
+            } else {
+                MetadataError::DatabaseError(e)
+            }
+        })
 }
 
 /// Sets a vault-level metadata key-value pair (upsert).
-pub(crate) fn set_vault_metadata(vault: &Vault, metadata_entry: MetadataEntry) -> Result<(), MetadataError> {
+pub(crate) fn set_vault_metadata(
+    vault: &Vault,
+    metadata_entry: MetadataEntry,
+) -> Result<(), MetadataError> {
     vault.database_connection.execute(
         "INSERT OR REPLACE INTO vault_metadata (meta_key, meta_value) VALUES (?1, ?2)",
         params![metadata_entry.key, metadata_entry.value],
@@ -130,8 +139,11 @@ pub(crate) fn remove_vault_metadata(vault: &Vault, key: &str) -> Result<(), Meta
 /// Updates the `_vavavult_update_time` metadata for the vault.
 pub(crate) fn touch_vault_update_time(vault: &Vault) -> Result<(), MetadataError> {
     let now = now_as_rfc3339_string();
-    set_vault_metadata(vault, MetadataEntry {
-        key: META_VAULT_UPDATE_TIME.to_string(),
-        value: now,
-    })
+    set_vault_metadata(
+        vault,
+        MetadataEntry {
+            key: META_VAULT_UPDATE_TIME.to_string(),
+            value: now,
+        },
+    )
 }

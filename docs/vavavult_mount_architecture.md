@@ -666,7 +666,7 @@ vavavult::vault::execute_extraction_task_standalone(
 **解决方案**：
 - 数据库查询（阶段 1）是快速操作，持锁时间极短。
 - 解密（阶段 2）是慢速操作，完全在锁外执行。
-- `StorageBackend` 的 `reader()` 方法返回独立的 `Box<dyn Read + Send>`，多个读取者之间互不干扰。
+- `StorageBackend` 的 `reader()` 方法返回独立的 `Box<dyn StorageReader>`（`Read + Seek + Send`），多个读取者之间互不干扰，并为后续分块随机访问读取提供底层能力。
 - 这意味着 N 个并发读取只会在数据库查询时短暂串行，解密过程完全并行。
 
 ### 7.4 写入的原子性（阶段 5）

@@ -13,7 +13,9 @@ use thiserror::Error;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
 use crate::vault::Vault;
-use crate::vault::add::{AddFileError, encrypt_addition_task, resolve_file_metadata, PendingAdditionTask};
+use crate::vault::add::{
+    AddFileError, PendingAdditionTask, encrypt_addition_task, resolve_file_metadata,
+};
 use crate::vault::metadata::MetadataError;
 use crate::vault::query::{QueryError, QueryResult};
 use crate::vault::remove::ForceRemoveError;
@@ -113,8 +115,7 @@ pub(crate) fn fix_file(
         source_modified_time,
     };
     let source_file = std::fs::File::open(source_path).map_err(AddFileError::IoError)?;
-    let addition_task =
-        encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
+    let addition_task = encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
 
     // 4. 校验替换是否合法
     if addition_task.file_entry.original_sha256sum != old_entry.original_sha256sum {

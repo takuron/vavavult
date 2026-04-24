@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::file::VaultPath;
-use vavavult::vault::{AddFileError, ExtractionTask, PrepareAdditionRequest, QueryResult, Vault};
 use vavavult::vault::resolve_file_metadata;
+use vavavult::vault::{AddFileError, ExtractionTask, PrepareAdditionRequest, QueryResult, Vault};
 
 mod common;
 use common::{

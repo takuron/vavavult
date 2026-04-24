@@ -1,9 +1,33 @@
 pub mod local;
 
+use crate::common::hash::VaultHash;
 use std::any::Any;
 use std::fmt::Debug;
-use std::io::{self, Read, Write};
-use crate::common::hash::VaultHash;
+use std::io::{self, Read, Seek, Write};
+
+/// A seekable reader returned by a storage backend.
+///
+/// Implementations must support byte-accurate `Read` and `Seek` operations so
+/// higher layers can build random-access encrypted readers on top of them.
+//
+// // 存储后端返回的可寻址读取器。
+// //
+// // 实现必须支持字节精确的 `Read` 与 `Seek` 操作，以便上层构建随机访问加密读取器。
+pub trait StorageReader: Read + Seek + Send {}
+
+impl<T> StorageReader for T where T: Read + Seek + Send {}
+
+/// A seekable writer returned by a storage backend.
+///
+/// Implementations must support byte-accurate `Write` and `Seek` operations so
+/// higher layers can write chunked encrypted content with explicit positions.
+//
+// // 存储后端返回的可寻址写入器。
+// //
+// // 实现必须支持字节精确的 `Write` 与 `Seek` 操作，以便上层按明确位置写入分块加密内容。
+pub trait StorageWriter: Write + Seek + Send {}
+
+impl<T> StorageWriter for T where T: Write + Seek + Send {}
 
 /// An opaque token holding information about a staged file operation.
 ///
@@ -43,27 +67,30 @@ pub trait StorageBackend: Send + Sync + Debug {
     // // * `hash` - 加密内容的 VaultHash (充当键)。
     fn exists(&self, hash: &VaultHash) -> io::Result<bool>;
 
-    /// Gets a reader for the stored data.
+    /// Gets a seekable reader for the stored data.
     ///
-    /// Used during extraction or restoration.
+    /// Used during extraction or restoration. The returned reader must support
+    /// `Read + Seek` so callers can perform random-access reads.
     //
-    // // 获取存储数据的读取器。
+    // // 获取存储数据的可寻址读取器。
     // //
-    // // 用于提取或恢复。
-    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn Read + Send>>;
+    // // 用于提取或恢复。返回的读取器必须支持 `Read + Seek`，以便调用方执行随机访问读取。
+    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn StorageReader>>;
 
     // --- Write Operations / 写操作 (Prepare -> Write -> Commit/Rollback) ---
 
     /// Stage 1: Prepare for writing.
     ///
-    /// Returns a `Writer` for writing data and a `StagingToken` representing this operation.
+    /// Returns a seekable `Writer` for writing data and a `StagingToken` representing this operation.
     /// Data written here is not yet permanent (e.g., written to a temp file).
+    /// The returned writer must support `Write + Seek` for chunked encrypted output.
     //
     // // 阶段 1: 准备写入。
     // //
-    // // 返回一个用于写入数据的 `Writer` 和一个代表此操作的 `StagingToken`。
+    // // 返回一个用于写入数据的可寻址 `Writer` 和一个代表此操作的 `StagingToken`。
     // // 此处写入的数据尚未持久化 (例如写入了临时文件)。
-    fn prepare_write(&self) -> io::Result<(Box<dyn Write + Send>, Box<dyn StagingToken>)>;
+    // // 返回的写入器必须支持 `Write + Seek`，以便写入分块加密输出。
+    fn prepare_write(&self) -> io::Result<(Box<dyn StorageWriter>, Box<dyn StagingToken>)>;
 
     /// Stage 2: Commit to write.
     ///

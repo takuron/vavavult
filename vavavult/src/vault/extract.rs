@@ -1,12 +1,12 @@
-use std::path::Path;
-use std::fs;
-use std::io::Write;
-use tempfile::NamedTempFile;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::crypto::encrypt::EncryptError;
 use crate::crypto::stream_cipher;
 use crate::storage::StorageBackend;
-use crate::vault::{query, QueryResult, Vault};
+use crate::vault::{QueryResult, Vault, query};
+use std::fs;
+use std::io::Write;
+use std::path::Path;
+use tempfile::NamedTempFile;
 
 /// Defines errors that can occur during the file extraction process.
 //
@@ -48,7 +48,9 @@ pub enum ExtractError {
     //
     // // 解密后文件的哈希与预期的原始哈希不匹配。
     // // 这表明保险库 `data/` 目录中的文件已损坏。
-    #[error("Integrity check failed for file '{path}': Expected original hash {expected}, but calculated {calculated}. The file in the vault might be corrupted.")]
+    #[error(
+        "Integrity check failed for file '{path}': Expected original hash {expected}, but calculated {calculated}. The file in the vault might be corrupted."
+    )]
     IntegrityCheckFailed {
         path: String,
         expected: String,
@@ -59,7 +61,7 @@ pub enum ExtractError {
     //
     // // 流解密过程中发生错误。
     #[error("Stream cipher error: {0}")]
-    StreamCipherError(#[from] stream_cipher::StreamCipherError)
+    StreamCipherError(#[from] stream_cipher::StreamCipherError),
 }
 
 /// A "ticket" containing all necessary information to perform a file extraction.
@@ -179,11 +181,8 @@ pub(crate) fn decrypt_extraction_task(
     let mut encrypted_reader = storage.reader(&task.file_hash)?;
 
     // 2. 执行解密，写入到调用方提供的 writer
-    let calculated_original_hash = stream_cipher::stream_decrypt(
-        &mut encrypted_reader,
-        &mut writer,
-        &task.password,
-    )?;
+    let calculated_original_hash =
+        stream_cipher::stream_decrypt(&mut encrypted_reader, &mut writer, &task.password)?;
 
     // 3. 完整性检查
     if calculated_original_hash != task.expected_original_hash {
@@ -241,7 +240,9 @@ pub(crate) fn decrypt_extraction_task_to_file(
     decrypt_extraction_task(storage, task, &temp_file)?;
 
     // 4. 原子持久化
-    temp_file.persist(destination_path).map_err(EncryptError::TempFilePersist)?;
+    temp_file
+        .persist(destination_path)
+        .map_err(EncryptError::TempFilePersist)?;
 
     Ok(())
 }
