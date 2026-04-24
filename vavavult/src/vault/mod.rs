@@ -1341,10 +1341,11 @@ impl Vault {
     // --- Remove API ---
     // // --- 删除 API ---
 
-    /// Permanently removes a file from the vault.
+    /// Removes one path mapping for a file entity from the vault.
     ///
-    /// Deletes the database record (cascading to tags/metadata) and the
-    /// physical encrypted file from the storage backend.
+    /// The hash-based compatibility API unlinks the first mapping for this
+    /// entity. The database record and encrypted payload are deleted only when
+    /// no mappings remain.
     ///
     /// # Arguments
     /// * `hash` - The hash of the file to remove.
@@ -1352,9 +1353,10 @@ impl Vault {
     /// # Errors
     /// Returns `RemoveError` if file not found or deletion fails.
     //
-    // // 从保险库中永久移除文件。
+    // // 从保险库中移除一个文件实体的路径映射。
     // //
-    // // 删除数据库记录 (级联删除标签/元数据) 以及存储后端中的物理加密文件。
+    // // 这个基于哈希的兼容 API 会解除该实体的第一条映射。
+    // // 只有当没有剩余映射时，才删除数据库记录和加密载荷。
     // //
     // // # 参数
     // // * `hash` - 要移除的文件的哈希。
