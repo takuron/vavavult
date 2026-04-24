@@ -112,7 +112,7 @@ pub(crate) fn fetch_full_entry(
         })?
         .collect::<Result<Vec<MetadataEntry>, _>>()?;
 
-    // 构建 V2 FileEntry
+    // 构建 V3 FileEntry
     Ok(FileEntry {
         sha256sum: sha256sum.clone(),
         path,
@@ -383,7 +383,7 @@ pub(crate) fn check_by_original_hash(
         })
         .optional()?
     {
-        // 解构 V2 字段
+        // 解构 V3 字段
         let (sha256sum, path, ret_original_sha256sum, encrypt_password) = res;
         // 确认返回的哈希与查询的哈希一致
         assert_eq!(ret_original_sha256sum, *original_hash);
@@ -435,11 +435,11 @@ pub struct ListResult {
 /// 一个内部辅助函数，用于将原始 DB 行处理为 `FileEntry` 列表。
 fn process_rows_to_entries(
     vault: &Vault,
-    // [修改] 行元组现在包含 V2 字段
+    // [修改] 行元组现在包含 V3 字段
     rows: Vec<(VaultHash, VaultPath, VaultHash, String)>,
 ) -> Result<Vec<FileEntry>, QueryError> {
     let mut entries = Vec::with_capacity(rows.len());
-    // [修改] 解构 V2 字段
+    // [修改] 解构 V3 字段
     for (sha256sum, path, original_sha256sum, encrypt_password) in rows {
         let entry = fetch_full_entry(
             &vault.database_connection,
@@ -455,12 +455,12 @@ fn process_rows_to_entries(
 
 /// 列出保险库中的所有文件 (返回 FileEntry)。
 pub(crate) fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError> {
-    // [修改] 查询 V2 files 表
+    // [修改] 查询 V3 files 表
     let mut stmt = vault
         .database_connection
         .prepare("SELECT sha256sum, path, original_sha256sum, encrypt_password FROM files")?;
 
-    // [修改] 映射 V2 字段
+    // [修改] 映射 V3 字段
     let rows = stmt
         .query_map([], |row| {
             Ok((
@@ -472,7 +472,7 @@ pub(crate) fn list_all_files(vault: &Vault) -> Result<Vec<FileEntry>, QueryError
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    // 使用 V2 的 process_rows_to_entries
+    // 使用 V3 的 process_rows_to_entries
     process_rows_to_entries(vault, rows)
 }
 
@@ -633,14 +633,14 @@ pub(crate) fn list_all_recursive(
 
 /// 按特定标签查找文件。
 pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FileEntry>, QueryError> {
-    // JOIN files f ... 选择 V2 字段
+    // JOIN files f ... 选择 V3 字段
     let mut stmt = vault.database_connection.prepare(
         "SELECT f.sha256sum, f.path, f.original_sha256sum, f.encrypt_password
          FROM files f JOIN tags t ON f.sha256sum = t.file_sha256sum
          WHERE t.tag = ?1",
     )?;
 
-    //  映射 V2 字段
+    //  映射 V3 字段
     let rows = stmt
         .query_map(params![tag], |row| {
             Ok((
@@ -667,7 +667,7 @@ pub(crate) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEn
          WHERE LOWER(f.path) LIKE ?1 OR LOWER(t.tag) LIKE ?1",
     )?;
 
-    // 3. 映射 V2 字段
+    // 3. 映射 V3 字段
     let rows = stmt
         .query_map(params![like_pattern], |row| {
             Ok((

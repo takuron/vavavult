@@ -1,12 +1,12 @@
+use crate::common::hash::VaultHash;
+use crate::crypto::stream_cipher;
+use crate::utils::random::generate_random_string;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use std::fs;
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
-use crate::crypto::stream_cipher;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use tempfile::NamedTempFile;
-use crate::common::hash::VaultHash;
-use crate::utils::random::generate_random_string;
 
 /// Defines errors that can occur during high-level encryption/decryption operations.
 //
@@ -50,14 +50,14 @@ pub enum EncryptError {
     TempFilePersist(#[from] tempfile::PersistError),
 }
 
-/// V2: 创建一个新的、带随机明文的加密检查字符串 "raw:encrypted_base64"
+/// V3: 创建一个新的、带随机明文的加密检查字符串 "raw:encrypted_base64"
 ///
 /// # Arguments
 /// * `password` - 用于加密的密码
 ///
 /// # Returns
 /// 成功时返回 "raw:encrypted_base64" 格式的字符串
-pub fn create_v2_encrypt_check(password: &str) -> Result<String, EncryptError> {
+pub fn create_v3_encrypt_check(password: &str) -> Result<String, EncryptError> {
     // [修改] 1. 生成一个 16 位的随机字母数字字符串作为 "raw"
     // (使用我们已有的 random 工具)
     let raw_check_string = generate_random_string(16);
@@ -69,7 +69,7 @@ pub fn create_v2_encrypt_check(password: &str) -> Result<String, EncryptError> {
     Ok(format!("{}:{}", raw_check_string, encrypted_base64))
 }
 
-/// V2: 验证加密检查字符串
+/// V3: 验证加密检查字符串
 ///
 /// # Arguments
 /// * `check_string` - "raw:encrypted_base64" 格式的字符串
@@ -77,7 +77,7 @@ pub fn create_v2_encrypt_check(password: &str) -> Result<String, EncryptError> {
 ///
 /// # Returns
 /// `true` 如果密码正确且解密后的字符串与 raw 匹配，否则 `false`
-pub fn verify_v2_encrypt_check(check_string: &str, password: &str) -> bool {
+pub fn verify_v3_encrypt_check(check_string: &str, password: &str) -> bool {
     let parts: Vec<&str> = check_string.splitn(2, ':').collect();
     if parts.len() != 2 {
         return false; // 格式无效
@@ -87,10 +87,9 @@ pub fn verify_v2_encrypt_check(check_string: &str, password: &str) -> bool {
 
     match decrypt_string(encrypted_base64, password) {
         Ok(decrypted_raw) => decrypted_raw == raw, // 比较解密后的是否等于原始的
-        Err(_) => false, // 解密失败
+        Err(_) => false,                           // 解密失败
     }
 }
-
 
 // --- 文件加解密 (保持不变) ---
 
@@ -104,11 +103,8 @@ pub fn _encrypt_file(
     let mut source_file = File::open(source_path)?;
     let mut dest_file = File::create(dest_path)?;
 
-    let (encrypted_sha256, original_sha256) = stream_cipher::stream_encrypt_and_hash(
-        &mut source_file,
-        &mut dest_file,
-        password,
-    )?;
+    let (encrypted_sha256, original_sha256) =
+        stream_cipher::stream_encrypt_and_hash(&mut source_file, &mut dest_file, password)?;
     Ok((encrypted_sha256, original_sha256))
 }
 
@@ -136,8 +132,7 @@ pub fn _decrypt_file(
     // 3. 将流式解密写入临时文件
     //    stream_decrypt 现在会流式写入，并在最后验证 GCM 标签。
     //    如果标签无效，它会返回 Err，temp_file 会被自动删除。
-    let original_hash =
-        stream_cipher::stream_decrypt(&mut source_file, &mut temp_file, password)?;
+    let original_hash = stream_cipher::stream_decrypt(&mut source_file, &mut temp_file, password)?;
 
     // 4. 认证成功，将临时文件重命名为最终目标路径
     temp_file.persist(dest_path)?;
@@ -179,22 +174,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_v2_encrypt_check_logic() {
+    fn test_v3_encrypt_check_logic() {
         let password = "my_strong_password_123";
 
         // 1. 创建一个新的 check 字符串
-        let check_string = create_v2_encrypt_check(password)
-            .expect("Failed to create V2 check string");
+        let check_string =
+            create_v3_encrypt_check(password).expect("Failed to create V3 check string");
 
-        println!("Generated V2 Check String: {}", check_string);
+        println!("Generated V3 Check String: {}", check_string);
 
         // 2. 使用正确密码验证
-        assert!(verify_v2_encrypt_check(&check_string, password), "Verification should succeed with correct password");
+        assert!(
+            verify_v3_encrypt_check(&check_string, password),
+            "Verification should succeed with correct password"
+        );
 
         // 3. 使用错误密码验证
-        assert!(!verify_v2_encrypt_check(&check_string, "wrong_password"), "Verification should fail with incorrect password");
+        assert!(
+            !verify_v3_encrypt_check(&check_string, "wrong_password"),
+            "Verification should fail with incorrect password"
+        );
 
         // 4. 使用格式错误的字符串验证
-        assert!(!verify_v2_encrypt_check("invalid_format", password), "Verification should fail with invalid format");
+        assert!(
+            !verify_v3_encrypt_check("invalid_format", password),
+            "Verification should fail with invalid format"
+        );
     }
 }

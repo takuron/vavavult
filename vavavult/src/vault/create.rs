@@ -1,14 +1,16 @@
+use crate::common::constants::{
+    CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME,
+};
+use crate::crypto::encrypt::{EncryptError, create_v3_encrypt_check};
+use crate::storage::StorageBackend;
+use crate::utils::time::now_as_rfc3339_string;
+use crate::vault::Vault;
+use crate::vault::config::VaultConfig;
+use crate::vault::create::CreateError::VaultAlreadyExists;
+use rusqlite::{Connection, params};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use rusqlite::{Connection, params};
-use crate::common::constants::{CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
-use crate::crypto::encrypt::{create_v2_encrypt_check,  EncryptError};
-use crate::storage::StorageBackend;
-use crate::utils::time::now_as_rfc3339_string;
-use crate::vault::config::VaultConfig;
-use crate::vault::create::CreateError::VaultAlreadyExists;
-use crate::vault::Vault;
 
 /// Defines errors that can occur during vault creation.
 //
@@ -51,17 +53,17 @@ pub(crate) fn create_vault(
     vault_path: &Path,
     vault_name: &str,
     password: Option<&str>,
-    backend: Arc<dyn StorageBackend>
+    backend: Arc<dyn StorageBackend>,
 ) -> Result<Vault, CreateError> {
-    if vault_path.exists() && fs::read_dir(vault_path)?.next().is_some(){
-        return  Err(VaultAlreadyExists(vault_path.to_path_buf()));
+    if vault_path.exists() && fs::read_dir(vault_path)?.next().is_some() {
+        return Err(VaultAlreadyExists(vault_path.to_path_buf()));
     } else {
         fs::create_dir_all(vault_path)?;
     }
 
     let encrypted = password.is_some();
     let encrypt_check = if let Some(p) = password {
-        create_v2_encrypt_check(p)?
+        create_v3_encrypt_check(p)?
     } else {
         "".to_string()
     };
@@ -116,19 +118,14 @@ pub(crate) fn create_vault(
             meta_value          TEXT NOT NULL,
             FOREIGN KEY (file_sha256sum) REFERENCES files(sha256sum) ON DELETE CASCADE
          );
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_link ON metadata(file_sha256sum, meta_key);"
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_link ON metadata(file_sha256sum, meta_key);",
     )?;
 
     // 将保险库元数据插入到新表中
     let now = now_as_rfc3339_string();
     conn.execute(
         "INSERT INTO vault_metadata (meta_key, meta_value) VALUES (?1, ?2), (?3, ?4)",
-        params![
-            META_VAULT_CREATE_TIME,
-            &now,
-            META_VAULT_UPDATE_TIME,
-            &now
-        ],
+        params![META_VAULT_CREATE_TIME, &now, META_VAULT_UPDATE_TIME, &now],
     )?;
 
     let vault = Vault {
@@ -139,4 +136,3 @@ pub(crate) fn create_vault(
     };
     Ok(vault)
 }
-

@@ -1,7 +1,7 @@
 use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
-use crate::crypto::encrypt::{EncryptError, create_v2_encrypt_check, verify_v2_encrypt_check};
+use crate::crypto::encrypt::{EncryptError, create_v3_encrypt_check, verify_v3_encrypt_check};
 use crate::file::{PathError, VaultPath};
 use crate::storage::StorageBackend;
 use crate::vault::config::VaultConfig;
@@ -332,7 +332,7 @@ pub(crate) fn update_password(
         return Ok(());
     }
 
-    if !verify_v2_encrypt_check(&config.encrypt_check, old_password) {
+    if !verify_v3_encrypt_check(&config.encrypt_check, old_password) {
         return Err(UpdateError::InvalidOldPassword);
     }
 
@@ -357,7 +357,7 @@ pub(crate) fn update_password(
     conn.execute_batch(&rekey_sql)?;
 
     // 5. Generate the new encrypt_check and update the config
-    let new_encrypt_check = create_v2_encrypt_check(new_password)?;
+    let new_encrypt_check = create_v3_encrypt_check(new_password)?;
     config.encrypt_check = new_encrypt_check;
 
     // 6. Write the updated config back to master.json

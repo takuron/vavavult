@@ -1,7 +1,9 @@
 use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
-use vavavult::common::constants::{CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
+use vavavult::common::constants::{
+    CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME,
+};
 use vavavult::storage::local::LocalStorage;
 use vavavult::vault::{CreateError, OpenError, UpdateError, Vault};
 
@@ -16,8 +18,8 @@ mod common;
 #[test]
 fn test_create_non_encrypted_vault_success() {
     let dir = tempdir().unwrap();
-    let vault_path = dir.path().join("v2-non-encrypted");
-    let vault_name = "my-v2-test-vault";
+    let vault_path = dir.path().join("v3-non-encrypted");
+    let vault_name = "my-v3-test-vault";
 
     let result = Vault::create_vault_local(&vault_path, vault_name, None);
     assert!(result.is_ok());
@@ -48,9 +50,9 @@ fn test_create_non_encrypted_vault_success() {
 #[test]
 fn test_create_encrypted_vault_success() {
     let dir = tempdir().unwrap();
-    let vault_path = dir.path().join("v2-encrypted");
-    let vault_name = "my-v2-secure-vault";
-    let password = "v2-password-!@#";
+    let vault_path = dir.path().join("v3-encrypted");
+    let vault_name = "my-v3-secure-vault";
+    let password = "v3-password-!@#";
 
     // 1. 创建
     let backend = Arc::new(LocalStorage::new(&vault_path));
@@ -75,7 +77,10 @@ fn test_create_encrypted_vault_success() {
 
     // c. 尝试使用正确密码打开 -> 应该成功
     let open_success = Vault::open_vault(&vault_path, Some(password), backend.clone());
-    assert!(open_success.is_ok(), "Should be able to open vault with correct password");
+    assert!(
+        open_success.is_ok(),
+        "Should be able to open vault with correct password"
+    );
 }
 
 /// 测试：尝试在非空目录创建保险库应报错。
@@ -90,7 +95,10 @@ fn test_create_vault_already_exists_error() {
 
     let result = Vault::create_vault_local(&vault_path, "test", None);
     // 断言返回特定的 VaultAlreadyExists 错误
-    assert!(matches!(result.unwrap_err(), CreateError::VaultAlreadyExists(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        CreateError::VaultAlreadyExists(_)
+    ));
 }
 
 /// 测试：保险库的持久化能力 (打开-关闭-重开)。
@@ -121,7 +129,7 @@ fn test_open_and_reopen_vault_cycle() {
 fn test_open_encrypted_vault_access_control() {
     let dir = tempdir().unwrap();
     let vault_path = dir.path().join("secure-vault");
-    let password = "v2-super-secret";
+    let password = "v3-super-secret";
 
     // 创建
     {
@@ -129,10 +137,16 @@ fn test_open_encrypted_vault_access_control() {
     }
 
     // 场景 1: 未提供密码
-    assert!(matches!(Vault::open_vault_local(&vault_path, None).unwrap_err(), OpenError::PasswordRequired));
+    assert!(matches!(
+        Vault::open_vault_local(&vault_path, None).unwrap_err(),
+        OpenError::PasswordRequired
+    ));
 
     // 场景 2: 密码错误
-    assert!(matches!(Vault::open_vault_local(&vault_path, Some("wrong")).unwrap_err(), OpenError::InvalidPassword));
+    assert!(matches!(
+        Vault::open_vault_local(&vault_path, Some("wrong")).unwrap_err(),
+        OpenError::InvalidPassword
+    ));
 
     // 场景 3: 密码正确
     assert!(Vault::open_vault_local(&vault_path, Some(password)).is_ok());
@@ -162,4 +176,35 @@ fn test_extension_features() {
     // 错误处理：功能名不能包含空格
     let err = vault.enable_feature("invalid feature name");
     assert!(matches!(err, Err(UpdateError::InvalidFeatureName(_))));
+}
+
+/// 测试：尝试打开旧版本 (V2) 的保险库应报错。
+/// 验证 "阻止读取所有版本号不是 3 的文件库" 的要求。
+#[test]
+fn test_open_v2_vault_should_fail() {
+    let dir = tempdir().unwrap();
+    let vault_path = dir.path().join("old-v2-vault");
+    fs::create_dir_all(&vault_path).unwrap();
+
+    // 手动创建一个 V2 格式的 master.json
+    let v2_config = serde_json::json!({
+        "name": "old-vault",
+        "version": 2,
+        "encrypted": false,
+        "encryptCheck": "",
+        "database": "master.db"
+    });
+    fs::write(vault_path.join("master.json"), v2_config.to_string()).unwrap();
+    // 还需要一个空的数据库文件，否则会报 DatabaseNotFound 而不是 UnsupportedVersion
+    fs::write(vault_path.join("master.db"), "").unwrap();
+
+    let result = Vault::open_vault_local(&vault_path, None);
+
+    match result {
+        Err(OpenError::UnsupportedVersion { supported, found }) => {
+            assert_eq!(supported, 3);
+            assert_eq!(found, 2);
+        }
+        _ => panic!("Expected UnsupportedVersion error, got {:?}", result),
+    }
 }
