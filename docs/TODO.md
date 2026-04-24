@@ -97,3 +97,31 @@
 - [ ] 认证逻辑单元测试
 - [ ] 集成测试：启动服务器 → HTTP 客户端发送 WebDAV 请求 → 验证响应内容
 - [ ] CLI 集成测试：`mount` → 验证服务器启动 → `unmount` → 验证服务器停止
+
+---
+
+## 破坏性重构：移除 name 字段，实现多对一硬链接架构
+
+> 注意：此重构放弃向后兼容，主要更改数据库结构，将原本存储在 `files` 表中的完整路径 `path` 移除。
+> 引入类似于文件系统 inode 和 dentry 的结构，分离文件内容实体与目录/文件名映射，从而允许一个文件实体被多个路径引用。外部暴露的 `FileEntry` API 保持向下兼容。
+
+### 阶段 1：底层数据库定义修改 (`vavavult/src/vault/create.rs`)
+- [ ] 移除 `files` 表的 `path` 字段。
+- [ ] 新增 `directories` 表，用于维护目录树结构 (`id`, `parent_id`, `name`)。
+- [ ] 新增 `file_entries` 表，用于维护文件映射/硬链接 (`id`, `directory_id`, `name`, `file_sha256sum`)。
+- [ ] 在新建保险库时，默认插入一条根目录记录作为挂载点。
+
+### 阶段 2：核心查询与路径解析逻辑适配 (`vavavult/src/vault/query.rs` 等)
+- [ ] 实现路径解析辅助方法 `resolve_directory(path: &VaultPath)`，按层级解析目录返回 `directory_id`。
+- [ ] 重写 `find_by_path`，通过 `directories` 和 `file_entries` 表解析最终引用的文件，保持返回 `FileEntry` 结构体不变。
+- [ ] 重写 `find_by_hash`，通过 CTE 向上追溯完整路径，多路径时默认返回第一条。
+- [ ] 重写 `list_directory`，支持同时从 `directories` 和 `file_entries` 获取子目录和文件列表。
+
+### 阶段 3：写入与更新逻辑适配 (`vavavult/src/vault/add.rs`, `remove.rs`, `update.rs`)
+- [ ] 修改 `commit_addition_tasks`，自动逐级创建缺失目录，并在 `file_entries` 中插入映射。利用新结构自动实现相同文件实体的去重复用。
+- [ ] 修改 `remove_file`，仅解除 `file_entries` 映射。当最后一条映射被解除时（引用计数清零），清理 `files` 表和物理存储。
+- [ ] 修改 `move_file` 和 `rename_file_inplace`，仅更新 `file_entries` 中的 `directory_id` 或 `name`，极速完成重命名/移动，避免操作底层文件实体。
+
+### 阶段 4：测试与验证
+- [ ] 运行并修复回归测试（文件生命周期、重命名、重索引等）。
+- [ ] 新增多路径映射与引用计数删除的专项断言测试，确保文件实体在最后一次引用解除前不被误删。
