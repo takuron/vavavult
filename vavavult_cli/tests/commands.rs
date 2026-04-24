@@ -59,7 +59,7 @@ fn test_vault_creation_and_status() -> anyhow::Result<()> {
             // 断言标准输出包含预期的内容
             predicate::str::contains("Vault 'test-vault' is now open.")
                 .and(predicate::str::contains("Name:           test-vault"))
-                .and(predicate::str::contains("Total Files:    0")),
+                .and(predicate::str::contains("Total Files:    0(0)")),
         );
 
     Ok(())

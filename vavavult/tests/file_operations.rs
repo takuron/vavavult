@@ -75,6 +75,8 @@ fn test_duplicate_content_creates_hardlink_mapping() {
     let hash2 = vault.add_file(&file_path, &path2).unwrap();
 
     assert_eq!(hash1, hash2);
+    assert_eq!(vault.get_file_count().unwrap(), 2);
+    assert_eq!(vault.get_storage_file_count().unwrap(), 1);
     assert_eq!(
         vault.list_paths_by_hash(&hash1).unwrap(),
         vec![path1.clone(), path2.clone()]

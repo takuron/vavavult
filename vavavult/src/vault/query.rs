@@ -839,8 +839,17 @@ pub(crate) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEn
     process_rows_to_entries(vault, rows)
 }
 
-/// 高效地获取保险库中文件实体的总数。
+/// 高效地获取保险库中文件路径映射的总数。
 pub(crate) fn get_total_file_count(vault: &Vault) -> Result<i64, QueryError> {
+    let count =
+        vault
+            .database_connection
+            .query_row("SELECT COUNT(*) FROM file_entries", [], |row| row.get(0))?;
+    Ok(count)
+}
+
+/// 高效地获取保险库中实际存储文件实体的总数。
+pub(crate) fn get_storage_file_count(vault: &Vault) -> Result<i64, QueryError> {
     let count = vault
         .database_connection
         .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;

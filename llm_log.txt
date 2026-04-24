@@ -8,3 +8,4 @@
 [2026-04-24T16:41:43+08:00] Implemented and tested hardlink phase 3: commit now creates directory/file_entries mappings with content-entity reuse, remove unlinks mappings with ref-count cleanup, move/rename update mappings only, and regression/specialized tests pass.
 [2026-04-24T16:46:13+08:00] Synced hardlink phase 3 TODO/readme status and clarified remove_file public documentation for mapping-based removal semantics.
 [2026-04-24T19:14:55+08:00] Updated path listing APIs to return DirectoryEntry/FilePathEntry/ListPathEntry and changed recursive listing to FilePathEntry, adapting CLI, VFS, tests, and docs.
+[2026-04-24T19:26:38+08:00] Changed get_file_count to count path mappings, added get_storage_file_count for stored file entities, and updated CLI status to show total(storage).

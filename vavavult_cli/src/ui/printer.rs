@@ -286,7 +286,10 @@ pub fn print_status(status: &VaultStatus) {
     println!("  Version:        {}", status.version);
     println!("  Features:       {}", features_display);
     println!("  Encryption:     {}", encryption_status);
-    println!("  Total Files:    {}", status.file_count);
+    println!(
+        "  Total Files:    {}({})",
+        status.file_count, status.storage_file_count
+    );
     println!("  Created At:     {}", create_time_local);
     println!("  Last Updated:   {}", update_time_local);
     println!("--------------------");

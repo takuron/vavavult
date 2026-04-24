@@ -48,8 +48,8 @@ use crate::vault::open::open_vault;
 use crate::vault::query::{
     check_by_hash, check_by_hash_no_validation, check_by_original_hash, check_by_path,
     check_by_path_no_validation, find_by_hashes, find_by_keyword, find_by_paths, find_by_tag,
-    get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files,
-    list_all_recursive, list_by_path, list_paths_by_hash,
+    get_enabled_vault_features, get_storage_file_count, get_total_file_count,
+    is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path, list_paths_by_hash,
 };
 use crate::vault::remove::{force_remove_file, remove_file, remove_file_by_path};
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
@@ -605,27 +605,52 @@ impl Vault {
         list_all_recursive(self, path)
     }
 
-    /// Gets the total number of files in the vault.
+    /// Gets the total number of file path entries in the vault.
     ///
-    /// This is a high-performance query that directly counts database rows.
+    /// This counts the current directory tree's file mappings (`file_entries`),
+    /// so hardlink-style duplicate paths are counted separately.
     ///
     /// # Returns
-    /// The count of files as an `i64`.
+    /// The count of file path entries as an `i64`.
     ///
     /// # Errors
     /// Returns `QueryError` on database failures.
     //
-    // // 获取保险库中的文件总数。
+    // // 获取保险库当前目录树中的文件路径条目总数。
     // //
-    // // 这是一个高性能查询，直接对数据库行进行计数。
+    // // 这会统计当前目录树的文件映射（`file_entries`），因此硬链接式重复路径会被分别计数。
     // //
     // // # 返回
-    // // 文件计数，类型为 `i64`。
+    // // 文件路径条目计数，类型为 `i64`。
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
     pub fn get_file_count(&self) -> Result<i64, QueryError> {
         get_total_file_count(self)
+    }
+
+    /// Gets the total number of actual stored file entities in the vault.
+    ///
+    /// This counts unique encrypted file records (`files`) and therefore does not
+    /// count multiple path mappings to the same stored content separately.
+    ///
+    /// # Returns
+    /// The count of actual stored file entities as an `i64`.
+    ///
+    /// # Errors
+    /// Returns `QueryError` on database failures.
+    //
+    // // 获取保险库中实际存储文件实体的总数。
+    // //
+    // // 这会统计唯一的加密文件记录（`files`），因此多个路径映射到同一存储内容时不会重复计数。
+    // //
+    // // # 返回
+    // // 实际存储文件实体计数，类型为 `i64`。
+    // //
+    // // # 错误
+    // // 如果发生数据库故障，则返回 `QueryError`。
+    pub fn get_storage_file_count(&self) -> Result<i64, QueryError> {
+        get_storage_file_count(self)
     }
 
     // --- Add APIs ---

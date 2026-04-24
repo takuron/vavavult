@@ -597,7 +597,8 @@ handle_unmount(app_state):
 | `vault.prepare_extraction_task(&VaultHash)` | 阶段 1: 准备文件提取任务 (需要锁) |
 | `vault.execute_extraction_task(&ExtractionTask, &Path)` | 阶段 2: 执行解密 (可在锁外) |
 | `vault.get_vault_metadata(&str)` | 获取 vault 级别的元数据 |
-| `vault.get_file_count()` | 获取文件总数 (用于状态展示) |
+| `vault.get_file_count()` | 获取当前目录文件映射总数 (用于状态展示) |
+| `vault.get_storage_file_count()` | 获取实际存储文件实体总数 (用于状态展示) |
 
 也可使用 standalone 函数来完全避免持有 Vault 引用：
 
