@@ -1,4 +1,4 @@
-﻿use crate::errors::CliError;
+use crate::errors::CliError;
 use crate::ui::printer::print_list_result;
 use vavavult::file::VaultPath;
 use vavavult::vault::{FilePathEntry, ListPathEntry, Vault};
@@ -49,4 +49,3 @@ pub fn handle_list(
 
     Ok(())
 }
-

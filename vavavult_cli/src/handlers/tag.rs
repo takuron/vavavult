@@ -1,4 +1,4 @@
-﻿use crate::core::helpers::{Target, identify_target};
+use crate::core::helpers::{Target, identify_target};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -56,14 +56,22 @@ fn get_files_to_tag(vault: &Vault, target: &str) -> Result<(Vec<TaggedFile>, Str
                     }
                 };
                 let description = format!("file '{}'", vault_path);
-                Ok((vec![TaggedFile { path: vault_path, entry }], description))
+                Ok((
+                    vec![TaggedFile {
+                        path: vault_path,
+                        entry,
+                    }],
+                    description,
+                ))
             } else {
                 // 2b: 路径是目录 (自动递归)
                 let description = format!("directory '{}' (recursive)", vault_path);
                 println!("Recursively scanning directory '{}'...", vault_path);
                 let mut files = Vec::new();
                 for file_path_entry in vault.list_all_recursive(&vault_path)? {
-                    if let QueryPathResult::Found(entry) = vault.find_by_path(&file_path_entry.path)? {
+                    if let QueryPathResult::Found(entry) =
+                        vault.find_by_path(&file_path_entry.path)?
+                    {
                         files.push(TaggedFile {
                             path: file_path_entry.path,
                             entry,
@@ -75,8 +83,6 @@ fn get_files_to_tag(vault: &Vault, target: &str) -> Result<(Vec<TaggedFile>, Str
         }
     }
 }
-
-
 
 /// 主处理器：添加标签
 
@@ -143,11 +149,7 @@ pub fn handle_tag_add(vault: &mut Vault, target: &str, tags: &[String]) -> Resul
             Err(e) => {
                 fail_count += 1;
 
-                pb.println(format!(
-                    "Failed to tag {}: {}",
-                    entry.path,
-                    e
-                ));
+                pb.println(format!("Failed to tag {}: {}", entry.path, e));
             }
         }
 
@@ -240,9 +242,7 @@ pub fn handle_tag_remove(vault: &mut Vault, target: &str, tags: &[String]) -> Re
             if let Err(e) = vault.remove_tag(&entry.path, tag) {
                 pb.println(format!(
                     "Failed to remove tag '{}' from {}: {}",
-                    tag,
-                    entry.path,
-                    e
+                    tag, entry.path, e
                 ));
 
                 all_tags_removed_for_this_file = false;
@@ -330,11 +330,7 @@ pub fn handle_tag_clear(vault: &mut Vault, target: &str) -> Result<(), CliError>
             Ok(_) => success_count += 1,
             Err(e) => {
                 fail_count += 1;
-                pb.println(format!(
-                    "Failed to clear tags for {}: {}",
-                    entry.path,
-                    e
-                ));
+                pb.println(format!("Failed to clear tags for {}: {}", entry.path, e));
             }
         }
         if total_count > 1 {
@@ -409,8 +405,7 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
                 if let Err(e) = vault.remove_tag(&entry.path, old_tag) {
                     pb.println(format!(
                         "Failed to remove old color from {}: {}",
-                        entry.path,
-                        e
+                        entry.path, e
                     ));
                     fail_count += 1;
                     continue;
@@ -421,11 +416,7 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
         if color_lower != "none" {
             let new_tag = format!("_color:{}", color_lower);
             if let Err(e) = vault.add_tag(&entry.path, &new_tag) {
-                pb.println(format!(
-                    "Failed to set color for {}: {}",
-                    entry.path,
-                    e
-                ));
+                pb.println(format!("Failed to set color for {}: {}", entry.path, e));
                 fail_count += 1;
             } else {
                 success_count += 1;
@@ -443,6 +434,3 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
     );
     Ok(())
 }
-
-
-

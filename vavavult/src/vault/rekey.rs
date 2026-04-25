@@ -1,13 +1,13 @@
 //! Implements the logic for re-keying a file in the vault.
 use crate::common::hash::VaultHash;
-use crate::crypto::chunked::{chunked_re_encrypt, ChunkedCryptoError};
+use crate::crypto::chunked::{ChunkedCryptoError, chunked_re_encrypt};
 use crate::file::FileEntry;
 use crate::storage::{StagingToken, StorageBackend};
 use crate::utils::random::generate_random_password;
 use crate::vault::query::{self, QueryError, QueryFileResult};
 use crate::vault::{MetadataError, Vault};
-use rusqlite::params;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 
 /// Defines errors that can occur during the file re-keying process.
 //

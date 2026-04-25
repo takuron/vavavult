@@ -1,6 +1,6 @@
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::vault::metadata::MetadataError;
-use crate::vault::{query, QueryFileResult, Vault};
+use crate::vault::{QueryFileResult, Vault, query};
 use rusqlite::params;
 
 /// Defines errors that can occur during the file removal process.

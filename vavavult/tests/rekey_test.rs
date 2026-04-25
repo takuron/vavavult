@@ -1,4 +1,4 @@
-﻿use std::fs;
+use std::fs;
 use std::io::Write;
 use tempfile::tempdir;
 use vavavult::file::VaultPath;
@@ -139,4 +139,3 @@ fn update_password_e2e() {
         Err(UpdateError::InvalidOldPassword)
     ));
 }
-

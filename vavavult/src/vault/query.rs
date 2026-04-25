@@ -3,7 +3,7 @@ use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
 use crate::file::{FileEntry, FilePathEntry, PathError, VaultPath};
 use crate::vault::Vault;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 /// Represents the result of a query that seeks a single `FileEntry`.
 //

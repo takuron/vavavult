@@ -1,4 +1,4 @@
-﻿//! Core business logic helpers, independent of UI.
+//! Core business logic helpers, independent of UI.
 
 use crate::errors::CliError;
 use chrono::{DateTime, ParseError, Utc};
@@ -51,13 +51,15 @@ pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, CliErro
         Target::Path(p) => {
             // 如果是路径，查询数据库
             match vault.find_by_path(&p)? {
-                QueryPathResult::Found(path_entry) => match vault.find_by_hash(&path_entry.sha256sum)? {
-                    QueryFileResult::Found(entry) => Ok(entry),
-                    QueryFileResult::NotFound => Err(CliError::EntryNotFound(format!(
-                        "File not found at path '{}'.",
-                        p
-                    ))),
-                },
+                QueryPathResult::Found(path_entry) => {
+                    match vault.find_by_hash(&path_entry.sha256sum)? {
+                        QueryFileResult::Found(entry) => Ok(entry),
+                        QueryFileResult::NotFound => Err(CliError::EntryNotFound(format!(
+                            "File not found at path '{}'.",
+                            p
+                        ))),
+                    }
+                }
                 QueryPathResult::NotFound => Err(CliError::EntryNotFound(format!(
                     "File not found at path '{}'.",
                     p
@@ -138,10 +140,12 @@ pub fn get_all_files_recursively(
     if !dir_vault_path.is_dir() {
         // 如果用户传入了文件路径，则只返回该文件
         return match vault.find_by_path(&dir_vault_path)? {
-            QueryPathResult::Found(path_entry) => match vault.find_by_hash(&path_entry.sha256sum)? {
-                QueryFileResult::Found(entry) => Ok(vec![entry]),
-                QueryFileResult::NotFound => Ok(Vec::new()),
-            },
+            QueryPathResult::Found(path_entry) => {
+                match vault.find_by_hash(&path_entry.sha256sum)? {
+                    QueryFileResult::Found(entry) => Ok(vec![entry]),
+                    QueryFileResult::NotFound => Ok(Vec::new()),
+                }
+            }
             QueryPathResult::NotFound => Ok(Vec::new()),
         };
     }
@@ -172,4 +176,3 @@ pub fn get_all_files_recursively(
 pub fn is_hash_like(s: &str) -> bool {
     s.len() == VaultHash::BASE64_LEN && !s.contains('/')
 }
-

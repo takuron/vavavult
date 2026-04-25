@@ -1,4 +1,4 @@
-﻿//! Functions for printing vault items to the console.
+//! Functions for printing vault items to the console.
 
 use crate::core::helpers::parse_rfc3339_string;
 use crate::handlers::list::ListResult;
@@ -302,5 +302,3 @@ pub fn print_status(status: &VaultStatus) {
     println!("  Last Updated:   {}", update_time_local);
     println!("--------------------");
 }
-
-

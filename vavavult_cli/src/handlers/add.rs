@@ -1,4 +1,4 @@
-﻿use crate::errors::CliError;
+use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -526,4 +526,3 @@ mod tests {
         assert_path_err("local.txt", None, Some("invalid\\name.txt"));
     }
 }
-

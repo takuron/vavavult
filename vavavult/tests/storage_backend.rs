@@ -1,4 +1,4 @@
-﻿use std::any::Any;
+use std::any::Any;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Cursor, Seek, SeekFrom, Write};
@@ -220,5 +220,3 @@ fn test_memory_backend_persistence_simulation() {
         .unwrap();
     assert_eq!(fs::read_to_string(extract_path).unwrap(), "Persist?");
 }
-
-

@@ -1,4 +1,4 @@
-﻿//! Functions for user interaction, like confirmation prompts.
+//! Functions for user interaction, like confirmation prompts.
 
 use std::io;
 use std::io::Write;
@@ -12,4 +12,3 @@ pub fn confirm_action(prompt: &str) -> Result<bool, io::Error> {
     Ok(confirmation.trim().eq_ignore_ascii_case("y")
         || confirmation.trim().eq_ignore_ascii_case("yes"))
 }
-

@@ -1,4 +1,4 @@
-﻿//! Vault file handle for WebDAV read/write operations.
+//! Vault file handle for WebDAV read/write operations.
 //!
 //! This module implements the `DavFile` trait, providing lazy decryption and
 //! pipe-based streaming reads of vault files. Decryption is performed in a
@@ -588,6 +588,3 @@ mod tests {
         assert_eq!(all_data, large_content);
     }
 }
-
-
-

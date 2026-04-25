@@ -12,14 +12,14 @@ use thiserror::Error;
 
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
+use crate::vault::Vault;
 use crate::vault::add::{
-    encrypt_addition_task, resolve_file_metadata, AddFileError, PendingAdditionTask,
+    AddFileError, PendingAdditionTask, encrypt_addition_task, resolve_file_metadata,
 };
 use crate::vault::metadata::MetadataError;
 use crate::vault::query::{QueryError, QueryFileResult, QueryPathResult};
 use crate::vault::remove::ForceRemoveError;
 use crate::vault::tags::TagError;
-use crate::vault::Vault;
 
 /// Defines errors that can occur during the file fixing process.
 //
@@ -105,14 +105,14 @@ pub(crate) fn fix_file(
     {
         QueryPathResult::Found(entry) => entry,
         QueryPathResult::NotFound => {
-            return Err(FixError::NotFound(vault_path.as_str().to_string()))
+            return Err(FixError::NotFound(vault_path.as_str().to_string()));
         }
     };
     let old_entry =
         match crate::vault::query::check_by_hash_no_validation(vault, &old_path_entry.sha256sum)? {
             QueryFileResult::Found(entry) => entry,
             QueryFileResult::NotFound => {
-                return Err(FixError::NotFound(vault_path.as_str().to_string()))
+                return Err(FixError::NotFound(vault_path.as_str().to_string()));
             }
         };
 

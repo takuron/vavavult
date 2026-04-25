@@ -1,4 +1,4 @@
-﻿//! Virtual filesystem layer for WebDAV access to Vavavult vaults.
+//! Virtual filesystem layer for WebDAV access to Vavavult vaults.
 //!
 //! This module implements the `DavFileSystem` trait from `dav-server`, providing
 //! a read-only WebDAV interface to the encrypted vault. Files are transparently
@@ -478,35 +478,16 @@ impl DavFileSystem for VaultDavFs {
             }
 
             let from_path = dav_path_to_vault_path(from);
-            let mut to_path = dav_path_to_vault_path(to);
+            let to_path = dav_path_to_vault_path(to);
 
             let mut vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
 
+            let _ = vault
+                .move_path(&from_path, &to_path)
+                .map_err(|_| FsError::GeneralFailure)?;
+
             if from_path.is_dir() {
-                // 如果是目录，我们要递归移动里面的所有文件，并更新 virtual_dirs
-                let mut to_path_str = to_path.as_str().to_string();
-                if !to_path_str.ends_with('/') {
-                    to_path_str.push('/');
-                }
-                to_path = vavavult::file::VaultPath::new(&to_path_str);
-
-                // 递归获取所有文件路径映射
-                let files_to_move = vault.list_all_recursive(&from_path).unwrap_or_default();
-                for file_path_entry in files_to_move {
-                    if let Some(relative) = file_path_entry
-                        .path
-                        .as_str()
-                        .strip_prefix(from_path.as_str())
-                    {
-                        let new_path_str = format!("{}{}", to_path.as_str(), relative);
-                        let new_path = vavavult::file::VaultPath::new(&new_path_str);
-                        let _ = vault
-                            .move_file_by_path(&file_path_entry.path, &new_path)
-                            .map_err(|_| FsError::GeneralFailure)?;
-                    }
-                }
-
-                // 更新 virtual_dirs（处理那些没有实体文件但是被记录为空目录的记录）
+                // 同步 WebDAV 虚拟空目录记录，实体目录移动由核心库完成。
                 let mut virtual_dirs = self.virtual_dirs.lock().unwrap();
                 let mut new_virtual_dirs = std::collections::HashSet::new();
                 for vd in virtual_dirs.drain() {
@@ -521,20 +502,8 @@ impl DavFileSystem for VaultDavFs {
                     }
                 }
                 *virtual_dirs = new_virtual_dirs;
-
-                return Ok(());
             }
 
-            // 单个文件重命名
-            match vault.find_by_path(&from_path) {
-                Ok(vavavult::vault::QueryPathResult::Found(_)) => {}
-                Ok(vavavult::vault::QueryPathResult::NotFound) => return Err(FsError::NotFound),
-                Err(_) => return Err(FsError::GeneralFailure),
-            };
-
-            let _ = vault
-                .move_file_by_path(&from_path, &to_path)
-                .map_err(|_| FsError::GeneralFailure)?;
             Ok(())
         })
     }
@@ -998,5 +967,3 @@ mod tests {
         assert!(result.is_err());
     }
 }
-
-

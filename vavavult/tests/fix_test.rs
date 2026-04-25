@@ -1,4 +1,4 @@
-﻿// Copyright 2024 The Vavavult Authors.
+// Copyright 2024 The Vavavult Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -195,4 +195,3 @@ fn test_fix_file_not_found_in_db() {
     // 3. Assert: The operation should fail with a NotFound error.
     assert!(matches!(fix_result, Err(FixError::NotFound(_))));
 }
-

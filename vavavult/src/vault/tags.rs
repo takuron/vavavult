@@ -1,6 +1,6 @@
 use crate::file::VaultPath;
-use crate::vault::metadata::{touch_file_update_time, MetadataError};
-use crate::vault::{query, Vault};
+use crate::vault::metadata::{MetadataError, touch_file_update_time};
+use crate::vault::{Vault, query};
 use rusqlite::params;
 
 /// Defines errors that can occur during tag operations.

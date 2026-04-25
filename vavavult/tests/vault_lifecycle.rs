@@ -1,4 +1,4 @@
-﻿use std::fs;
+use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
 use vavavult::common::constants::{
@@ -264,4 +264,3 @@ fn test_open_v2_vault_should_fail() {
         _ => panic!("Expected UnsupportedVersion error, got {:?}", result),
     }
 }
-

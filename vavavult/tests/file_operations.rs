@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::file::VaultPath;
-use vavavult::vault::{resolve_file_metadata, ListPathEntry};
 use vavavult::vault::{
     AddFileError, ExtractionTask, PrepareAdditionRequest, QueryFileResult, QueryPathResult, Vault,
 };
+use vavavult::vault::{ListPathEntry, resolve_file_metadata};
 
 mod common;
 use common::{
@@ -217,18 +217,23 @@ fn test_hardlink_remove_keeps_storage_until_last_reference() {
 }
 
 /// 测试：文件的移动和重命名。
-/// 验证 `move_file` 和 `rename_file_inplace` 能正确更新数据库路径。
+/// 验证 `move_path` 能正确更新数据库路径。
 #[test]
 fn test_move_and_rename_file() {
     let dir = tempdir().unwrap();
     let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
     let file_path = create_dummy_file(&dir, "move.txt", "content");
-    let hash = vault
+    vault
         .add_file(&file_path, &VaultPath::from("/dir1/move.txt"), None)
         .unwrap();
 
     // 测试重命名 (保持父目录不变)
-    vault.rename_file_inplace(&hash, "renamed.txt").unwrap();
+    vault
+        .move_path(
+            &VaultPath::from("/dir1/move.txt"),
+            &VaultPath::from("/dir1/renamed.txt"),
+        )
+        .unwrap();
     assert!(matches!(
         vault
             .find_by_path(&VaultPath::from("/dir1/renamed.txt"))
@@ -237,10 +242,52 @@ fn test_move_and_rename_file() {
     ));
 
     // 测试移动 (改变目录)
-    vault.move_file(&hash, &VaultPath::from("/dir2/")).unwrap();
+    vault
+        .move_path(
+            &VaultPath::from("/dir1/renamed.txt"),
+            &VaultPath::from("/dir2/renamed.txt"),
+        )
+        .unwrap();
     assert!(matches!(
         vault
             .find_by_path(&VaultPath::from("/dir2/renamed.txt"))
+            .unwrap(),
+        QueryPathResult::Found(_)
+    ));
+}
+
+/// 测试：目录的移动和重命名。
+#[test]
+fn test_move_and_rename_directory() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "nested.txt", "content");
+
+    vault
+        .add_file(&file_path, &VaultPath::from("/dir1/sub/nested.txt"), None)
+        .unwrap();
+
+    // 目录重命名只更新目录节点，子文件路径应随层级变化。
+    vault
+        .move_path(&VaultPath::from("/dir1/"), &VaultPath::from("/renamed/"))
+        .unwrap();
+    assert!(matches!(
+        vault
+            .find_by_path(&VaultPath::from("/renamed/sub/nested.txt"))
+            .unwrap(),
+        QueryPathResult::Found(_)
+    ));
+
+    // 目录移动到新父目录同样保留完整子树。
+    vault
+        .move_path(
+            &VaultPath::from("/renamed/"),
+            &VaultPath::from("/archive/renamed/"),
+        )
+        .unwrap();
+    assert!(matches!(
+        vault
+            .find_by_path(&VaultPath::from("/archive/renamed/sub/nested.txt"))
             .unwrap(),
         QueryPathResult::Found(_)
     ));
@@ -399,9 +446,11 @@ fn test_batch_queries_and_search() {
         .list_all_recursive(&VaultPath::from("/docs/"))
         .unwrap();
     assert_eq!(recursive_entries.len(), 2);
-    assert!(recursive_entries
-        .iter()
-        .any(|entry| entry.path == VaultPath::from("/docs/file_B.md")));
+    assert!(
+        recursive_entries
+            .iter()
+            .any(|entry| entry.path == VaultPath::from("/docs/file_B.md"))
+    );
     assert!(recursive_entries.iter().any(|entry| {
         entry.path == VaultPath::from("/docs/deep/file_C.jpg") && entry.sha256sum == hash_c
     }));

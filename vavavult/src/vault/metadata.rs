@@ -2,7 +2,7 @@ use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_UP
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
 use crate::utils::time::now_as_rfc3339_string;
-use crate::vault::{query, QueryFileResult, Vault};
+use crate::vault::{QueryFileResult, Vault, query};
 use rusqlite::params;
 
 /// Defines errors that can occur during metadata operations.

@@ -1,7 +1,7 @@
-﻿use crate::core::helpers::{Target, display_path_for_entry, identify_target};
+﻿use crate::core::helpers::{Target, identify_target};
 use crate::errors::CliError;
 use vavavult::file::VaultPath;
-use vavavult::vault::{QueryFileResult, QueryPathResult, Vault};
+use vavavult::vault::{QueryPathResult, Vault};
 
 /// 处理 'mv' (Move) 命令
 pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Result<(), CliError> {
@@ -9,27 +9,12 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
     let dest_path = VaultPath::from(destination.as_str());
 
     match source {
-        // --- 情况1：源是通过哈希值的单个文件 ---
-        Target::Hash(hash) => {
-            let file_entry = match vault.find_by_hash(&hash)? {
-                QueryFileResult::Found(entry) => entry,
-                QueryFileResult::NotFound => {
-                    return Err(CliError::EntryNotFound(format!(
-                        "File not found with hash '{}'.",
-                        hash
-                    )));
-                }
-            };
-            println!(
-                "Moving file '{}' to '{}'...",
-                display_path_for_entry(vault, &file_entry),
-                dest_path
-            );
-            vault.move_file(&file_entry.sha256sum, &dest_path)?;
-            println!("File successfully moved.");
-        }
+        // 移动 API 只接受保险库路径，不再接受哈希。
+        Target::Hash(_) => Err(CliError::InvalidTarget(
+            "The mv command now only accepts a VaultPath source.".to_string(),
+        )),
 
-        // --- 情况2：源是文件路径 ---
+        // 文件移动、跨目录重命名和原地重命名都交给统一路径 API。
         Target::Path(source_path) if source_path.is_file() => {
             match vault.find_by_path(&source_path)? {
                 QueryPathResult::Found(_) => {}
@@ -41,13 +26,13 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
                 }
             };
             println!("Moving file '{}' to '{}'...", source_path, dest_path);
-            vault.move_file_by_path(&source_path, &dest_path)?;
+            vault.move_path(&source_path, &dest_path)?;
             println!("File successfully moved.");
+            Ok(())
         }
 
-        // --- 情况3：源是目录路径 ---
+        // 目录移动和目录原地重命名也交给统一路径 API。
         Target::Path(source_path) => {
-            //因为上面的卫语句，这里一定是目录
             if dest_path.is_file() {
                 return Err(CliError::InvalidTarget(
                     "Cannot move a directory to a file path. Destination must be a directory."
@@ -56,43 +41,9 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
             }
 
             println!("Moving directory '{}' to '{}'...", source_path, dest_path);
-
-            let files_to_move = vault.list_all_recursive(&source_path)?;
-
-            if files_to_move.is_empty() {
-                println!(
-                    "Source directory '{}' is empty or does not exist. Nothing to move.",
-                    source_path
-                );
-                return Ok(());
-            }
-
-            let mut moved_count = 0;
-            for file_path_entry in &files_to_move {
-                let file_path = &file_path_entry.path;
-                let relative_path = file_path
-                    .as_str()
-                    .strip_prefix(source_path.as_str())
-                    .ok_or_else(|| {
-                        CliError::Unexpected(format!(
-                            "Failed to create relative path for '{}' from base '{}'",
-                            file_path, source_path
-                        ))
-                    })?;
-
-                let new_path = dest_path.join(relative_path)?;
-
-                vault.move_file_by_path(file_path, &new_path)?;
-                moved_count += 1;
-            }
-
-            println!(
-                "Successfully moved {} files from '{}'.",
-                moved_count, source_path
-            );
+            vault.move_path(&source_path, &dest_path)?;
+            println!("Directory successfully moved.");
+            Ok(())
         }
     }
-
-    Ok(())
 }
-

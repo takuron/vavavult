@@ -1,4 +1,4 @@
-﻿use crate::core::helpers::parse_rfc3339_string;
+use crate::core::helpers::parse_rfc3339_string;
 use crate::errors::CliError;
 use crate::ui::printer::print_status;
 use chrono::{DateTime, Utc};
@@ -62,4 +62,3 @@ pub fn handle_status(vault: &Vault) -> Result<(), CliError> {
 
     Ok(())
 }
-

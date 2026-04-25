@@ -1,4 +1,4 @@
-﻿use crate::errors::CliError;
+use crate::errors::CliError;
 use crate::ui::printer::{print_file_details, print_recursive_file_item};
 use vavavult::vault::Vault;
 
@@ -32,4 +32,3 @@ pub fn handle_search(vault: &Vault, keyword: &str, long: bool) -> Result<(), Cli
     }
     Ok(())
 }
-

@@ -1,8 +1,8 @@
 use crate::common::hash::{HashParseError, VaultHash};
-use crate::crypto::chunked::{chunked_decrypt, ChunkedCryptoError, ChunkedReader};
+use crate::crypto::chunked::{ChunkedCryptoError, ChunkedReader, chunked_decrypt};
 use crate::crypto::encrypt::EncryptError;
 use crate::storage::{StorageBackend, StorageReader};
-use crate::vault::{query, QueryFileResult, Vault};
+use crate::vault::{QueryFileResult, Vault, query};
 use std::fs;
 use std::io::Write;
 use std::path::Path;

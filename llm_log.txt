@@ -14,3 +14,4 @@
 [2026-04-25T10:25:12+08:00] Refactored rekey API into prepare/re-encrypt/commit stages.
 [2026-04-25T11:09:15+08:00] Refactored tags to be vault-path scoped via file_entries, moved FilePathEntry to file module with tags, split query result enums into QueryFileResult and QueryPathResult, and updated API/tests.
 [2026-04-25T11:21:13+08:00] Changed hash-based remove APIs to delete all path references while path-based remove only unlinks one path until no references remain.
+[2026-04-25T11:41:02+08:00] Unified move and rename APIs around Vault::move_path with VaultPath-only sources/targets, added directory subtree move support, updated CLI/WebDAV callers, docs, and regression tests.

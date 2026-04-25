@@ -1,4 +1,4 @@
-﻿use crate::cli::{ReplCommand, TagCommand, VaultCommand};
+use crate::cli::{ReplCommand, TagCommand, VaultCommand};
 use crate::errors::CliError;
 use crate::handlers;
 use crate::repl::state::AppState;
@@ -154,4 +154,3 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
     }
     Ok(())
 }
-

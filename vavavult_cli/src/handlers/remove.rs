@@ -1,4 +1,4 @@
-﻿use crate::core::helpers::{Target, display_path_for_entry, identify_target};
+use crate::core::helpers::{Target, display_path_for_entry, identify_target};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -201,4 +201,3 @@ pub fn handle_remove(
 
     Ok(())
 }
-

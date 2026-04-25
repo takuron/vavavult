@@ -1,4 +1,4 @@
-﻿/// WebDAV server startup and lifecycle management.
+/// WebDAV server startup and lifecycle management.
 ///
 /// This module provides `start_webdav_server()` which launches a WebDAV server
 /// backed by a `VaultDavFs` instance. The server runs in a background tokio task
@@ -213,5 +213,3 @@ async fn handle_request(
     // 2. 将请求转发给 DavHandler（Incoming 的错误类型已满足 StdError + Send + Sync + 'static）
     Ok(handler.handle(req).await)
 }
-
-

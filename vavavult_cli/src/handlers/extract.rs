@@ -1,4 +1,4 @@
-﻿use crate::core::helpers::{
+use crate::core::helpers::{
     Target, determine_output_path, find_file_entry, first_path_for_entry, identify_target,
 };
 use crate::errors::CliError;
@@ -414,4 +414,3 @@ fn run_directory_extract_parallel(
 
     Ok(())
 }
-

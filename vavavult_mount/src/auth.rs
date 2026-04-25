@@ -1,4 +1,4 @@
-﻿/// HTTP Basic Auth validation utilities.
+/// HTTP Basic Auth validation utilities.
 ///
 /// Provides a stateless function to validate HTTP Basic Auth credentials
 /// against an expected `AuthConfig`. Used by the WebDAV server to gate
@@ -138,5 +138,3 @@ mod tests {
         assert!(check_basic_auth(Some(&header), &auth));
     }
 }
-
-

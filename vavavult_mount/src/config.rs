@@ -1,4 +1,4 @@
-﻿/// HTTP Basic Auth 凭据。
+/// HTTP Basic Auth 凭据。
 #[derive(Clone, Debug)]
 pub struct AuthConfig {
     pub username: String,
@@ -38,5 +38,3 @@ impl Default for MountConfig {
         }
     }
 }
-
-

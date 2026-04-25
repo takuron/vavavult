@@ -1,4 +1,4 @@
-﻿mod cli;
+mod cli;
 pub mod core;
 pub mod errors;
 mod handlers;
@@ -116,4 +116,3 @@ fn handle_open_command(path: &PathBuf) -> Result<Vault, CliError> {
         Err(e) => Err(e.into()),
     }
 }
-

@@ -19,8 +19,8 @@ use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
 use crate::file::VaultPath;
 pub use crate::file::{FileEntry, FilePathEntry};
-use crate::storage::local::LocalStorage;
 use crate::storage::StorageBackend;
+use crate::storage::local::LocalStorage;
 use std::io::{Read, Seek};
 
 //- Internal implementation imports
@@ -58,8 +58,7 @@ use crate::vault::rekey::{
 use crate::vault::remove::{force_remove_file, remove_file, remove_file_by_path};
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
 use crate::vault::update::{
-    enable_vault_feature, move_file, move_file_by_path, rename_file_inplace,
-    rename_file_inplace_by_path, set_name, update_password as _update_password,
+    enable_vault_feature, move_path, set_name, update_password as _update_password,
 };
 
 //- Public API type re-exports
@@ -76,8 +75,8 @@ pub use query::{
 pub use rekey::{PendingRekeyTask, RekeyError, RekeyTask};
 pub use remove::{ForceRemoveError, RemoveError};
 pub use tags::TagError;
-pub use update::verify_encrypted_file_hash;
 pub use update::UpdateError;
+pub use update::verify_encrypted_file_hash;
 
 /// Represents a vault loaded into memory.
 ///
@@ -1334,124 +1333,43 @@ impl Vault {
     // --- Update APIs ---
     // // --- 更新 API ---
 
-    /// Moves a file within the vault to a new path.
+    /// Moves or renames a vault path to another vault path.
+    ///
+    /// File sources must target a file path. Directory sources must target a
+    /// directory path. This single API covers moving a file to a new path,
+    /// moving a directory subtree to a new path, renaming a file in place, and
+    /// renaming a directory in place. File moves update only `file_entries`;
+    /// directory moves update only the directory node, leaving encrypted payloads
+    /// untouched.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file to move.
-    /// * `target_path` - The new path.
-    ///   - If directory: Moves file into directory, keeps name.
-    ///   - If file: Moves and renames.
+    /// * `source_path` - The existing vault file or directory path.
+    /// * `target_path` - The final vault file or directory path.
     ///
     /// # Errors
-    /// Returns `UpdateError` on name collision or if file not found.
+    /// Returns `UpdateError` if the source is missing, the target exists, the
+    /// path types are incompatible, or the root directory is moved.
     //
-    // // 在保险库中将文件移动到新路径。
+    // // 将一个保险库路径移动或重命名到另一个保险库路径。
+    // //
+    // // 文件源必须指向文件路径，目录源必须指向目录路径。这个单一 API 同时覆盖
+    // // 文件移动到新路径、目录子树移动到新路径、文件原地重命名和目录原地重命名。
+    // // 文件移动只更新 `file_entries`；目录移动只更新目录节点，加密载荷保持不变。
     // //
     // // # 参数
-    // // * `hash` - 要移动的文件的哈希。
-    // // * `target_path` - 新路径。
-    // //   - 如果是目录: 将文件移动到目录中，保留名称。
-    // //   - 如果是文件: 移动并重命名。
+    // // * `source_path` - 现有的保险库文件或目录路径。
+    // // * `target_path` - 最终的保险库文件或目录路径。
     // //
     // // # 错误
-    // // 如果名称冲突或文件未找到，返回 `UpdateError`。
-    pub fn move_file(
-        &mut self,
-        hash: &VaultHash,
-        target_path: &VaultPath,
-    ) -> Result<(), UpdateError> {
-        move_file(self, hash, target_path)?;
-        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
-    }
-
-    /// Moves a specific vault path mapping to a new path.
-    ///
-    /// This updates only the directory entry, leaving the underlying file entity
-    /// and encrypted payload untouched.
-    ///
-    /// # Arguments
-    /// * `source_path` - The existing vault path mapping.
-    /// * `target_path` - The new path or destination directory.
-    ///
-    /// # Errors
-    /// Returns `UpdateError` on name collision or if the source path is not found.
-    //
-    // // 将指定的保险库路径映射移动到新路径。
-    // //
-    // // 这只更新目录项，底层文件实体和加密载荷保持不变。
-    // //
-    // // # 参数
-    // // * `source_path` - 现有保险库路径映射。
-    // // * `target_path` - 新路径或目标目录。
-    // //
-    // // # 错误
-    // // 如果名称冲突或源路径未找到，返回 `UpdateError`。
-    pub fn move_file_by_path(
+    // // 如果源不存在、目标已存在、路径类型不兼容或移动根目录，则返回 `UpdateError`。
+    pub fn move_path(
         &mut self,
         source_path: &VaultPath,
         target_path: &VaultPath,
     ) -> Result<(), UpdateError> {
-        move_file_by_path(self, source_path, target_path)?;
+        move_path(self, source_path, target_path)?;
         touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
     }
-
-    /// Renames a file in its current directory (In-place).
-    ///
-    /// # Arguments
-    /// * `hash` - The hash of the file to rename.
-    /// * `new_filename` - The new filename (must NOT contain separators `/` or `\`).
-    ///
-    /// # Errors
-    /// Returns `UpdateError` if filename is invalid, file not found, or name collision.
-    //
-    // // 在当前目录中重命名文件 (就地)。
-    // //
-    // // # 参数
-    // // * `hash` - 要重命名的文件的哈希。
-    // // * `new_filename` - 新文件名 (必须 **不** 包含分隔符 `/` 或 `\`)。
-    // //
-    // // # 错误
-    // // 如果文件名无效、文件未找到或名称冲突，则返回 `UpdateError`。
-    pub fn rename_file_inplace(
-        &mut self,
-        hash: &VaultHash,
-        new_filename: &str,
-    ) -> Result<(), UpdateError> {
-        rename_file_inplace(self, hash, new_filename)?;
-        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
-    }
-
-    /// Renames a specific vault path mapping in its current directory.
-    ///
-    /// This updates only the directory entry name, leaving the underlying file
-    /// entity and encrypted payload untouched.
-    ///
-    /// # Arguments
-    /// * `source_path` - The existing vault path mapping.
-    /// * `new_filename` - The new filename without path separators.
-    ///
-    /// # Errors
-    /// Returns `UpdateError` if filename is invalid, source path is not found, or name collision.
-    //
-    // // 在当前目录中重命名指定的保险库路径映射。
-    // //
-    // // 这只更新目录项名称，底层文件实体和加密载荷保持不变。
-    // //
-    // // # 参数
-    // // * `source_path` - 现有保险库路径映射。
-    // // * `new_filename` - 不包含路径分隔符的新文件名。
-    // //
-    // // # 错误
-    // // 如果文件名无效、源路径未找到或名称冲突，则返回 `UpdateError`。
-    pub fn rename_file_inplace_by_path(
-        &mut self,
-        source_path: &VaultPath,
-        new_filename: &str,
-    ) -> Result<(), UpdateError> {
-        rename_file_inplace_by_path(self, source_path, new_filename)?;
-        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
-    }
-
     // --- Remove API ---
     // // --- 删除 API ---
 

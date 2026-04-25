@@ -1,4 +1,4 @@
-﻿use crate::errors::CliError;
+use crate::errors::CliError;
 use std::path::PathBuf;
 use vavavult::vault::Vault;
 
@@ -31,4 +31,3 @@ pub fn handle_passwd(vault_path: &PathBuf) -> Result<Vault, CliError> {
 
     Ok(vault)
 }
-

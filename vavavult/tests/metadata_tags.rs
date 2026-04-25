@@ -1,4 +1,4 @@
-﻿use std::thread;
+use std::thread;
 use std::time::Duration;
 use tempfile::tempdir;
 use vavavult::common::constants::META_FILE_UPDATE_TIME;
@@ -127,4 +127,3 @@ fn test_vault_metadata_lifecycle() {
         MetadataError::MetadataKeyNotFound(_)
     ));
 }
-

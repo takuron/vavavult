@@ -1,13 +1,13 @@
 use crate::common::constants::{
     CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME,
 };
-use crate::crypto::encrypt::{create_v3_encrypt_check, EncryptError};
+use crate::crypto::encrypt::{EncryptError, create_v3_encrypt_check};
 use crate::storage::StorageBackend;
 use crate::utils::time::now_as_rfc3339_string;
+use crate::vault::Vault;
 use crate::vault::config::VaultConfig;
 use crate::vault::create::CreateError::VaultAlreadyExists;
-use crate::vault::Vault;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

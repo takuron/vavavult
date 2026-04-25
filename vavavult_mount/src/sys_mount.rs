@@ -1,4 +1,4 @@
-﻿use crate::error::MountError;
+use crate::error::MountError;
 use std::process::{Child, Command, Stdio};
 
 /// Represents a mount handle. The mount will be automatically unmounted when the handle is dropped.
@@ -398,5 +398,3 @@ impl SystemMounter {
         Ok(())
     }
 }
-
-

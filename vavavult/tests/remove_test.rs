@@ -1,4 +1,4 @@
-﻿use std::fs;
+use std::fs;
 use tempfile::tempdir;
 use vavavult::file::VaultPath;
 use vavavult::vault::QueryFileResult;
@@ -117,4 +117,3 @@ fn test_force_remove_with_missing_db_record() {
         "Physical file should be removed by force_remove_file"
     );
 }
-
