@@ -25,3 +25,5 @@
 [2026-04-25T13:04:28+08:00] Remove force remove API and CLI --force option after DB-first deletion semantics.
 [2026-04-25T13:14:56+08:00] Implemented recursive directory removal API (remove_directory) in vavavult core library to safely delete directory trees and their file contents with proper reference counting and physical storage cleanup, and integrated it into the vavavult_mount WebDAV layer.
 [2026-04-25T13:35:10+08:00] Refactored and reorganized llm_readme.txt into modular markdown documents (llm_readme.md and docs/*.md) and comprehensively restructured vavavult_core_architecture.md to improve readability and architecture documentation.
+[2026-04-25T13:54:44+08:00] Refactored docs/TODO.md by splitting it into TODO.md, RoadMap.md, and TODO_finished.md to better track active tasks, long-term plans, and completed items.
+[2026-04-25T13:59:16+08:00] Simplified RoadMap.md to a checklist format and moved vague core feature descriptions from TODO.md to RoadMap.md, leaving only actionable tasks with complete plans in TODO.md.
