@@ -24,3 +24,4 @@
 [2026-04-25T12:55:58+08:00] Update CLI remove force-option test for DB-first missing-storage semantics.
 [2026-04-25T13:04:28+08:00] Remove force remove API and CLI --force option after DB-first deletion semantics.
 [2026-04-25T13:14:56+08:00] Implemented recursive directory removal API (remove_directory) in vavavult core library to safely delete directory trees and their file contents with proper reference counting and physical storage cleanup, and integrated it into the vavavult_mount WebDAV layer.
+[2026-04-25T13:35:10+08:00] Refactored and reorganized llm_readme.txt into modular markdown documents (llm_readme.md and docs/*.md) and comprehensively restructured vavavult_core_architecture.md to improve readability and architecture documentation.
