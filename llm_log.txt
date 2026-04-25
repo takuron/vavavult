@@ -11,3 +11,4 @@
 [2026-04-24T19:26:38+08:00] Changed get_file_count to count path mappings, added get_storage_file_count for stored file entities, and updated CLI status to show total(storage).
 [2026-04-25T09:57:16+08:00] 为添加阶段3增加重复原始哈希控制参数，默认自动归并，严格模式报错，并同步CLI与测试。
 [2026-04-25T10:08:23+08:00] 破坏性调整添加快捷API和阶段3提交API，直接接收重复原始哈希策略参数，并验证批内重复哈希自动归并。
+[2026-04-25T10:25:12+08:00] Refactored rekey API into prepare/re-encrypt/commit stages.

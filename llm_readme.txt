@@ -44,6 +44,11 @@ Provides the core logic for managing encrypted file vaults.
     *     1. **Prepare** (`prepare_extraction_task` / `prepare_extraction_tasks`): Queries DB for decryption keys (requires `&self`).
     *     2. **Decrypt** (`Vault::decrypt_extraction_task`): Decrypts to a `Write` stream (associated function, no `&self` — parallelizable). A file shortcut `Vault::decrypt_extraction_task_to_file` is also provided.
 
+*     The rekey API follows the same database/crypto/database split as addition:
+    *     1. **Prepare** (`prepare_rekey_tasks`): Accepts encrypted `VaultHash` values and resolves them to `PendingRekeyTask`s using the vault DB (requires `&self`).
+    *     2. **Re-encrypt** (`Vault::rekey_task`): Re-encrypts one pending task using only a `StorageBackend` (associated function, no `&self` needed — parallelizable).
+    *     3. **Commit** (`commit_rekey_tasks`): Atomically updates DB rows, commits staged encrypted payloads, and deletes old payloads (requires `&mut self`).
+
 *   **`vavavult::storage`**
     *   **Path:** `vavavult/src/storage/`
     *   **Description:** Implements the storage backend abstraction.

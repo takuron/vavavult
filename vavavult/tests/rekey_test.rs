@@ -1,4 +1,4 @@
-﻿use std::fs;
+use std::fs;
 use std::io::Write;
 use tempfile::tempdir;
 use vavavult::file::VaultPath;
@@ -31,13 +31,18 @@ fn test_rekey_file_e2e() {
     };
 
     // 2. Act: 执行密钥轮换
-    let rekey_task = vault.prepare_rekey_task(&old_entry).unwrap();
+    let pending_rekey_tasks = vault.prepare_rekey_tasks(&[old_hash.clone()]).unwrap();
+    let rekey_task = Vault::rekey_task(
+        vault.storage.as_ref(),
+        pending_rekey_tasks.into_iter().next().unwrap(),
+    )
+    .unwrap();
     let new_hash = rekey_task.new_file_entry.sha256sum.clone();
 
     // 确认新旧哈希不同
     assert_ne!(old_hash, new_hash);
 
-    vault.execute_rekey_tasks(vec![rekey_task]).unwrap();
+    vault.commit_rekey_tasks(vec![rekey_task]).unwrap();
 
     // 3. Assert: 验证轮换结果
 

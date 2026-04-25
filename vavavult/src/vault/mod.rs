@@ -51,6 +51,10 @@ use crate::vault::query::{
     get_enabled_vault_features, get_storage_file_count, get_total_file_count,
     is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path, list_paths_by_hash,
 };
+use crate::vault::rekey::{
+    commit_rekey_tasks as _commit_rekey_tasks, prepare_rekey_tasks as _prepare_rekey_tasks,
+    rekey_task as _rekey_task,
+};
 use crate::vault::remove::{force_remove_file, remove_file, remove_file_by_path};
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
 use crate::vault::update::{
@@ -69,7 +73,7 @@ pub use open::OpenError;
 pub use query::{
     DirectoryEntry, FilePathEntry, ListPathEntry, ListResult, QueryError, QueryResult,
 };
-pub use rekey::{RekeyError, RekeyTask};
+pub use rekey::{PendingRekeyTask, RekeyError, RekeyTask};
 pub use remove::{ForceRemoveError, RemoveError};
 pub use tags::TagError;
 pub use update::UpdateError;
@@ -1224,65 +1228,105 @@ impl Vault {
 
     // --- Rekey APIs ---
 
-    /// Stage 1 (Rekey): Prepares a file for re-keying by re-encrypting it to a temporary location.
+    /// Stage 1 (Rekey): Validates encrypted file hashes against the vault database.
     ///
-    /// This is a thread-safe, memory-efficient method that performs the expensive crypto
-    /// work without locking the vault database. It returns a `RekeyTask` ticket that
-    /// contains all information needed for the atomic commit stage.
+    /// This stage requires database access and converts each `VaultHash` into a
+    /// `PendingRekeyTask`. It performs no cryptographic or storage work.
     ///
     /// # Arguments
-    /// * `file_entry` - The full `FileEntry` of the file to be re-keyed.
+    /// * `hashes` - The encrypted content hashes to rekey.
     ///
     /// # Returns
-    /// A `RekeyTask` object ready to be passed to `execute_rekey_tasks`.
+    /// A `Vec<PendingRekeyTask>` — one per hash, in the same order.
     ///
     /// # Errors
-    /// Returns `RekeyError` if I/O or encryption fails.
+    /// Returns `RekeyError` if a hash is not found or the database query fails.
     //
-    // // 阶段 1 (Rekey): 准备一个文件用于轮换密钥，将其重加密到临时位置。
+    // // 阶段 1 (Rekey): 根据保险库数据库验证加密文件哈希。
     // //
-    // // 这是一个线程安全的、内存高效的方法，它执行耗时的加密工作而无需锁定保险库数据库。
-    // // 它返回一个 `RekeyTask` 票据，其中包含原子化提交阶段所需的所有信息。
+    // // 此阶段需要数据库访问，并将每个 `VaultHash` 转换为 `PendingRekeyTask`。
+    // // 它不执行任何加密或存储操作。
     // //
     // // # 参数
-    // // * `file_entry` - 需要轮换密钥的文件的完整 `FileEntry`。
+    // // * `hashes` - 要轮换密钥的加密内容哈希。
     // //
     // // # 返回
-    // // 一个 `RekeyTask` 对象，准备好传递给 `execute_rekey_tasks`。
+    // // `Vec<PendingRekeyTask>` — 每个哈希一个，顺序相同。
     // //
     // // # 错误
-    // // 如果 I/O 或加密失败，则返回 `RekeyError`。
-    pub fn prepare_rekey_task(&self, file_entry: &FileEntry) -> Result<RekeyTask, RekeyError> {
-        rekey::prepare_rekey_task(self.storage.as_ref(), file_entry)
+    // // 如果哈希不存在或数据库查询失败，则返回 `RekeyError`。
+    pub fn prepare_rekey_tasks(
+        &self,
+        hashes: &[VaultHash],
+    ) -> Result<Vec<PendingRekeyTask>, RekeyError> {
+        _prepare_rekey_tasks(self, hashes)
     }
 
-    /// Stage 2 (Rekey): Atomically commits a batch of re-keyed files to the vault.
+    /// Stage 2 (Rekey): Re-encrypts a prepared file without database access.
+    ///
+    /// This is a **thread-safe** associated function that does NOT require a `&Vault`.
+    /// It performs the expensive CPU/IO re-encryption work using only the storage backend.
+    /// Callers can invoke this in parallel for bulk rekey operations.
+    ///
+    /// # Arguments
+    /// * `storage` - The storage backend to read and write encrypted data.
+    /// * `pending` - A validated `PendingRekeyTask` from Stage 1.
+    ///
+    /// # Returns
+    /// A `RekeyTask` containing the re-encrypted `FileEntry` and a `StagingToken`.
+    ///
+    /// # Errors
+    /// Returns `RekeyError` if I/O or re-encryption fails.
+    //
+    // // 阶段 2 (Rekey): 在不访问数据库的情况下重加密已准备的文件。
+    // //
+    // // 这是一个 **线程安全** 的关联函数，不需要 `&Vault`。
+    // // 它仅使用存储后端执行昂贵的 CPU/IO 重加密工作。
+    // // 调用方可以并行调用此函数进行批量密钥轮换。
+    // //
+    // // # 参数
+    // // * `storage` - 用于读取和写入加密数据的存储后端。
+    // // * `pending` - 来自阶段 1 的已验证 `PendingRekeyTask`。
+    // //
+    // // # 返回
+    // // 包含重加密 `FileEntry` 和 `StagingToken` 的 `RekeyTask`。
+    // //
+    // // # 错误
+    // // 如果 I/O 或重加密失败，则返回 `RekeyError`。
+    pub fn rekey_task(
+        storage: &dyn StorageBackend,
+        pending: PendingRekeyTask,
+    ) -> Result<RekeyTask, RekeyError> {
+        _rekey_task(storage, pending)
+    }
+
+    /// Stage 3 (Rekey): Atomically commits a batch of re-keyed files to the vault.
     ///
     /// This method requires exclusive `&mut self` access to perform a transaction.
-    /// It updates the database records, moves the re-encrypted files from temporary
+    /// It updates database records, moves the re-encrypted files from temporary
     /// storage to their final destination, and deletes the old files.
     ///
     /// # Arguments
-    /// * `tasks` - A `Vec` of `RekeyTask` objects from stage 1.
+    /// * `tasks` - A `Vec` of `RekeyTask` objects from Stage 2.
     ///
     /// # Errors
     /// Returns `RekeyError` if the database or filesystem commit fails.
     //
-    // // 阶段 2 (Rekey): 原子化地提交一批已轮换密钥的文件到保险库。
+    // // 阶段 3 (Rekey): 原子化地提交一批已轮换密钥的文件到保险库。
     // //
     // // 此方法需要对 `&mut self` 的独占访问权来执行事务。
     // // 它会更新数据库记录，将被重加密的文件从临时存储移动到最终位置，并删除旧文件。
     // //
     // // # 参数
-    // // * `tasks` - 一个包含来自阶段 1 的 `RekeyTask` 对象的 `Vec`。
+    // // * `tasks` - 一个包含来自阶段 2 的 `RekeyTask` 对象的 `Vec`。
     // //
     // // # 错误
     // // 如果数据库或文件系统提交失败，则返回 `RekeyError`。
-    pub fn execute_rekey_tasks(&mut self, tasks: Vec<RekeyTask>) -> Result<(), RekeyError> {
+    pub fn commit_rekey_tasks(&mut self, tasks: Vec<RekeyTask>) -> Result<(), RekeyError> {
         if tasks.is_empty() {
             return Ok(());
         }
-        rekey::execute_rekey_tasks(self, tasks)?;
+        _commit_rekey_tasks(self, tasks)?;
         touch_vault_update_time(self)?;
         Ok(())
     }
@@ -1879,41 +1923,4 @@ pub fn resolve_file_metadata(
     dest_path: &VaultPath,
 ) -> Result<(VaultPath, u64, chrono::DateTime<chrono::Utc>), AddFileError> {
     _resolve_file_metadata(source_path, dest_path)
-}
-
-/// Prepares a file for re-keying (Standalone).
-///
-/// This is a thread-safe, memory-efficient method that performs the expensive crypto
-/// work without locking the vault database. It returns a `RekeyTask` ticket that
-/// contains all information needed for the atomic commit stage.
-///
-/// # Arguments
-/// * `storage` - The storage backend to use.
-/// * `file_entry` - The full `FileEntry` of the file to be re-keyed.
-///
-/// # Returns
-/// A `RekeyTask` object ready to be passed to `execute_rekey_tasks`.
-///
-/// # Errors
-/// Returns `RekeyError` if I/O or encryption fails.
-//
-// // 准备一个文件用于轮换密钥 (独立函数)。
-// //
-// // 这是一个线程安全的、内存高效的方法，它执行耗时的加密工作而无需锁定保险库数据库。
-// // 它返回一个 `RekeyTask` 票据，其中包含原子化提交阶段所需的所有信息。
-// //
-// // # Arguments
-// // * `storage` - 要使用的存储后端。
-// // * `file_entry` - 需要轮换密钥的文件的完整 `FileEntry`。
-// //
-// // # Returns
-// // 一个 `RekeyTask` 对象，准备好传递给 `execute_rekey_tasks`。
-// //
-// // # Errors
-// // 如果 I/O 或加密失败，则返回 `RekeyError`。
-pub fn prepare_rekey_task_standalone(
-    storage: &dyn StorageBackend,
-    file_entry: &FileEntry,
-) -> Result<RekeyTask, RekeyError> {
-    rekey::prepare_rekey_task(storage, file_entry)
 }
