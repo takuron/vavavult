@@ -59,7 +59,7 @@ use crate::vault::rekey::{
     commit_rekey_tasks as _commit_rekey_tasks, prepare_rekey_tasks as _prepare_rekey_tasks,
     rekey_task as _rekey_task,
 };
-use crate::vault::remove::{remove_file, remove_file_by_path};
+use crate::vault::remove::remove_file;
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
 use crate::vault::update::{enable_vault_feature, set_name, update_password as _update_password};
 
@@ -1562,7 +1562,36 @@ impl Vault {
     // // # 错误
     // // 如果路径未找到或删除失败，则返回 `RemoveError`。
     pub fn remove_file_by_path(&mut self, path: &VaultPath) -> Result<(), RemoveError> {
-        remove_file_by_path(self, path)?;
+        remove::remove_file_by_path(self, path)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
+    /// Recursively removes a directory and all its contents from the vault.
+    ///
+    /// This operation will first remove all files within the directory (and subdirectories),
+    /// which will evaluate whether their physical storage should be deleted.
+    /// Finally, the directory tree itself will be removed.
+    ///
+    /// # Arguments
+    /// * `path` - The vault path of the directory to remove.
+    ///
+    /// # Errors
+    /// Returns `RemoveError` if the path is not a directory, is the root directory,
+    /// cannot be found, or if deletion fails.
+    //
+    // // 递归地从保险库中删除一个目录及其所有内容。
+    // //
+    // // 此操作将首先删除目录（及其子目录）内的所有文件，
+    // // 这将评估是否应删除其物理存储。最后，目录树本身将被删除。
+    // //
+    // // # 参数
+    // // * `path` - 要删除的目录的保险库路径。
+    // //
+    // // # 错误
+    // // 如果路径不是目录、是根目录、无法找到或删除失败，则返回 `RemoveError`。
+    pub fn remove_directory(&mut self, path: &VaultPath) -> Result<(), RemoveError> {
+        remove::remove_directory(self, path)?;
         touch_vault_update_time(self)?;
         Ok(())
     }

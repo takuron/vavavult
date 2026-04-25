@@ -53,6 +53,24 @@ pub enum RemoveError {
     // // 提供的哈希字符串格式无效。
     #[error("Wrong hash error: {0}")]
     HashParseError(#[from] HashParseError),
+
+    /// The specified path is not a directory.
+    //
+    // // 指定的路径不是目录。
+    #[error("Path '{0}' is not a directory.")]
+    NotADirectory(String),
+
+    /// The root directory cannot be removed.
+    //
+    // // 无法删除根目录。
+    #[error("The root directory '/' cannot be removed.")]
+    RootDirectoryCannotBeRemoved,
+
+    /// The path to be removed was not found in the database.
+    //
+    // // 在数据库中未找到要删除的路径。
+    #[error("Path '{0}' not found.")]
+    PathNotFound(String),
 }
 
 /// 从保险库中删除一个文件实体及其全部路径映射。
@@ -101,6 +119,39 @@ pub(crate) fn remove_file_by_path(
         "DELETE FROM files WHERE sha256sum = ?1",
         params![&sha256sum],
     )?;
+
+    Ok(())
+}
+
+/// 递归删除保险库中的目录及其所有内容。
+pub(crate) fn remove_directory(
+    vault: &Vault,
+    path: &crate::file::VaultPath,
+) -> Result<(), RemoveError> {
+    if !path.is_dir() {
+        return Err(RemoveError::NotADirectory(path.as_str().to_string()));
+    }
+
+    if path.is_root() {
+        return Err(RemoveError::RootDirectoryCannotBeRemoved);
+    }
+
+    // 1. 检查目录是否存在
+    let dir_id = query::resolve_directory(vault, path)?
+        .ok_or_else(|| RemoveError::PathNotFound(path.as_str().to_string()))?;
+
+    // 2. 获取该目录下的所有文件并逐一删除，以触发物理文件清理评估
+    let files_to_delete = vault.list_all_recursive(path)?;
+
+    for file in files_to_delete {
+        remove_file_by_path(vault, &file.path)?;
+    }
+
+    // 3. 删除目录节点。由于开启了 ON DELETE CASCADE，所有剩余的空子目录和文件映射将被自动清理。
+    // 文件映射已在第2步被逐一清空，这里主要清理目录树本身。
+    vault
+        .database_connection
+        .execute("DELETE FROM directories WHERE id = ?1", params![dir_id])?;
 
     Ok(())
 }

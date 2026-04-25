@@ -462,12 +462,17 @@ impl DavFileSystem for VaultDavFs {
             }
             let vault_path = VaultPath::new(&path_str);
 
+            let mut vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
+
+            let _ = vault
+                .remove_directory(&vault_path)
+                .map_err(|_| FsError::GeneralFailure)?;
+
+            // Also clean up virtual_dirs just in case
             let mut virtual_dirs = self.virtual_dirs.lock().unwrap();
-            if virtual_dirs.remove(&vault_path) {
-                Ok(())
-            } else {
-                Ok(())
-            }
+            virtual_dirs.remove(&vault_path);
+
+            Ok(())
         })
     }
 
