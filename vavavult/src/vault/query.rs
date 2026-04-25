@@ -120,6 +120,13 @@ pub enum QueryError {
     // // `VaultPath` 构建期间发生错误。
     #[error("Path construction error: {0}")]
     PathError(#[from] PathError),
+
+    /// A file path conflicts with an existing directory path, or a directory path
+    /// conflicts with an existing file path.
+    //
+    // // 文件路径与已有目录路径冲突，或目录路径与已有文件路径冲突。
+    #[error("Path conflict: {0}")]
+    PathConflict(String),
 }
 
 fn directory_components(path: &VaultPath) -> Result<Vec<&str>, QueryError> {
@@ -195,6 +202,20 @@ pub(crate) fn ensure_directory_in_conn(
     )?;
 
     for component in components {
+        let file_conflict = conn
+            .query_row(
+                "SELECT 1 FROM file_entries WHERE directory_id = ?1 AND name = ?2",
+                params![current_id, component],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if file_conflict.is_some() {
+            return Err(QueryError::PathConflict(format!(
+                "directory component '{}' conflicts with an existing file",
+                component
+            )));
+        }
+
         let existing_id = conn
             .query_row(
                 "SELECT id FROM directories WHERE parent_id = ?1 AND name = ?2",
@@ -224,11 +245,29 @@ pub(crate) fn insert_file_entry_in_conn(
     path: &VaultPath,
     file_sha256sum: &VaultHash,
 ) -> Result<(), QueryError> {
+    if !path.is_file() {
+        return Err(QueryError::NotADirectory(path.as_str().to_string()));
+    }
+
     let parent_path = path.parent()?;
     let directory_id = ensure_directory_in_conn(conn, &parent_path)?;
     let file_name = path
         .file_name()
         .ok_or_else(|| QueryError::NotADirectory(path.as_str().to_string()))?;
+
+    let directory_conflict = conn
+        .query_row(
+            "SELECT 1 FROM directories WHERE parent_id = ?1 AND name = ?2",
+            params![directory_id, file_name],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    if directory_conflict.is_some() {
+        return Err(QueryError::PathConflict(format!(
+            "file path '{}' conflicts with an existing directory",
+            path.as_str()
+        )));
+    }
 
     conn.execute(
         "INSERT INTO file_entries (directory_id, name, file_sha256sum) VALUES (?1, ?2, ?3)",
@@ -403,12 +442,8 @@ fn fetch_full_entry_from_core(
     sha256sum: &VaultHash,
     original_sha256sum: &VaultHash,
     encrypt_password: &str,
-    validate_storage: bool,
+    _validate_storage: bool,
 ) -> Result<FileEntry, QueryError> {
-    if validate_storage && !vault.storage.exists(sha256sum)? {
-        return Err(QueryError::FileMissing(sha256sum.to_string()));
-    }
-
     fetch_full_entry(
         &vault.database_connection,
         sha256sum,
@@ -434,16 +469,11 @@ pub(crate) fn check_by_path(
     path: &VaultPath,
 ) -> Result<QueryPathResult, QueryError> {
     match fetch_file_core_by_path(&vault.database_connection, path)? {
-        Some((file_entry_id, sha256sum, _, _)) => {
-            if !vault.storage.exists(&sha256sum)? {
-                return Err(QueryError::FileMissing(sha256sum.to_string()));
-            }
-            Ok(QueryPathResult::Found(FilePathEntry {
-                path: path.clone(),
-                sha256sum,
-                tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
-            }))
-        }
+        Some((file_entry_id, sha256sum, _, _)) => Ok(QueryPathResult::Found(FilePathEntry {
+            path: path.clone(),
+            sha256sum,
+            tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
+        })),
         None => Ok(QueryPathResult::NotFound),
     }
 }
@@ -680,9 +710,6 @@ fn process_path_rows_to_entries(
     let mut entries = Vec::with_capacity(rows.len());
 
     for (file_entry_id, path, sha256sum) in rows {
-        if !vault.storage.exists(&sha256sum)? {
-            return Err(QueryError::FileMissing(sha256sum.to_string()));
-        }
         entries.push(FilePathEntry {
             path,
             sha256sum,
@@ -774,9 +801,6 @@ pub(crate) fn list_by_path(
         .collect::<Result<Vec<_>, _>>()?;
 
     for (file_entry_id, file_name, sha256sum) in file_rows {
-        if !vault.storage.exists(&sha256sum)? {
-            return Err(QueryError::FileMissing(sha256sum.to_string()));
-        }
         entries.push(ListPathEntry::File(FilePathEntry {
             path: path.join(&file_name)?,
             sha256sum,
@@ -832,12 +856,6 @@ pub(crate) fn list_all_recursive(
             sha256sum,
             tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
         });
-    }
-
-    for file_entry in &file_entries {
-        if !vault.storage.exists(&file_entry.sha256sum)? {
-            return Err(QueryError::FileMissing(file_entry.sha256sum.to_string()));
-        }
     }
 
     Ok(file_entries)

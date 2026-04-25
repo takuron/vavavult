@@ -106,6 +106,29 @@ fn test_path_creation_rejects_conflicts() {
             .unwrap_err(),
         PathOperationError::SourcePathNotFound(_)
     ));
+
+    let directory_file = create_dummy_file(&dir, "directory.txt", "directory conflict");
+    vault
+        .add_file(
+            &directory_file,
+            &VaultPath::from("/existing/file.txt"),
+            None,
+        )
+        .unwrap();
+    assert!(
+        vault
+            .add_file(&directory_file, &VaultPath::from("/existing"), Some(true))
+            .is_err()
+    );
+    assert!(
+        vault
+            .add_file(
+                &directory_file,
+                &VaultPath::from("/source.txt/nested.txt"),
+                Some(true)
+            )
+            .is_err()
+    );
 }
 
 /// 测试：文件的移动和重命名。

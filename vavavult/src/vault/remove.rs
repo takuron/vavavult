@@ -3,6 +3,16 @@ use crate::vault::metadata::MetadataError;
 use crate::vault::{QueryFileResult, Vault, query};
 use rusqlite::params;
 
+fn delete_storage_if_present(vault: &Vault, sha256sum: &VaultHash) -> Result<(), std::io::Error> {
+    if let Err(error) = vault.storage.delete(sha256sum) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(error);
+        }
+    }
+
+    Ok(())
+}
+
 /// Defines errors that can occur during the file removal process.
 //
 // // 定义在文件删除过程中可能发生的错误。
@@ -91,8 +101,8 @@ pub(crate) fn remove_file(vault: &Vault, sha256sum: &VaultHash) -> Result<(), Re
         return Err(RemoveError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 3. 删除文件实体和物理存储。
-    vault.storage.delete(sha256sum)?;
+    // 3. 删除文件实体和物理存储。底层文件缺失不阻断数据库清理。
+    delete_storage_if_present(vault, sha256sum)?;
     vault
         .database_connection
         .execute("DELETE FROM files WHERE sha256sum = ?1", params![sha256sum])?;
@@ -117,8 +127,8 @@ pub(crate) fn remove_file_by_path(
         return Ok(());
     }
 
-    // 3. 最后一条引用已解除，删除物理文件与 files 记录。
-    vault.storage.delete(&sha256sum)?;
+    // 3. 最后一条引用已解除，删除物理文件与 files 记录。底层文件缺失不阻断数据库清理。
+    delete_storage_if_present(vault, &sha256sum)?;
     vault.database_connection.execute(
         "DELETE FROM files WHERE sha256sum = ?1",
         params![&sha256sum],
@@ -143,12 +153,7 @@ pub(crate) fn force_remove_file(
     // 1. 尝试从存储后端删除物理文件。
     // 我们明确处理 NotFound 错误，因为即使 StorageBackend::delete 尝试幂等，
     // 在 `exists()` 和 `remove_file()` 之间可能存在竞态条件导致返回 NotFound 错误。
-    if let Err(e) = vault.storage.delete(sha256sum) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(ForceRemoveError::FileSystemError(e));
-        }
-        // 如果是 NotFound，则忽略错误并继续
-    }
+    delete_storage_if_present(vault, sha256sum).map_err(ForceRemoveError::FileSystemError)?;
 
     // 2. 从数据库中强制删除记录和全部路径映射。
     vault

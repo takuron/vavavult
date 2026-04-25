@@ -4,6 +4,7 @@ use tempfile::tempdir;
 use vavavult::common::constants::{
     CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME,
 };
+use vavavult::file::VaultPath;
 use vavavult::storage::local::LocalStorage;
 use vavavult::vault::{CreateError, OpenError, UpdateError, Vault};
 
@@ -174,6 +175,34 @@ fn test_open_and_reopen_vault_cycle() {
     // 2. 重新打开
     let reopened_vault = Vault::open_vault_local(&vault_path, None).unwrap();
     assert_eq!(reopened_vault.config.name, vault_name);
+}
+
+#[test]
+fn test_open_vault_enables_foreign_keys() {
+    let dir = tempdir().unwrap();
+    let (vault_path, mut vault) = common::setup_encrypted_vault(&dir);
+    let file_path = common::create_dummy_file(&dir, "fk.txt", "foreign keys");
+    let hash = vault
+        .add_file(&file_path, &VaultPath::from("/fk.txt"), None)
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/fk.txt"), "fk-tag")
+        .unwrap();
+    drop(vault);
+
+    let mut reopened = Vault::open_vault_local(&vault_path, Some("v3-password")).unwrap();
+    let foreign_keys_enabled: i64 = reopened
+        .database_connection
+        .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(foreign_keys_enabled, 1);
+
+    reopened.remove_file(&hash).unwrap();
+    let orphan_tags: i64 = reopened
+        .database_connection
+        .query_row("SELECT COUNT(*) FROM tags", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(orphan_tags, 0);
 }
 
 /// 测试：加密保险库的访问控制。

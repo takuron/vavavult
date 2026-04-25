@@ -130,6 +130,8 @@ pub(crate) fn open_vault(
         }
     }
 
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+
     Ok(Vault {
         root_path: vault_path.to_path_buf(),
         config,

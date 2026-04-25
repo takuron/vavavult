@@ -132,10 +132,10 @@
 
 > 目标：路径/文件元数据操作默认只相信数据库，不因底层 `data/` 文件缺失失败。只有真正需要读取、写入或重写内容的操作（如 `add`、`extract`、`rekey`、`verify/fix`）才检查底层文件是否存在或完整；库外丢失文件等非预期状态由 `fix` 工具链处理。
 
-- [ ] 统一数据库路径不变量：保证数据库中不能同时存在 `/a` 文件和 `/a/` 目录；所有创建 `file_entries` 的入口共享同一套文件/目录冲突检查。
-- [ ] 查询逻辑降级为 DB-first：移除 `find/list/search` 等元数据查询中的 `storage.exists()` 强校验，让它们返回数据库路径映射、哈希和标签。
-- [ ] 限定内容操作的缺失报错边界：保留 `extract`、`rekey`、`verify_file_integrity`、`fix` 等内容相关流程中的底层文件存在性/完整性检查。
-- [ ] 调整删除语义：路径删除和 hash 删除以数据库清理为主，底层文件缺失时不阻断 DB 清理，行为接近 `force_remove` 的容错策略。
-- [ ] 打开库时启用外键约束：在 `open_vault` 成功打开/解密数据库连接后执行 `PRAGMA foreign_keys = ON`，确保级联删除在重开连接后仍生效。
-- [ ] 补齐回归测试：覆盖底层文件丢失后 `find/list/tag/move/remove_path` 可继续，`extract/rekey/verify` 明确失败，`fix` 可恢复或清理。
-- [ ] 同步架构文档：更新 `llm_readme.txt` 中关于 DB-first 元数据逻辑、内容操作缺失报错边界和 fix 修复职责的说明。
+- [x] 统一数据库路径不变量：保证数据库中不能同时存在 `/a` 文件和 `/a/` 目录；所有创建 `file_entries` 的入口共享同一套文件/目录冲突检查。
+- [x] 查询逻辑降级为 DB-first：移除 `find/list/search` 等元数据查询中的 `storage.exists()` 强校验，让它们返回数据库路径映射、哈希和标签。
+- [x] 限定内容操作的缺失报错边界：保留 `extract`、`rekey`、`verify_file_integrity`、`fix` 等内容相关流程中的底层文件存在性/完整性检查。
+- [x] 调整删除语义：路径删除和 hash 删除以数据库清理为主，底层文件缺失时不阻断 DB 清理，行为接近 `force_remove` 的容错策略。
+- [x] 打开库时启用外键约束：在 `open_vault` 成功打开/解密数据库连接后执行 `PRAGMA foreign_keys = ON`，确保级联删除在重开连接后仍生效。
+- [x] 补齐回归测试：覆盖底层文件丢失后 `find/list/tag/move/remove_path` 可继续，`extract/rekey/verify` 明确失败，`fix` 可恢复或清理。
+- [x] 同步架构文档：更新 `llm_readme.txt` 中关于 DB-first 元数据逻辑、内容操作缺失报错边界和 fix 修复职责的说明。
