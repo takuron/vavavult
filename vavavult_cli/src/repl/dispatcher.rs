@@ -21,8 +21,16 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
             path,
             name,
             parallel,
+            no_duplicate_files,
         } => {
-            handlers::add::handle_add(Arc::clone(&vault_arc), &local_path, path, name, parallel)?;
+            handlers::add::handle_add(
+                Arc::clone(&vault_arc),
+                &local_path,
+                path,
+                name,
+                parallel,
+                !no_duplicate_files,
+            )?;
         }
         ReplCommand::List {
             path,

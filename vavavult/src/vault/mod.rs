@@ -25,7 +25,7 @@ use std::io::{Read, Seek};
 
 //- Internal implementation imports
 use crate::vault::add::{
-    add_file, add_from_reader, commit_addition_tasks,
+    add_file, add_from_reader, commit_addition_tasks as _commit_addition_tasks,
     encrypt_addition_task as _encrypt_addition_task,
     prepare_addition_tasks as _prepare_addition_tasks,
     prepare_addition_tasks_from_files as _prepare_addition_tasks_from_files,
@@ -846,7 +846,49 @@ impl Vault {
         if files.is_empty() {
             return Ok(());
         }
-        commit_addition_tasks(self, files)?;
+        _commit_addition_tasks(self, files, None)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
+    /// Stage 3 (Add): Commits encrypted files with optional duplicate-content control.
+    ///
+    /// `allow_duplicate_files` controls whether files with the same original hash may
+    /// coexist as multiple path mappings. `None` defaults to `true`, which reuses the
+    /// existing file entity and only inserts new path mappings. `Some(false)` returns
+    /// `AddFileError::DuplicateOriginalContent` when the same original hash already
+    /// exists in the vault or earlier in the same batch.
+    ///
+    /// # Arguments
+    /// * `files` - A `Vec` of `AdditionTask` objects from Stage 2.
+    /// * `allow_duplicate_files` - Optional duplicate-content policy; defaults to `true`.
+    ///
+    /// # Errors
+    /// Returns `AddFileError` if duplicate content is disallowed and detected, or if
+    /// database transaction or storage commit fails.
+    //
+    // // 阶段 3 (添加): 使用可选的重复内容控制提交已加密文件。
+    // //
+    // // `allow_duplicate_files` 控制具有相同原始哈希的文件是否可以作为多个路径映射共存。
+    // // `None` 默认等同于 `true`，即复用已有文件实体并只插入新的路径映射。
+    // // `Some(false)` 会在保险库中或同一批次前面已存在相同原始哈希时返回
+    // // `AddFileError::DuplicateOriginalContent`。
+    // //
+    // // # 参数
+    // // * `files` - 来自阶段 2 的 `AdditionTask` 对象列表。
+    // // * `allow_duplicate_files` - 可选的重复内容策略；默认值为 `true`。
+    // //
+    // // # 错误
+    // // 如果禁止重复内容且检测到重复，或数据库事务、存储提交失败，则返回 `AddFileError`。
+    pub fn commit_addition_tasks_with_duplicate_control(
+        &mut self,
+        files: Vec<AdditionTask>,
+        allow_duplicate_files: Option<bool>,
+    ) -> Result<(), AddFileError> {
+        if files.is_empty() {
+            return Ok(());
+        }
+        _commit_addition_tasks(self, files, allow_duplicate_files)?;
         touch_vault_update_time(self)?;
         Ok(())
     }

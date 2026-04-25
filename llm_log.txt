@@ -9,3 +9,4 @@
 [2026-04-24T16:46:13+08:00] Synced hardlink phase 3 TODO/readme status and clarified remove_file public documentation for mapping-based removal semantics.
 [2026-04-24T19:14:55+08:00] Updated path listing APIs to return DirectoryEntry/FilePathEntry/ListPathEntry and changed recursive listing to FilePathEntry, adapting CLI, VFS, tests, and docs.
 [2026-04-24T19:26:38+08:00] Changed get_file_count to count path mappings, added get_storage_file_count for stored file entities, and updated CLI status to show total(storage).
+[2026-04-25T09:57:16+08:00] 为添加阶段3增加重复原始哈希控制参数，默认自动归并，严格模式报错，并同步CLI与测试。

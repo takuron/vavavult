@@ -388,10 +388,13 @@ pub(crate) fn encrypt_addition_task(
 pub(crate) fn commit_addition_tasks(
     vault: &mut Vault,
     files: Vec<AdditionTask>,
+    allow_duplicate_files: Option<bool>,
 ) -> Result<(), AddFileError> {
     if files.is_empty() {
         return Ok(());
     }
+
+    let allow_duplicate_files = allow_duplicate_files.unwrap_or(true);
 
     // --- 1. 最终重复检查 ---
     let mut paths_in_batch = HashSet::new();
@@ -410,13 +413,19 @@ pub(crate) fn commit_addition_tasks(
             return Err(AddFileError::DuplicateFileName(dest_path.to_string()));
         }
 
-        // 相同原始内容复用已有文件实体，只新增路径映射。
+        // 相同原始内容按策略处理：默认复用已有文件实体，严格模式则报错。
         let existing_hash = match query::check_by_original_hash(vault, &entry.original_sha256sum)? {
             QueryResult::Found(existing) => Some(existing.sha256sum),
             QueryResult::NotFound => originals_in_batch.get(&entry.original_sha256sum).cloned(),
         };
 
         if let Some(existing_hash) = existing_hash {
+            if !allow_duplicate_files {
+                return Err(AddFileError::DuplicateOriginalContent(
+                    entry.original_sha256sum.to_string(),
+                    dest_path.to_string(),
+                ));
+            }
             commit_actions.push(AdditionCommitAction::ReuseExisting(existing_hash));
         } else {
             originals_in_batch.insert(&entry.original_sha256sum, entry.sha256sum.clone());
@@ -555,7 +564,7 @@ pub(crate) fn add_file(
     let addition_task = encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
 
     // 阶段 3
-    commit_addition_tasks(vault, vec![addition_task])?;
+    commit_addition_tasks(vault, vec![addition_task], None)?;
     committed_hash_for_path(vault, &final_dest_path)
 }
 
@@ -580,7 +589,7 @@ pub(crate) fn add_from_reader(
     let addition_task = encrypt_addition_task(vault.storage.as_ref(), pending, reader)?;
 
     // 阶段 3
-    commit_addition_tasks(vault, vec![addition_task])?;
+    commit_addition_tasks(vault, vec![addition_task], None)?;
     committed_hash_for_path(vault, dest_path)
 }
 

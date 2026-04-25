@@ -63,6 +63,11 @@ pub enum ReplCommand {
         // 使用多线程并行添加文件
         #[arg(long)]
         parallel: bool,
+
+        /// Reject files whose original content hash already exists in the vault or batch
+        // 拒绝原始内容哈希已存在于保险库或批次中的文件
+        #[arg(long = "no-duplicate-files")]
+        no_duplicate_files: bool,
     },
     /// List files and directories in the vault
     //  列出保险库中的文件和目录

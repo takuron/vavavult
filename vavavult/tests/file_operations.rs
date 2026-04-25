@@ -92,6 +92,48 @@ fn test_duplicate_content_creates_hardlink_mapping() {
     ));
 }
 
+/// 测试：阶段 3 可禁止相同原始哈希的文件自动归并。
+#[test]
+fn test_commit_duplicate_content_can_be_disallowed() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "strict-shared.txt", "same strict content");
+
+    let path1 = VaultPath::from("/a/strict.txt");
+    let path2 = VaultPath::from("/b/strict-copy.txt");
+    vault.add_file(&file_path, &path1).unwrap();
+
+    let (resolved_path, source_size, source_modified_time) =
+        resolve_file_metadata(&file_path, &path2).unwrap();
+    let requests = [PrepareAdditionRequest {
+        dest_path: &resolved_path,
+        source_size,
+        source_modified_time,
+    }];
+    let pending = vault
+        .prepare_addition_tasks(&requests)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let source_file = fs::File::open(&file_path).unwrap();
+    let addition_task =
+        Vault::encrypt_addition_task(vault.storage.as_ref(), pending, source_file).unwrap();
+
+    assert!(matches!(
+        vault
+            .commit_addition_tasks_with_duplicate_control(vec![addition_task], Some(false))
+            .unwrap_err(),
+        AddFileError::DuplicateOriginalContent(_, _)
+    ));
+    assert_eq!(vault.get_file_count().unwrap(), 1);
+    assert_eq!(vault.get_storage_file_count().unwrap(), 1);
+    assert!(matches!(
+        vault.find_by_path(&path2).unwrap(),
+        QueryResult::NotFound
+    ));
+}
+
 /// 测试：移除一个硬链接路径不会删除仍被其他路径引用的文件实体。
 #[test]
 fn test_hardlink_remove_keeps_storage_until_last_reference() {

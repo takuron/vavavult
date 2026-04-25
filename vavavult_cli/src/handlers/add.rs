@@ -11,6 +11,38 @@ use vavavult::vault::{
 };
 use walkdir::WalkDir;
 
+fn add_file_with_duplicate_control(
+    vault: &mut Vault,
+    source_path: &Path,
+    dest_path: &VaultPath,
+    allow_duplicate_files: bool,
+) -> Result<vavavult::common::hash::VaultHash, AddFileError> {
+    let (final_dest_path, source_size, source_modified_time) =
+        resolve_file_metadata(source_path, dest_path)?;
+    let requests = [PrepareAdditionRequest {
+        dest_path: &final_dest_path,
+        source_size,
+        source_modified_time,
+    }];
+    let pending_tasks = vault.prepare_addition_tasks(&requests)?;
+    let pending = pending_tasks.into_iter().next().unwrap();
+    let source_file = std::fs::File::open(source_path).map_err(AddFileError::IoError)?;
+    let addition_task = Vault::encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
+
+    // 阶段 3 根据 CLI 参数决定是否允许相同原始哈希自动归并。
+    vault.commit_addition_tasks_with_duplicate_control(
+        vec![addition_task],
+        Some(allow_duplicate_files),
+    )?;
+
+    match vault.find_by_path(&final_dest_path)? {
+        vavavult::vault::QueryResult::Found(entry) => Ok(entry.sha256sum),
+        vavavult::vault::QueryResult::NotFound => Err(AddFileError::DatabaseError(
+            rusqlite::Error::QueryReturnedNoRows,
+        )),
+    }
+}
+
 /// 根据新的 CLI 规则构建最终的 VaultPath (用于单文件添加)
 ///
 /// 优先级:
@@ -73,6 +105,7 @@ pub fn handle_add(
     path: Option<String>,
     name: Option<String>,
     parallel: bool,
+    allow_duplicate_files: bool,
 ) -> Result<(), CliError> {
     if !local_path.exists() {
         return Err(CliError::InvalidTarget(format!(
@@ -103,9 +136,14 @@ pub fn handle_add(
         // `dest_dir_path` 此时保证是一个目录 (例如 /docs/ 或 /)
         if parallel {
             // 调用新的并行实现
-            handle_add_directory_parallel(vault, local_path, dest_dir_path)
+            handle_add_directory_parallel(vault, local_path, dest_dir_path, allow_duplicate_files)
         } else {
-            handle_add_directory_single_threaded(vault, local_path, dest_dir_path)
+            handle_add_directory_single_threaded(
+                vault,
+                local_path,
+                dest_dir_path,
+                allow_duplicate_files,
+            )
         }
     } else {
         // --- 处理单文件添加 ---
@@ -124,7 +162,7 @@ pub fn handle_add(
         let dest_vault_path = build_target_vault_path(&source_filename, path, name)?;
 
         // 3. `dest_vault_path` 此时保证是一个文件路径
-        handle_add_file(vault, local_path, dest_vault_path)
+        handle_add_file(vault, local_path, dest_vault_path, allow_duplicate_files)
     }
 }
 
@@ -133,6 +171,7 @@ fn handle_add_file(
     vault: Arc<Mutex<Vault>>,
     local_path: &Path,
     dest_vault_path: VaultPath,
+    allow_duplicate_files: bool,
 ) -> Result<(), CliError> {
     // 库的 `add_file` 会正确处理 (因为 dest_vault_path.is_dir() 为 false)
     println!(
@@ -142,7 +181,12 @@ fn handle_add_file(
     );
     let mut vault_guard = vault.lock().unwrap();
 
-    let hash = vault_guard.add_file(local_path, &dest_vault_path)?;
+    let hash = add_file_with_duplicate_control(
+        &mut vault_guard,
+        local_path,
+        &dest_vault_path,
+        allow_duplicate_files,
+    )?;
     println!("Successfully added file. Hash: {}", hash);
 
     Ok(())
@@ -153,6 +197,7 @@ fn handle_add_directory_single_threaded(
     vault: Arc<Mutex<Vault>>,
     local_path: &Path,
     dest_dir_path: VaultPath,
+    allow_duplicate_files: bool,
 ) -> Result<(), CliError> {
     // 1. [新增] 获取保险库中所有现有文件的路径
     println!("Fetching existing file list from vault...");
@@ -228,7 +273,12 @@ fn handle_add_directory_single_threaded(
     for (source, target) in files_to_add {
         // 锁在循环内部获取和释放
         let mut vault_guard = vault.lock().unwrap();
-        match vault_guard.add_file(&source, &target) {
+        match add_file_with_duplicate_control(
+            &mut vault_guard,
+            &source,
+            &target,
+            allow_duplicate_files,
+        ) {
             Ok(_) => {
                 success_count += 1;
             }
@@ -250,6 +300,7 @@ fn handle_add_directory_parallel(
     vault: Arc<Mutex<Vault>>,
     local_path: &Path,
     dest_dir_path: VaultPath,
+    allow_duplicate_files: bool,
 ) -> Result<(), CliError> {
     // 1. [新增] 获取保险库中所有现有文件的路径
     println!("Fetching existing file list from vault...");
@@ -422,7 +473,10 @@ fn handle_add_directory_parallel(
     {
         // **获取一次性的写锁**
         let mut vault_guard = vault.lock().unwrap();
-        match vault_guard.commit_addition_tasks(files_to_commit) {
+        match vault_guard.commit_addition_tasks_with_duplicate_control(
+            files_to_commit,
+            Some(allow_duplicate_files),
+        ) {
             Ok(_) => {
                 println!("Batch commit successful.");
             }
