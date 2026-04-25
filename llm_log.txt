@@ -19,3 +19,4 @@
 [2026-04-25T12:10:43+08:00] Added path creation APIs: copy_file_path for tag-preserving hardlink-style file path copies, create_path_from_hash for hash-backed path creation, and create_empty_path for empty directory creation with conflict tests.
 [2026-04-25T12:23:16+08:00] Moved move_path and rename_path_inplace implementations from update.rs into path_ops.rs, changed their public error type to PathOperationError, and relocated move/rename tests into path_operations.rs.
 [2026-04-25T12:31:04+08:00] Fixed CLI move/rename compilation after path operation refactor by adding PathOperationError conversion to CliError.
+[2026-04-25T12:43:20+08:00] 将 DB-first 元数据逻辑与修复边界计划写入 docs/TODO.md。
