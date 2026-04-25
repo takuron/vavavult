@@ -16,3 +16,4 @@
 [2026-04-25T11:21:13+08:00] Changed hash-based remove APIs to delete all path references while path-based remove only unlinks one path until no references remain.
 [2026-04-25T11:41:02+08:00] Unified move and rename APIs around Vault::move_path with VaultPath-only sources/targets, added directory subtree move support, updated CLI/WebDAV callers, docs, and regression tests.
 [2026-04-25T11:53:21+08:00] Restored Vault::rename_path_inplace as a VaultPath-based in-place rename API for both files and directories, and switched CLI rename back to the dedicated rename API.
+[2026-04-25T12:10:43+08:00] Added path creation APIs: copy_file_path for tag-preserving hardlink-style file path copies, create_path_from_hash for hash-backed path creation, and create_empty_path for empty directory creation with conflict tests.

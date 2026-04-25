@@ -9,6 +9,7 @@ mod extract;
 mod fix;
 mod metadata;
 mod open;
+mod path_ops;
 mod query;
 mod rekey;
 mod remove;
@@ -44,6 +45,7 @@ use crate::vault::metadata::{
     set_vault_metadata, touch_vault_update_time,
 };
 use crate::vault::open::open_vault;
+use crate::vault::path_ops::{copy_file_path, create_empty_path, create_path_from_hash};
 #[allow(unused_imports)]
 use crate::vault::query::{
     check_by_hash, check_by_hash_no_validation, check_by_original_hash, check_by_path,
@@ -70,6 +72,7 @@ pub use extract::{ExtractError, ExtractionTask};
 pub use fix::FixError;
 pub use metadata::MetadataError;
 pub use open::OpenError;
+pub use path_ops::PathOperationError;
 pub use query::{
     DirectoryEntry, ListPathEntry, ListResult, QueryError, QueryFileResult, QueryPathResult,
 };
@@ -1405,6 +1408,106 @@ impl Vault {
     ) -> Result<(), UpdateError> {
         rename_path_inplace(self, source_path, new_name)?;
         touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
+    }
+
+    /// Creates a new file path that references the same stored file as an existing path.
+    ///
+    /// This is a metadata-only copy: the new path points to the same encrypted file
+    /// entity, and the source path's path-local tags are copied to the new path.
+    /// The encrypted payload is not rewritten.
+    ///
+    /// # Arguments
+    /// * `source_path` - The existing vault file path to copy from.
+    /// * `target_path` - The new vault file path to create.
+    ///
+    /// # Errors
+    /// Returns `PathOperationError` if the source path is missing, either path is
+    /// not a file path, the target already exists, or the database update fails.
+    //
+    // // 创建一个引用现有路径同一存储文件的新文件路径。
+    // //
+    // // 这是仅元数据复制：新路径指向同一个加密文件实体，并且源路径的路径局部标签
+    // // 会复制到新路径。加密载荷不会被重写。
+    // //
+    // // # 参数
+    // // * `source_path` - 要复制的现有保险库文件路径。
+    // // * `target_path` - 要创建的新保险库文件路径。
+    // //
+    // // # 错误
+    // // 如果源路径缺失、任一路径不是文件路径、目标已存在或数据库更新失败，
+    // // 则返回 `PathOperationError`。
+    pub fn copy_file_path(
+        &mut self,
+        source_path: &VaultPath,
+        target_path: &VaultPath,
+    ) -> Result<(), PathOperationError> {
+        copy_file_path(self, source_path, target_path)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
+    /// Creates a new file path that references an existing stored file hash.
+    ///
+    /// This inserts a new `file_entries` mapping to the existing file entity. No
+    /// path-local tags are created by this API.
+    ///
+    /// # Arguments
+    /// * `hash` - The encrypted file hash to reference.
+    /// * `target_path` - The new vault file path to create.
+    ///
+    /// # Errors
+    /// Returns `PathOperationError` if the hash does not exist, the target path is
+    /// not a file path, the target already exists, or the database update fails.
+    //
+    // // 创建一个引用现有存储文件哈希的新文件路径。
+    // //
+    // // 这会向现有文件实体插入一条新的 `file_entries` 映射。此 API 不会创建
+    // // 路径局部标签。
+    // //
+    // // # 参数
+    // // * `hash` - 要引用的加密文件哈希。
+    // // * `target_path` - 要创建的新保险库文件路径。
+    // //
+    // // # 错误
+    // // 如果哈希不存在、目标路径不是文件路径、目标已存在或数据库更新失败，
+    // // 则返回 `PathOperationError`。
+    pub fn create_path_from_hash(
+        &mut self,
+        hash: &VaultHash,
+        target_path: &VaultPath,
+    ) -> Result<(), PathOperationError> {
+        create_path_from_hash(self, hash, target_path)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
+    /// Creates an empty directory path in the vault tree.
+    ///
+    /// Missing parent directories are created automatically. The target path must
+    /// be a directory path ending with `/`; no file content is created.
+    ///
+    /// # Arguments
+    /// * `path` - The empty directory path to create.
+    ///
+    /// # Errors
+    /// Returns `PathOperationError` if `path` is not a directory path, the target
+    /// already exists, conflicts with a file path, or the database update fails.
+    //
+    // // 在保险库目录树中创建一个空目录路径。
+    // //
+    // // 缺失的父目录会自动创建。目标路径必须是以 `/` 结尾的目录路径；
+    // // 不会创建任何文件内容。
+    // //
+    // // # 参数
+    // // * `path` - 要创建的空目录路径。
+    // //
+    // // # 错误
+    // // 如果 `path` 不是目录路径、目标已存在、与文件路径冲突或数据库更新失败，
+    // // 则返回 `PathOperationError`。
+    pub fn create_empty_path(&mut self, path: &VaultPath) -> Result<(), PathOperationError> {
+        create_empty_path(self, path)?;
+        touch_vault_update_time(self)?;
+        Ok(())
     }
 
     // --- Remove API ---
