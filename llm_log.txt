@@ -21,3 +21,5 @@
 [2026-04-25T12:31:04+08:00] Fixed CLI move/rename compilation after path operation refactor by adding PathOperationError conversion to CliError.
 [2026-04-25T12:43:20+08:00] 将 DB-first 元数据逻辑与修复边界计划写入 docs/TODO.md。
 [2026-04-25T12:50:44+08:00] Implement DB-first metadata behavior and missing-storage removal boundaries.
+[2026-04-25T12:55:58+08:00] Update CLI remove force-option test for DB-first missing-storage semantics.
+[2026-04-25T13:04:28+08:00] Remove force remove API and CLI --force option after DB-first deletion semantics.

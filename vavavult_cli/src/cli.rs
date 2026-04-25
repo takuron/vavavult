@@ -163,11 +163,6 @@ pub enum ReplCommand {
         #[arg(short = 'r', long)]
         recursive: bool,
 
-        /// (Experimental) Force removal of inconsistent entries (e.g., DB entry exists but data file is missing)
-        // (实验性) 强制删除不一致的条目 (例如，数据库条目存在但数据文件丢失)
-        #[arg(short = 'f', long)]
-        force: bool,
-
         /// Skip all confirmation prompts
         //  跳过所有确认提示
         #[arg(short = 'y', long)]

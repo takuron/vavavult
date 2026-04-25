@@ -17,7 +17,6 @@ pub fn handle_remove(
     vault: &mut Vault,
     target: &str,
     recursive: bool,
-    force: bool,
     yes: bool,
 ) -> Result<(), CliError> {
     let target_obj = identify_target(target)?;
@@ -28,67 +27,43 @@ pub fn handle_remove(
                 println!("Warning: -r (recursive) has no effect when deleting by hash.");
             }
 
-            if force {
-                let display = hash.to_string();
-                (
-                    vec![DeleteTarget {
-                        hash: Some(hash),
-                        path: None,
-                        display: display.clone(),
-                    }],
-                    format!("file '{}' (by hash)", display),
-                )
-            } else {
-                let file_entry = match vault.find_by_hash(&hash)? {
-                    QueryFileResult::Found(entry) => entry,
-                    QueryFileResult::NotFound => {
-                        return Err(CliError::EntryNotFound(
-                            "File not found by hash.".to_string(),
-                        ));
-                    }
-                };
-                let display = display_path_for_entry(vault, &file_entry);
-                (
-                    vec![DeleteTarget {
-                        hash: Some(file_entry.sha256sum),
-                        path: None,
-                        display: display.clone(),
-                    }],
-                    format!("file '{}' (by hash)", display),
-                )
-            }
+            let file_entry = match vault.find_by_hash(&hash)? {
+                QueryFileResult::Found(entry) => entry,
+                QueryFileResult::NotFound => {
+                    return Err(CliError::EntryNotFound(
+                        "File not found by hash.".to_string(),
+                    ));
+                }
+            };
+            let display = display_path_for_entry(vault, &file_entry);
+            (
+                vec![DeleteTarget {
+                    hash: Some(file_entry.sha256sum),
+                    path: None,
+                    display: display.clone(),
+                }],
+                format!("file '{}' (by hash)", display),
+            )
         }
         Target::Path(vault_path) => {
             if vault_path.is_file() {
-                if force {
-                    let description = format!("file '{}'", vault_path);
-                    (
-                        vec![DeleteTarget {
-                            hash: None,
-                            path: Some(vault_path.clone()),
-                            display: vault_path.to_string(),
-                        }],
-                        description,
-                    )
-                } else {
-                    let file_entry = match vault.find_by_path(&vault_path)? {
-                        QueryPathResult::Found(entry) => entry,
-                        QueryPathResult::NotFound => {
-                            return Err(CliError::EntryNotFound(
-                                "File not found by path.".to_string(),
-                            ));
-                        }
-                    };
-                    let description = format!("file '{}'", vault_path);
-                    (
-                        vec![DeleteTarget {
-                            hash: Some(file_entry.sha256sum),
-                            path: Some(vault_path.clone()),
-                            display: vault_path.to_string(),
-                        }],
-                        description,
-                    )
-                }
+                let file_entry = match vault.find_by_path(&vault_path)? {
+                    QueryPathResult::Found(entry) => entry,
+                    QueryPathResult::NotFound => {
+                        return Err(CliError::EntryNotFound(
+                            "File not found by path.".to_string(),
+                        ));
+                    }
+                };
+                let description = format!("file '{}'", vault_path);
+                (
+                    vec![DeleteTarget {
+                        hash: Some(file_entry.sha256sum),
+                        path: Some(vault_path.clone()),
+                        display: vault_path.to_string(),
+                    }],
+                    description,
+                )
             } else {
                 let description = format!("directory '{}'", vault_path);
                 if !recursive {
@@ -162,11 +137,7 @@ pub fn handle_remove(
         let result = if let Some(path) = &target.path {
             vault.remove_file_by_path(path).map_err(|e| e.to_string())
         } else if let Some(hash) = &target.hash {
-            if force {
-                vault.force_remove_file(hash).map_err(|e| e.to_string())
-            } else {
-                vault.remove_file(hash).map_err(|e| e.to_string())
-            }
+            vault.remove_file(hash).map_err(|e| e.to_string())
         } else {
             Err("Internal delete target has neither path nor hash.".to_string())
         };

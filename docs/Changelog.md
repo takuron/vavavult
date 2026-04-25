@@ -4,9 +4,8 @@
 
 #### Features:
 
-- Implemented the `-f` (force) option for the `remove` command to ignore missing files during deletion.
-- Added the `-y/--yes` flag to the `remove` command, separating the skip confirmation logic from the force logic.
-- Added `vault.force_remove_file()` for idempotent file removal, which ensures a file entry is removed from both the database and storage while ignoring 'not found' errors.
+- Added the `-y/--yes` flag to the `remove` command to skip confirmation prompts.
+- Updated regular remove operations to clean database records while ignoring missing storage payloads.
 - Introduced the `vault::fix_file` function to repair missing files in the vault.
 
 #### Refactoring & Bug Fixes:
@@ -19,15 +18,14 @@
 
 - Added tests for idempotency, inconsistent states, custom metadata preservation, and timestamp handling.
 - Added standard documentation comments to the `FixError` enum.
-- Marked the `rm -f` command as experimental and suppressed dead code warnings for unused validation functions.
+- Suppressed dead code warnings for unused validation functions.
 
 ### 中文更新日志
 
 #### 新特性:
 
-- 为 `remove` 命令实现了 `-f` (force) 选项，允许在删除时忽略丢失的文件。
-- 为 `remove` 命令添加了 `-y/--yes` 标志，将跳过确认的逻辑与强制删除逻辑分离。
-- 新增了用于幂等文件删除的 `vault.force_remove_file()` 函数，该函数可确保文件条目从数据库和存储中同时删除，并忽略“未找到”错误。
+- 为 `remove` 命令添加了 `-y/--yes` 标志，用于跳过确认提示。
+- 更新普通删除逻辑，使其清理数据库记录并忽略已缺失的存储载荷。
 - 引入了 `vault::fix_file` 函数，用于修复保险库中丢失的文件。
 
 #### 重构与问题修复:
@@ -40,4 +38,4 @@
 
 - 增加了针对幂等性、不一致状态、自定义元数据保留以及时间戳处理的测试用例。
 - 为 `FixError` 枚举添加了标准的文档注释。
-- 将 `rm -f` 标记为实验性功能，并抑制了未使用的验证函数的死代码警告。
+- 抑制了未使用的验证函数的死代码警告。

@@ -18,7 +18,6 @@ use crate::vault::add::{
 };
 use crate::vault::metadata::MetadataError;
 use crate::vault::query::{QueryError, QueryFileResult, QueryPathResult};
-use crate::vault::remove::ForceRemoveError;
 use crate::vault::tags::TagError;
 
 /// Defines errors that can occur during the file fixing process.
@@ -71,12 +70,6 @@ pub enum FixError {
     // // 与存储后端交互时发生 I/O 错误。
     #[error("Error during storage operation: {0}")]
     StorageError(#[from] std::io::Error),
-
-    /// An error occurred while trying to remove the old file entry.
-    //
-    // // 尝试移除旧文件条目时发生错误。
-    #[error("Error removing old file entry: {0}")]
-    Remove(#[from] ForceRemoveError),
 
     /// An error occurred while re-applying tags to the new file.
     //

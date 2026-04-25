@@ -69,11 +69,10 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
         ReplCommand::Remove {
             target,
             recursive,
-            force,
             yes,
         } => {
             let mut vault = vault_arc.lock().unwrap();
-            handlers::remove::handle_remove(&mut vault, &target, recursive, force, yes)?;
+            handlers::remove::handle_remove(&mut vault, &target, recursive, yes)?;
         }
         ReplCommand::Move {
             target,

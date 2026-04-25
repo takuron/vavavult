@@ -55,38 +55,6 @@ pub enum RemoveError {
     HashParseError(#[from] HashParseError),
 }
 
-/// Defines errors that can occur during the forced file removal process.
-//
-// // 定义在强制文件删除过程中可能发生的错误。
-#[derive(Debug, thiserror::Error)]
-pub enum ForceRemoveError {
-    /// An error occurred while deleting the file record from the database.
-    //
-    // // 从数据库删除文件记录时发生错误。
-    #[error("Database delete error: {0}")]
-    DatabaseError(#[from] rusqlite::Error),
-
-    /// An I/O error occurred while trying to delete the physical file.
-    /// Note: A "Not Found" error is ignored, but other I/O errors are reported.
-    //
-    // // 尝试删除物理文件时发生 I/O 错误。
-    // // 注意：“未找到”错误会被忽略，但其他 I/O 错误会被报告。
-    #[error("File system error: {0}")]
-    FileSystemError(std::io::Error),
-
-    /// Failed to update the vault's last-modified timestamp.
-    //
-    // // 更新保险库的最后修改时间戳失败。
-    #[error("Failed to update vault timestamp: {0}")]
-    TimestampUpdateError(#[from] MetadataError),
-
-    /// The hash string provided was in an invalid format.
-    //
-    // // 提供的哈希字符串格式无效。
-    #[error("Wrong hash error: {0}")]
-    HashParseError(#[from] HashParseError),
-}
-
 /// 从保险库中删除一个文件实体及其全部路径映射。
 ///
 /// 此操作会删除该哈希对应的所有路径映射，然后删除文件实体和物理存储。
@@ -133,32 +101,6 @@ pub(crate) fn remove_file_by_path(
         "DELETE FROM files WHERE sha256sum = ?1",
         params![&sha256sum],
     )?;
-
-    Ok(())
-}
-
-/// 强制从保险库中删除一个文件记录。
-///
-/// 此操作会：
-/// 1. 尝试从文件系统 (`data/` 子目录) 中删除物理文件。如果文件不存在，操作将被忽略。
-/// 2. 从数据库中强制删除文件的全部路径映射和记录。如果记录不存在，操作将被忽略。
-///
-/// # Arguments
-/// * `vault` - 一个 Vault 实例。
-/// * `sha256sum` - 要删除的文件的加密后内容的 Base64 哈希。
-pub(crate) fn force_remove_file(
-    vault: &Vault,
-    sha256sum: &VaultHash,
-) -> Result<(), ForceRemoveError> {
-    // 1. 尝试从存储后端删除物理文件。
-    // 我们明确处理 NotFound 错误，因为即使 StorageBackend::delete 尝试幂等，
-    // 在 `exists()` 和 `remove_file()` 之间可能存在竞态条件导致返回 NotFound 错误。
-    delete_storage_if_present(vault, sha256sum).map_err(ForceRemoveError::FileSystemError)?;
-
-    // 2. 从数据库中强制删除记录和全部路径映射。
-    vault
-        .database_connection
-        .execute("DELETE FROM files WHERE sha256sum = ?1", params![sha256sum])?;
 
     Ok(())
 }

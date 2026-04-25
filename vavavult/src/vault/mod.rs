@@ -59,7 +59,7 @@ use crate::vault::rekey::{
     commit_rekey_tasks as _commit_rekey_tasks, prepare_rekey_tasks as _prepare_rekey_tasks,
     rekey_task as _rekey_task,
 };
-use crate::vault::remove::{force_remove_file, remove_file, remove_file_by_path};
+use crate::vault::remove::{remove_file, remove_file_by_path};
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
 use crate::vault::update::{enable_vault_feature, set_name, update_password as _update_password};
 
@@ -76,7 +76,7 @@ pub use query::{
     DirectoryEntry, ListPathEntry, ListResult, QueryError, QueryFileResult, QueryPathResult,
 };
 pub use rekey::{PendingRekeyTask, RekeyError, RekeyTask};
-pub use remove::{ForceRemoveError, RemoveError};
+pub use remove::RemoveError;
 pub use tags::TagError;
 pub use update::UpdateError;
 pub use update::verify_encrypted_file_hash;
@@ -1563,40 +1563,6 @@ impl Vault {
     // // 如果路径未找到或删除失败，则返回 `RemoveError`。
     pub fn remove_file_by_path(&mut self, path: &VaultPath) -> Result<(), RemoveError> {
         remove_file_by_path(self, path)?;
-        touch_vault_update_time(self)?;
-        Ok(())
-    }
-
-    /// Forcefully and permanently removes a file and all path mappings from the vault.
-    ///
-    /// This operation is idempotent and will not fail if the file or its
-    /// database record is already missing. It will attempt to delete the
-    /// physical file from the storage backend, all path mappings, and the database entry.
-    ///
-    /// Use this for cleanup operations where the state might be inconsistent.
-    ///
-    /// # Arguments
-    /// * `hash` - The hash of the file to remove.
-    ///
-    /// # Errors
-    /// Returns `ForceRemoveError` only on unexpected database or filesystem errors
-    /// (e.g., permission denied), but not for "not found" errors.
-    //
-    // // 从保险库中强制并永久地移除一个文件及其全部路径映射。
-    // //
-    // // 此操作是幂等的，如果文件或其数据库记录已经丢失，操作不会失败。
-    // // 它会尝试删除存储后端中的物理文件、全部路径映射和数据库条目。
-    // //
-    // // 用于清理可能存在状态不一致的情况。
-    // //
-    // // # 参数
-    // // * `hash` - 要移除的文件的哈希。
-    // //
-    // // # 错误
-    // // 仅在发生意外的数据库或文件系统错误 (例如权限被拒绝) 时返回 `ForceRemoveError`，
-    // // 不会因“未找到”错误而返回错误。
-    pub fn force_remove_file(&mut self, hash: &VaultHash) -> Result<(), ForceRemoveError> {
-        force_remove_file(self, hash)?;
         touch_vault_update_time(self)?;
         Ok(())
     }

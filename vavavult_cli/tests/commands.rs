@@ -66,9 +66,9 @@ fn test_vault_creation_and_status() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_remove_force_option() -> anyhow::Result<()> {
+fn test_remove_missing_storage_file() -> anyhow::Result<()> {
     // 1. Setup: Create vault and add a file
-    let context = TestContext::new("force-rm-vault", "")?;
+    let context = TestContext::new("missing-storage-rm-vault", "")?;
     context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
 
     // 2. Get file hash and manually delete physical file to create inconsistency
@@ -84,26 +84,27 @@ fn test_remove_force_option() -> anyhow::Result<()> {
         "Physical file should be deleted."
     );
 
-    // 3. Attempt normal `rm` - it should fail with a data inconsistency error
+    // 3. Attempt normal `rm` without confirmation - it should reach the prompt and cancel.
     let mut cmd_fail = Command::new(env!("CARGO_BIN_EXE_vavavult"));
     cmd_fail.arg("open").arg(&context.vault_path);
-    // The 'y' is not needed as the command fails before the prompt
     let repl_input_fail = "rm /test_file.txt\nexit\n".to_string();
 
     cmd_fail
         .write_stdin(repl_input_fail)
         .assert()
-        .success() // The CLI process itself exits cleanly
-        .stderr(predicate::str::contains("Data inconsistency")); // Check for the specific error
+        .success()
+        .stdout(predicate::str::contains(
+            "Are you sure you want to PERMANENTLY DELETE file '/test_file.txt'?",
+        ))
+        .stdout(predicate::str::contains("Operation cancelled."));
 
-    // 4. Attempt `rm -f -y` - it should succeed without confirmation
-    let mut cmd_force = Command::new(env!("CARGO_BIN_EXE_vavavult"));
-    cmd_force.arg("open").arg(&context.vault_path);
-    // Use -f to force the non-validating lookup, and -y to skip the prompt
-    let repl_input_force = "rm -f -y /test_file.txt\nls /\nexit\n".to_string();
+    // 4. Attempt normal `rm -y` - DB-first removal should succeed even when storage is missing.
+    let mut cmd_remove = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_remove.arg("open").arg(&context.vault_path);
+    let repl_input_remove = "rm -y /test_file.txt\nls /\nexit\n".to_string();
 
-    cmd_force
-        .write_stdin(repl_input_force)
+    cmd_remove
+        .write_stdin(repl_input_remove)
         .assert()
         .success()
         .stdout(predicate::str::contains("1 file(s) successfully deleted"))
