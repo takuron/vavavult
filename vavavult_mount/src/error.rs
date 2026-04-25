@@ -1,4 +1,4 @@
-/// vavavult_mount 统一错误类型。
+﻿/// vavavult_mount 统一错误类型。
 #[derive(Debug, thiserror::Error)]
 pub enum MountError {
     /// Vault 操作相关错误 (查询、提取、添加等)。
@@ -21,3 +21,5 @@ pub enum MountError {
     #[error("Configuration error: {0}")]
     ConfigError(String),
 }
+
+

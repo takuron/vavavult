@@ -1,4 +1,4 @@
-pub mod dispatcher;
+﻿pub mod dispatcher;
 pub mod state;
 
 use crate::cli::ReplCommand;
@@ -46,3 +46,4 @@ pub fn run_repl(app_state: &mut AppState) -> Result<(), CliError> {
     }
     Ok(())
 }
+

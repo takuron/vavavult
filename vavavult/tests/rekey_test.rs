@@ -1,8 +1,8 @@
-use std::fs;
+﻿use std::fs;
 use std::io::Write;
 use tempfile::tempdir;
 use vavavult::file::VaultPath;
-use vavavult::vault::{OpenError, QueryResult, UpdateError, Vault};
+use vavavult::vault::{OpenError, QueryFileResult, UpdateError, Vault};
 
 // 引入 common 模块，它提供了 setup_vault, setup_encrypted_vault 等辅助函数
 mod common;
@@ -26,8 +26,8 @@ fn test_rekey_file_e2e() {
 
     // 从数据库中获取完整的 FileEntry
     let old_entry = match vault.find_by_hash(&old_hash).unwrap() {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => panic!("File should have been added"),
+        QueryFileResult::Found(entry) => entry,
+        QueryFileResult::NotFound => panic!("File should have been added"),
     };
 
     // 2. Act: 执行密钥轮换
@@ -49,13 +49,13 @@ fn test_rekey_file_e2e() {
     // a. 使用旧哈希查询应该失败
     assert!(matches!(
         vault.find_by_hash(&old_hash).unwrap(),
-        QueryResult::NotFound
+        QueryFileResult::NotFound
     ));
 
     // b. 使用新哈希查询应该成功
     let new_entry = match vault.find_by_hash(&new_hash).unwrap() {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => panic!("File should be found with new hash"),
+        QueryFileResult::Found(entry) => entry,
+        QueryFileResult::NotFound => panic!("File should be found with new hash"),
     };
 
     // c. 验证新条目的元数据是否正确
@@ -105,8 +105,8 @@ fn update_password_e2e() {
 
     // b. 确认文件仍然存在且可访问
     let entry_after_update = match vault_after_update.find_by_hash(&file_hash).unwrap() {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => panic!("File should still exist after password update"),
+        QueryFileResult::Found(entry) => entry,
+        QueryFileResult::NotFound => panic!("File should still exist after password update"),
     };
     assert_eq!(entry_after_update.sha256sum, file_hash);
     assert_eq!(
@@ -139,3 +139,4 @@ fn update_password_e2e() {
         Err(UpdateError::InvalidOldPassword)
     ));
 }
+

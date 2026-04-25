@@ -1,4 +1,4 @@
-use crate::core::helpers::is_hash_like;
+﻿use crate::core::helpers::is_hash_like;
 use crate::errors::CliError;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -53,8 +53,7 @@ pub fn handle_verify(
                         not_found_targets.push(target.clone());
                     }
                 } else {
-                    if let Ok(vavavult::vault::QueryResult::Found(entry)) =
-                        vault_guard.find_by_path(&path)
+                    if let Ok(vavavult::vault::QueryPathResult::Found(entry)) = vault_guard.find_by_path(&path)
                     {
                         hashes_to_check.insert(entry.sha256sum);
                     } else {
@@ -183,3 +182,4 @@ fn verify_parallel(
     let failures = total_count - successes;
     Ok((successes, failures))
 }
+

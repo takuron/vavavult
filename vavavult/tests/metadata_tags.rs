@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use vavavult::common::constants::META_FILE_UPDATE_TIME;
 use vavavult::common::metadata::MetadataEntry;
 use vavavult::file::VaultPath;
-use vavavult::vault::{MetadataError, QueryResult};
+use vavavult::vault::{MetadataError, QueryFileResult, QueryPathResult};
 
 mod common;
 use common::{create_dummy_file, setup_encrypted_vault};
@@ -16,33 +16,34 @@ fn test_file_tag_lifecycle() {
     let dir = tempdir().unwrap();
     let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
     let file_path = create_dummy_file(&dir, "tag.txt", "content");
-    let hash = vault
+    let _hash = vault
         .add_file(&file_path, &VaultPath::from("/tag.txt"), None)
         .unwrap();
+    let vault_path = VaultPath::from("/tag.txt");
 
     // 1. 添加单个
-    vault.add_tag(&hash, "tag1").unwrap();
+    vault.add_tag(&vault_path, "tag1").unwrap();
     // 2. 批量添加
-    vault.add_tags(&hash, &["tag2", "tag3"]).unwrap();
+    vault.add_tags(&vault_path, &["tag2", "tag3"]).unwrap();
 
-    let entry = match vault.find_by_hash(&hash).unwrap() {
-        QueryResult::Found(e) => e,
+    let entry = match vault.find_by_path(&vault_path).unwrap() {
+        QueryPathResult::Found(e) => e,
         _ => panic!(),
     };
     assert_eq!(entry.tags.len(), 3);
 
     // 3. 移除单个
-    vault.remove_tag(&hash, "tag2").unwrap();
-    let entry = match vault.find_by_hash(&hash).unwrap() {
-        QueryResult::Found(e) => e,
+    vault.remove_tag(&vault_path, "tag2").unwrap();
+    let entry = match vault.find_by_path(&vault_path).unwrap() {
+        QueryPathResult::Found(e) => e,
         _ => panic!(),
     };
     assert_eq!(entry.tags.len(), 2);
 
     // 4. 清空
-    vault.clear_tags(&hash).unwrap();
-    let entry = match vault.find_by_hash(&hash).unwrap() {
-        QueryResult::Found(e) => e,
+    vault.clear_tags(&vault_path).unwrap();
+    let entry = match vault.find_by_path(&vault_path).unwrap() {
+        QueryPathResult::Found(e) => e,
         _ => panic!(),
     };
     assert!(entry.tags.is_empty());
@@ -72,7 +73,7 @@ fn test_file_metadata_lifecycle() {
     vault.set_file_metadata(&hash, meta).unwrap();
 
     let entry = match vault.find_by_hash(&hash).unwrap() {
-        QueryResult::Found(e) => e,
+        QueryFileResult::Found(e) => e,
         _ => panic!(),
     };
     assert_eq!(
@@ -95,7 +96,7 @@ fn test_file_metadata_lifecycle() {
     // 3. 移除元数据
     vault.remove_file_metadata(&hash, "author").unwrap();
     let entry = match vault.find_by_hash(&hash).unwrap() {
-        QueryResult::Found(e) => e,
+        QueryFileResult::Found(e) => e,
         _ => panic!(),
     };
     assert!(entry.metadata.iter().find(|m| m.key == "author").is_none());
@@ -126,3 +127,4 @@ fn test_vault_metadata_lifecycle() {
         MetadataError::MetadataKeyNotFound(_)
     ));
 }
+

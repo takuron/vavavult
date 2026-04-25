@@ -1,8 +1,8 @@
-use crate::common::hash::{HashParseError, VaultHash};
+﻿use crate::common::hash::{HashParseError, VaultHash};
 use crate::crypto::chunked::{ChunkedCryptoError, ChunkedReader, chunked_decrypt};
 use crate::crypto::encrypt::EncryptError;
 use crate::storage::{StorageBackend, StorageReader};
-use crate::vault::{QueryResult, Vault, query};
+use crate::vault::{QueryFileResult, Vault, query};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -85,8 +85,8 @@ pub(crate) fn prepare_extraction_task(
 ) -> Result<ExtractionTask, ExtractError> {
     // 1. 在数据库中查找文件的完整信息
     let file_entry = match query::check_by_hash(vault, sha256sum)? {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => {
+        QueryFileResult::Found(entry) => entry,
+        QueryFileResult::NotFound => {
             return Err(ExtractError::FileNotFound(sha256sum.to_string()));
         }
     };
@@ -303,3 +303,4 @@ pub(crate) fn extract_file(
     let task = prepare_extraction_task(vault, sha256sum)?;
     decrypt_extraction_task_to_file(vault.storage.as_ref(), &task, destination_path)
 }
+

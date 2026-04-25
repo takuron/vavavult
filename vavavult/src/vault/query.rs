@@ -1,7 +1,7 @@
-use crate::common::constants::META_VAULT_FEATURES;
+﻿use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
-use crate::file::{FileEntry, PathError, VaultPath};
+use crate::file::{FileEntry, FilePathEntry, PathError, VaultPath};
 use crate::vault::Vault;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
@@ -9,9 +9,18 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 //
 // // 代表寻求单个 `FileEntry` 的查询结果。
 #[derive(Debug)]
-pub enum QueryResult {
+pub enum QueryFileResult {
     NotFound,
     Found(FileEntry),
+}
+
+/// Represents the result of a query that seeks a single `FilePathEntry`.
+//
+// // 代表寻求单个 `FilePathEntry` 的查询结果。
+#[derive(Debug)]
+pub enum QueryPathResult {
+    NotFound,
+    Found(FilePathEntry),
 }
 
 /// Represents a directory path entry in the vault tree.
@@ -40,25 +49,6 @@ pub struct DirectoryEntry {
     /// The number of direct subdirectories under this directory.
     // // 此目录下直属子目录的数量。
     pub child_directory_count: usize,
-}
-
-/// Represents a file path mapping in the vault tree.
-///
-/// This struct keeps only the display path and encrypted content hash, leaving
-/// heavier file metadata to explicit lookup APIs.
-//
-// // 代表保险库目录树中的文件路径映射。
-// //
-// // 此结构体仅保留显示路径和加密内容哈希，较重的文件元数据由显式查询 API 获取。
-#[derive(Debug, Clone)]
-pub struct FilePathEntry {
-    /// The absolute vault path of this file entry.
-    // // 此文件条目的保险库绝对路径。
-    pub path: VaultPath,
-
-    /// The SHA256 hash of the encrypted file content.
-    // // 加密后文件内容的 SHA256 哈希。
-    pub sha256sum: VaultHash,
 }
 
 /// Represents one item returned by `Vault::list_by_path`.
@@ -248,6 +238,42 @@ pub(crate) fn insert_file_entry_in_conn(
     Ok(())
 }
 
+/// 解析文件路径，返回对应的文件映射 ID 和内容哈希。
+pub(crate) fn resolve_file_entry_in_conn(
+    conn: &Connection,
+    path: &VaultPath,
+) -> Result<Option<(i64, VaultHash)>, QueryError> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let parent_path = path.parent()?;
+    let Some(directory_id) = resolve_directory_in_conn(conn, &parent_path)? else {
+        return Ok(None);
+    };
+    let Some(file_name) = path.file_name() else {
+        return Ok(None);
+    };
+
+    let row = conn
+        .query_row(
+            "SELECT id, file_sha256sum FROM file_entries WHERE directory_id = ?1 AND name = ?2",
+            params![directory_id, file_name],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, VaultHash>(1)?)),
+        )
+        .optional()?;
+
+    Ok(row)
+}
+
+/// 解析文件路径，返回对应的文件映射 ID 和内容哈希。
+pub(crate) fn resolve_file_entry(
+    vault: &Vault,
+    path: &VaultPath,
+) -> Result<Option<(i64, VaultHash)>, QueryError> {
+    resolve_file_entry_in_conn(&vault.database_connection, path)
+}
+
 /// 删除指定路径上的文件映射，并返回它指向的文件哈希。
 pub(crate) fn remove_file_entry_by_path_in_conn(
     conn: &Connection,
@@ -314,7 +340,7 @@ pub(crate) fn file_entry_ref_count_in_conn(
 fn fetch_file_core_by_path(
     conn: &Connection,
     path: &VaultPath,
-) -> Result<Option<(VaultHash, VaultHash, String)>, QueryError> {
+) -> Result<Option<(i64, VaultHash, VaultHash, String)>, QueryError> {
     if !path.is_file() {
         return Ok(None);
     }
@@ -329,16 +355,17 @@ fn fetch_file_core_by_path(
 
     let row = conn
         .query_row(
-            "SELECT f.sha256sum, f.original_sha256sum, f.encrypt_password
+            "SELECT fe.id, f.sha256sum, f.original_sha256sum, f.encrypt_password
              FROM file_entries fe
              JOIN files f ON f.sha256sum = fe.file_sha256sum
              WHERE fe.directory_id = ?1 AND fe.name = ?2",
             params![directory_id, file_name],
             |row| {
                 Ok((
-                    row.get::<_, VaultHash>(0)?,
+                    row.get::<_, i64>(0)?,
                     row.get::<_, VaultHash>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, VaultHash>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             },
         )
@@ -354,12 +381,6 @@ pub(crate) fn fetch_full_entry(
     original_sha256sum: &VaultHash,
     encrypt_password: &str,
 ) -> Result<FileEntry, QueryError> {
-    // 查询标签。
-    let mut tags_stmt = conn.prepare("SELECT tag FROM tags WHERE file_sha256sum = ?1")?;
-    let tags = tags_stmt
-        .query_map(params![sha256sum], |row| row.get(0))?
-        .collect::<Result<Vec<String>, _>>()?;
-
     // 查询元数据。
     let mut meta_stmt =
         conn.prepare("SELECT meta_key, meta_value FROM metadata WHERE file_sha256sum = ?1")?;
@@ -376,7 +397,6 @@ pub(crate) fn fetch_full_entry(
         sha256sum: sha256sum.clone(),
         original_sha256sum: original_sha256sum.clone(),
         encrypt_password: encrypt_password.to_string(),
-        tags,
         metadata,
     })
 }
@@ -400,20 +420,28 @@ fn fetch_full_entry_from_core(
     )
 }
 
-/// 根据文件路径在保险库中查找文件。
-pub(crate) fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResult, QueryError> {
+fn fetch_tags_for_file_entry(conn: &Connection, file_entry_id: i64) -> Result<Vec<String>, QueryError> {
+    let mut tags_stmt = conn.prepare("SELECT tag FROM tags WHERE file_entry_id = ?1")?;
+    let tags = tags_stmt
+        .query_map(params![file_entry_id], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(tags)
+}
+
+/// 根据文件路径在保险库中查找文件路径映射。
+pub(crate) fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryPathResult, QueryError> {
     match fetch_file_core_by_path(&vault.database_connection, path)? {
-        Some((sha256sum, original_sha256sum, encrypt_password)) => {
-            let entry = fetch_full_entry_from_core(
-                vault,
-                &sha256sum,
-                &original_sha256sum,
-                &encrypt_password,
-                true,
-            )?;
-            Ok(QueryResult::Found(entry))
+        Some((file_entry_id, sha256sum, _, _)) => {
+            if !vault.storage.exists(&sha256sum)? {
+                return Err(QueryError::FileMissing(sha256sum.to_string()));
+            }
+            Ok(QueryPathResult::Found(FilePathEntry {
+                path: path.clone(),
+                sha256sum,
+                tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
+            }))
         }
-        None => Ok(QueryResult::NotFound),
+        None => Ok(QueryPathResult::NotFound),
     }
 }
 
@@ -425,18 +453,16 @@ pub(crate) fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryResu
 pub(crate) fn check_by_path_no_validation(
     vault: &Vault,
     path: &VaultPath,
-) -> Result<QueryResult, QueryError> {
+) -> Result<QueryPathResult, QueryError> {
     match fetch_file_core_by_path(&vault.database_connection, path)? {
-        Some((sha256sum, original_sha256sum, encrypt_password)) => {
-            Ok(QueryResult::Found(fetch_full_entry_from_core(
-                vault,
-                &sha256sum,
-                &original_sha256sum,
-                &encrypt_password,
-                false,
-            )?))
+        Some((file_entry_id, sha256sum, _, _)) => {
+            Ok(QueryPathResult::Found(FilePathEntry {
+                path: path.clone(),
+                sha256sum,
+                tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
+            }))
         }
-        None => Ok(QueryResult::NotFound),
+        None => Ok(QueryPathResult::NotFound),
     }
 }
 
@@ -444,7 +470,7 @@ fn fetch_file_core_by_hash(
     vault: &Vault,
     hash: &VaultHash,
     validate_storage: bool,
-) -> Result<QueryResult, QueryError> {
+) -> Result<QueryFileResult, QueryError> {
     let row = vault
         .database_connection
         .query_row(
@@ -470,9 +496,9 @@ fn fetch_file_core_by_hash(
                 &encrypt_password,
                 validate_storage,
             )?;
-            Ok(QueryResult::Found(entry))
+            Ok(QueryFileResult::Found(entry))
         }
-        None => Ok(QueryResult::NotFound),
+        None => Ok(QueryFileResult::NotFound),
     }
 }
 
@@ -481,12 +507,12 @@ fn fetch_file_core_by_hash(
 pub(crate) fn check_by_hash_no_validation(
     vault: &Vault,
     hash: &VaultHash,
-) -> Result<QueryResult, QueryError> {
+) -> Result<QueryFileResult, QueryError> {
     fetch_file_core_by_hash(vault, hash, false)
 }
 
 /// 根据文件的加密后 SHA256 哈希值在保险库中查找文件。
-pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryResult, QueryError> {
+pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryFileResult, QueryError> {
     fetch_file_core_by_hash(vault, hash, true)
 }
 
@@ -560,11 +586,11 @@ pub(crate) fn find_by_hashes(
 pub(crate) fn find_by_paths(
     vault: &Vault,
     paths: &[VaultPath],
-) -> Result<Vec<FileEntry>, QueryError> {
+) -> Result<Vec<FilePathEntry>, QueryError> {
     let mut entries = Vec::new();
 
     for path in paths {
-        if let QueryResult::Found(entry) = check_by_path(vault, path)? {
+        if let QueryPathResult::Found(entry) = check_by_path(vault, path)? {
             entries.push(entry);
         }
     }
@@ -576,7 +602,7 @@ pub(crate) fn find_by_paths(
 pub(crate) fn check_by_original_hash(
     vault: &Vault,
     original_hash: &VaultHash,
-) -> Result<QueryResult, QueryError> {
+) -> Result<QueryFileResult, QueryError> {
     let row = vault
         .database_connection
         .query_row(
@@ -602,9 +628,9 @@ pub(crate) fn check_by_original_hash(
                 &encrypt_password,
                 true,
             )?;
-            Ok(QueryResult::Found(entry))
+            Ok(QueryFileResult::Found(entry))
         }
-        None => Ok(QueryResult::NotFound),
+        None => Ok(QueryFileResult::NotFound),
     }
 }
 
@@ -638,6 +664,26 @@ fn process_rows_to_entries(
             true,
         )?;
         entries.push(entry);
+    }
+
+    Ok(entries)
+}
+
+fn process_path_rows_to_entries(
+    vault: &Vault,
+    rows: Vec<(i64, VaultPath, VaultHash)>,
+) -> Result<Vec<FilePathEntry>, QueryError> {
+    let mut entries = Vec::with_capacity(rows.len());
+
+    for (file_entry_id, path, sha256sum) in rows {
+        if !vault.storage.exists(&sha256sum)? {
+            return Err(QueryError::FileMissing(sha256sum.to_string()));
+        }
+        entries.push(FilePathEntry {
+            path,
+            sha256sum,
+            tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
+        });
     }
 
     Ok(entries)
@@ -707,7 +753,7 @@ pub(crate) fn list_by_path(
 
     // 再读取直属文件映射，只返回路径和内容哈希。
     let mut file_stmt = vault.database_connection.prepare(
-        "SELECT fe.name, f.sha256sum
+        "SELECT fe.id, fe.name, f.sha256sum
          FROM file_entries fe
          JOIN files f ON f.sha256sum = fe.file_sha256sum
          WHERE fe.directory_id = ?1
@@ -715,17 +761,22 @@ pub(crate) fn list_by_path(
     )?;
     let file_rows = file_stmt
         .query_map(params![directory_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, VaultHash>(1)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, VaultHash>(2)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    for (file_name, sha256sum) in file_rows {
+    for (file_entry_id, file_name, sha256sum) in file_rows {
         if !vault.storage.exists(&sha256sum)? {
             return Err(QueryError::FileMissing(sha256sum.to_string()));
         }
         entries.push(ListPathEntry::File(FilePathEntry {
             path: path.join(&file_name)?,
             sha256sum,
+            tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
         }));
     }
 
@@ -753,21 +804,31 @@ pub(crate) fn list_all_recursive(
              FROM directories d
              JOIN subtree ON d.parent_id = subtree.id
          )
-         SELECT subtree.path || fe.name, fe.file_sha256sum
+         SELECT fe.id, subtree.path || fe.name, fe.file_sha256sum
          FROM file_entries fe
          JOIN subtree ON fe.directory_id = subtree.id
          JOIN files f ON f.sha256sum = fe.file_sha256sum
          ORDER BY subtree.path || fe.name",
     )?;
 
-    let file_entries = stmt
+    let file_rows = stmt
         .query_map(params![directory_id, path.as_str()], |row| {
-            Ok(FilePathEntry {
-                path: row.get::<_, VaultPath>(0)?,
-                sha256sum: row.get::<_, VaultHash>(1)?,
-            })
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, VaultPath>(1)?,
+                row.get::<_, VaultHash>(2)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
+
+    let mut file_entries = Vec::with_capacity(file_rows.len());
+    for (file_entry_id, path, sha256sum) in file_rows {
+        file_entries.push(FilePathEntry {
+            path,
+            sha256sum,
+            tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
+        });
+    }
 
     for file_entry in &file_entries {
         if !vault.storage.exists(&file_entry.sha256sum)? {
@@ -779,28 +840,45 @@ pub(crate) fn list_all_recursive(
 }
 
 /// 按特定标签查找文件。
-pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FileEntry>, QueryError> {
+pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FilePathEntry>, QueryError> {
     let mut stmt = vault.database_connection.prepare(
-        "SELECT f.sha256sum, f.original_sha256sum, f.encrypt_password
-         FROM files f JOIN tags t ON f.sha256sum = t.file_sha256sum
-         WHERE t.tag = ?1",
+        "WITH RECURSIVE entry_paths(file_entry_id, file_sha256sum, path, parent_id) AS (
+             SELECT fe.id,
+                    fe.file_sha256sum,
+                    CASE WHEN d.parent_id IS NULL THEN fe.name ELSE d.name || '/' || fe.name END,
+                    d.parent_id
+             FROM file_entries fe
+             JOIN directories d ON d.id = fe.directory_id
+             UNION ALL
+             SELECT ep.file_entry_id,
+                    ep.file_sha256sum,
+                    CASE WHEN parent.parent_id IS NULL THEN ep.path ELSE parent.name || '/' || ep.path END,
+                    parent.parent_id
+             FROM entry_paths ep
+             JOIN directories parent ON parent.id = ep.parent_id
+         )
+         SELECT ep.file_entry_id, '/' || ep.path, ep.file_sha256sum
+         FROM entry_paths ep
+         JOIN tags t ON ep.file_entry_id = t.file_entry_id
+         WHERE ep.parent_id IS NULL AND t.tag = ?1
+         ORDER BY ep.path",
     )?;
 
     let rows = stmt
         .query_map(params![tag], |row| {
             Ok((
-                row.get::<_, VaultHash>(0)?,
-                row.get::<_, VaultHash>(1)?,
-                row.get::<_, String>(2)?,
+                row.get::<_, i64>(0)?,
+                row.get::<_, VaultPath>(1)?,
+                row.get::<_, VaultHash>(2)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    process_rows_to_entries(vault, rows)
+    process_path_rows_to_entries(vault, rows)
 }
 
 /// 统一的关键字模糊搜索 (不区分大小写)。
-pub(crate) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
+pub(crate) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FilePathEntry>, QueryError> {
     let like_pattern = format!("%{}%", keyword.to_lowercase());
 
     let mut stmt = vault.database_connection.prepare(
@@ -819,24 +897,24 @@ pub(crate) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FileEn
              FROM entry_paths ep
              JOIN directories parent ON parent.id = ep.parent_id
          )
-         SELECT DISTINCT f.sha256sum, f.original_sha256sum, f.encrypt_password
-         FROM files f
-         LEFT JOIN tags t ON f.sha256sum = t.file_sha256sum
-         LEFT JOIN entry_paths ep ON f.sha256sum = ep.file_sha256sum AND ep.parent_id IS NULL
-         WHERE LOWER('/' || ep.path) LIKE ?1 OR LOWER(t.tag) LIKE ?1",
+         SELECT DISTINCT ep.file_entry_id, '/' || ep.path, ep.file_sha256sum
+         FROM entry_paths ep
+         LEFT JOIN tags t ON ep.file_entry_id = t.file_entry_id
+         WHERE ep.parent_id IS NULL AND (LOWER('/' || ep.path) LIKE ?1 OR LOWER(t.tag) LIKE ?1)
+         ORDER BY ep.path",
     )?;
 
     let rows = stmt
         .query_map(params![like_pattern], |row| {
             Ok((
-                row.get::<_, VaultHash>(0)?,
-                row.get::<_, VaultHash>(1)?,
-                row.get::<_, String>(2)?,
+                row.get::<_, i64>(0)?,
+                row.get::<_, VaultPath>(1)?,
+                row.get::<_, VaultHash>(2)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    process_rows_to_entries(vault, rows)
+    process_path_rows_to_entries(vault, rows)
 }
 
 /// 高效地获取保险库中文件路径映射的总数。
@@ -893,3 +971,4 @@ pub(crate) fn is_vault_feature_enabled(
         None => Ok(false),
     }
 }
+

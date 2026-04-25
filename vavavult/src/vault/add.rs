@@ -1,4 +1,4 @@
-use crate::common::constants::{
+﻿use crate::common::constants::{
     META_FILE_ADD_TIME, META_FILE_SIZE, META_FILE_UPDATE_TIME, META_SOURCE_MODIFIED_TIME,
 };
 use crate::common::hash::VaultHash;
@@ -12,7 +12,7 @@ use crate::utils::random::generate_random_password;
 use crate::utils::time::now_as_rfc3339_string;
 pub(crate) use crate::vault::Vault;
 use crate::vault::metadata::MetadataError;
-use crate::vault::query::QueryResult;
+use crate::vault::query::{QueryFileResult, QueryPathResult};
 use crate::vault::{FileEntry, query};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
@@ -91,8 +91,8 @@ enum AdditionCommitAction {
 
 fn committed_hash_for_path(vault: &Vault, path: &VaultPath) -> Result<VaultHash, AddFileError> {
     match query::check_by_path(vault, path)? {
-        QueryResult::Found(entry) => Ok(entry.sha256sum),
-        QueryResult::NotFound => Err(AddFileError::DatabaseError(
+        QueryPathResult::Found(entry) => Ok(entry.sha256sum),
+        QueryPathResult::NotFound => Err(AddFileError::DatabaseError(
             rusqlite::Error::QueryReturnedNoRows,
         )),
     }
@@ -221,7 +221,7 @@ pub(crate) fn prepare_addition_tasks(
             ));
         }
         // 2. 检查数据库中路径是否重复
-        if let QueryResult::Found(_) = query::check_by_path(vault, req.dest_path)? {
+        if let QueryPathResult::Found(_) = query::check_by_path(vault, req.dest_path)? {
             return Err(AddFileError::DuplicateFileName(req.dest_path.to_string()));
         }
         // 3. 检查批内路径是否重复
@@ -346,7 +346,6 @@ pub(crate) fn encrypt_addition_task(
         sha256sum: encrypted_sha256sum,
         original_sha256sum,
         encrypt_password: per_file_password,
-        tags: Vec::new(),
         metadata,
     };
 
@@ -406,7 +405,7 @@ pub(crate) fn commit_addition_tasks(
         let dest_path = &file_to_add.dest_path;
 
         // 路径重复检查（防御性：阶段1已检查，但提交时可能有并发变更）
-        if let QueryResult::Found(_) = query::check_by_path(vault, dest_path)? {
+        if let QueryPathResult::Found(_) = query::check_by_path(vault, dest_path)? {
             return Err(AddFileError::DuplicateFileName(dest_path.to_string()));
         }
         if !paths_in_batch.insert(dest_path) {
@@ -415,8 +414,8 @@ pub(crate) fn commit_addition_tasks(
 
         // 相同原始内容按策略处理：默认复用已有文件实体，严格模式则报错。
         let existing_hash = match query::check_by_original_hash(vault, &entry.original_sha256sum)? {
-            QueryResult::Found(existing) => Some(existing.sha256sum),
-            QueryResult::NotFound => originals_in_batch.get(&entry.original_sha256sum).cloned(),
+            QueryFileResult::Found(existing) => Some(existing.sha256sum),
+            QueryFileResult::NotFound => originals_in_batch.get(&entry.original_sha256sum).cloned(),
         };
 
         if let Some(existing_hash) = existing_hash {
@@ -682,3 +681,4 @@ pub(crate) fn resolve_file_metadata(
         .into();
     Ok((final_dest_path, file_size, source_modified_time))
 }
+

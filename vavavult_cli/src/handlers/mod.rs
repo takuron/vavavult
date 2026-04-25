@@ -1,4 +1,4 @@
-pub(crate) mod add;
+﻿pub(crate) mod add;
 pub(crate) mod extract;
 pub(crate) mod list;
 // pub(crate) mod mount;
@@ -11,3 +11,4 @@ pub(crate) mod search;
 pub(crate) mod tag;
 pub(crate) mod vault;
 pub(crate) mod verify;
+

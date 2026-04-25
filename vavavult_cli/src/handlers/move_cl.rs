@@ -1,7 +1,7 @@
-use crate::core::helpers::{Target, display_path_for_entry, identify_target};
+﻿use crate::core::helpers::{Target, display_path_for_entry, identify_target};
 use crate::errors::CliError;
 use vavavult::file::VaultPath;
-use vavavult::vault::{QueryResult, Vault};
+use vavavult::vault::{QueryFileResult, QueryPathResult, Vault};
 
 /// 处理 'mv' (Move) 命令
 pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Result<(), CliError> {
@@ -12,8 +12,8 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
         // --- 情况1：源是通过哈希值的单个文件 ---
         Target::Hash(hash) => {
             let file_entry = match vault.find_by_hash(&hash)? {
-                QueryResult::Found(entry) => entry,
-                QueryResult::NotFound => {
+                QueryFileResult::Found(entry) => entry,
+                QueryFileResult::NotFound => {
                     return Err(CliError::EntryNotFound(format!(
                         "File not found with hash '{}'.",
                         hash
@@ -32,8 +32,8 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
         // --- 情况2：源是文件路径 ---
         Target::Path(source_path) if source_path.is_file() => {
             match vault.find_by_path(&source_path)? {
-                QueryResult::Found(_) => {}
-                QueryResult::NotFound => {
+                QueryPathResult::Found(_) => {}
+                QueryPathResult::NotFound => {
                     return Err(CliError::EntryNotFound(format!(
                         "File not found at path '{}'.",
                         source_path
@@ -95,3 +95,4 @@ pub fn handle_move(vault: &mut Vault, target: &str, destination: String) -> Resu
 
     Ok(())
 }
+

@@ -213,14 +213,19 @@ impl DavFileSystem for VaultDavFs {
                 let vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
 
                 match vault.find_by_path(&vault_path) {
-                    Ok(vavavult::vault::QueryResult::Found(entry)) => {
+                    Ok(vavavult::vault::QueryPathResult::Found(path_entry)) => {
                         // 文件找到，提取元数据
-                        let size = extract_file_size(&entry);
-                        let modified = extract_modified_time(&entry);
+                        let (size, modified) = match vault.find_by_hash(&path_entry.sha256sum) {
+                            Ok(vavavult::vault::QueryFileResult::Found(file_entry)) => (
+                                extract_file_size(&file_entry),
+                                extract_modified_time(&file_entry),
+                            ),
+                            _ => (0, std::time::SystemTime::UNIX_EPOCH),
+                        };
                         Ok(Box::new(VaultDavMetaData::file(size, modified))
                             as Box<dyn DavMetaData>)
                     }
-                    Ok(vavavult::vault::QueryResult::NotFound) => {
+                    Ok(vavavult::vault::QueryPathResult::NotFound) => {
                         // 文件未找到，尝试作为目录查找
                         // 处理客户端省略目录路径尾部斜杠的情况
                         let dir_path_str = format!("{}/", vault_path.as_str());
@@ -295,7 +300,7 @@ impl DavFileSystem for VaultDavFs {
                                 .unwrap_or_default();
                             let (size, modified) =
                                 match vault.find_by_hash(&file_path_entry.sha256sum) {
-                                    Ok(vavavult::vault::QueryResult::Found(file_entry)) => (
+                                    Ok(vavavult::vault::QueryFileResult::Found(file_entry)) => (
                                         extract_file_size(&file_entry),
                                         extract_modified_time(&file_entry),
                                     ),
@@ -375,23 +380,28 @@ impl DavFileSystem for VaultDavFs {
             let vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
 
             // 1. 查找文件条目
-            let file_entry = match vault.find_by_path(&vault_path) {
-                Ok(vavavult::vault::QueryResult::Found(entry)) => entry,
-                Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),
+            let path_entry = match vault.find_by_path(&vault_path) {
+                Ok(vavavult::vault::QueryPathResult::Found(entry)) => entry,
+                Ok(vavavult::vault::QueryPathResult::NotFound) => return Err(FsError::NotFound),
                 Err(_) => return Err(FsError::GeneralFailure),
             };
 
             // 2. 准备解密任务（阶段 1：快速数据库查询）
             let task = vault
-                .prepare_extraction_task(&file_entry.sha256sum)
+                .prepare_extraction_task(&path_entry.sha256sum)
                 .map_err(|_| FsError::GeneralFailure)?;
 
             // 3. 克隆存储后端引用（用于阶段 2 解密，无需持有 vault 锁）
             let storage = vault.storage.clone();
 
             // 4. 提取文件元数据（在释放锁之前）
-            let file_size = extract_file_size(&file_entry);
-            let modified = extract_modified_time(&file_entry);
+            let (file_size, modified) = match vault.find_by_hash(&path_entry.sha256sum) {
+                Ok(vavavult::vault::QueryFileResult::Found(file_entry)) => (
+                    extract_file_size(&file_entry),
+                    extract_modified_time(&file_entry),
+                ),
+                _ => (0, std::time::SystemTime::UNIX_EPOCH),
+            };
 
             // 5. 释放锁
             drop(vault);
@@ -517,8 +527,8 @@ impl DavFileSystem for VaultDavFs {
 
             // 单个文件重命名
             match vault.find_by_path(&from_path) {
-                Ok(vavavult::vault::QueryResult::Found(_)) => {}
-                Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),
+                Ok(vavavult::vault::QueryPathResult::Found(_)) => {}
+                Ok(vavavult::vault::QueryPathResult::NotFound) => return Err(FsError::NotFound),
                 Err(_) => return Err(FsError::GeneralFailure),
             };
 
@@ -988,3 +998,5 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+

@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+﻿use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ mod update;
 
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
-pub use crate::file::FileEntry;
+pub use crate::file::{FileEntry, FilePathEntry};
 use crate::file::VaultPath;
 use crate::storage::StorageBackend;
 use crate::storage::local::LocalStorage;
@@ -71,7 +71,7 @@ pub use fix::FixError;
 pub use metadata::MetadataError;
 pub use open::OpenError;
 pub use query::{
-    DirectoryEntry, FilePathEntry, ListPathEntry, ListResult, QueryError, QueryResult,
+    DirectoryEntry, ListPathEntry, ListResult, QueryError, QueryFileResult, QueryPathResult,
 };
 pub use rekey::{PendingRekeyTask, RekeyError, RekeyTask};
 pub use remove::{ForceRemoveError, RemoveError};
@@ -273,7 +273,7 @@ impl Vault {
     /// * `hash` - The SHA256 hash of the encrypted file content.
     ///
     /// # Returns
-    /// `QueryResult::Found(FileEntry)` if found, otherwise `QueryResult::NotFound`.
+    /// `QueryFileResult::Found(FileEntry)` if found, otherwise `QueryFileResult::NotFound`.
     ///
     /// # Errors
     /// Returns `QueryError` on database failures.
@@ -285,11 +285,11 @@ impl Vault {
     // // * `hash` - 加密文件内容的 SHA256 哈希。
     // //
     // // # 返回
-    // // 如果找到，返回 `QueryResult::Found(FileEntry)`，否则返回 `QueryResult::NotFound`。
+    // // 如果找到，返回 `QueryFileResult::Found(FileEntry)`，否则返回 `QueryFileResult::NotFound`。
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_hash(&self, hash: &VaultHash) -> Result<QueryResult, QueryError> {
+    pub fn find_by_hash(&self, hash: &VaultHash) -> Result<QueryFileResult, QueryError> {
         check_by_hash(self, hash)
     }
 
@@ -361,7 +361,7 @@ impl Vault {
     /// * `path` - The normalized path within the vault (e.g., "/docs/file.txt").
     ///
     /// # Returns
-    /// `QueryResult::Found(FileEntry)` if found, otherwise `QueryResult::NotFound`.
+    /// `QueryFileResult::Found(FileEntry)` if found, otherwise `QueryFileResult::NotFound`.
     ///
     /// # Errors
     /// Returns `QueryError` on database failures.
@@ -372,11 +372,11 @@ impl Vault {
     // // * `path` - 保险库内的规范化路径 (例如 "/docs/file.txt")。
     // //
     // // # 返回
-    // // 如果找到，返回 `QueryResult::Found(FileEntry)`，否则返回 `QueryResult::NotFound`。
+    // // 如果找到，返回 `QueryFileResult::Found(FileEntry)`，否则返回 `QueryFileResult::NotFound`。
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_path(&self, path: &VaultPath) -> Result<QueryResult, QueryError> {
+    pub fn find_by_path(&self, path: &VaultPath) -> Result<QueryPathResult, QueryError> {
         check_by_path(self, path)
     }
 
@@ -405,7 +405,7 @@ impl Vault {
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_paths(&self, paths: &[VaultPath]) -> Result<Vec<FileEntry>, QueryError> {
+    pub fn find_by_paths(&self, paths: &[VaultPath]) -> Result<Vec<FilePathEntry>, QueryError> {
         find_by_paths(self, paths)
     }
 
@@ -416,7 +416,7 @@ impl Vault {
     /// * `original_hash` - The SHA256 hash of the original file content.
     ///
     /// # Returns
-    /// `QueryResult::Found(FileEntry)` if found, otherwise `QueryResult::NotFound`.
+    /// `QueryFileResult::Found(FileEntry)` if found, otherwise `QueryFileResult::NotFound`.
     ///
     /// # Errors
     /// Returns `QueryError` on database failures.
@@ -428,14 +428,14 @@ impl Vault {
     // // * `original_hash` - 原始文件内容的 SHA256 哈希。
     // //
     // // # 返回
-    // // 如果找到，返回 `QueryResult::Found(FileEntry)`，否则返回 `QueryResult::NotFound`。
+    // // 如果找到，返回 `QueryFileResult::Found(FileEntry)`，否则返回 `QueryFileResult::NotFound`。
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
     pub fn find_by_original_hash(
         &self,
         original_hash: &VaultHash,
-    ) -> Result<QueryResult, QueryError> {
+    ) -> Result<QueryFileResult, QueryError> {
         check_by_original_hash(self, original_hash)
     }
 
@@ -460,7 +460,7 @@ impl Vault {
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_tag(&self, tag: &str) -> Result<Vec<FileEntry>, QueryError> {
+    pub fn find_by_tag(&self, tag: &str) -> Result<Vec<FilePathEntry>, QueryError> {
         find_by_tag(self, tag)
     }
 
@@ -487,7 +487,7 @@ impl Vault {
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_keyword(&self, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
+    pub fn find_by_keyword(&self, keyword: &str) -> Result<Vec<FilePathEntry>, QueryError> {
         find_by_keyword(self, keyword)
     }
 
@@ -1546,89 +1546,89 @@ impl Vault {
     // --- Tag/MetaData API ---
     // // --- 元数据 API ---
 
-    /// Adds a single tag to a file. Idempotent.
+    /// Adds a single tag to a file path. Idempotent.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file to tag.
+    /// * `path` - The vault path of the file entry to tag.
     /// * `tag` - The tag string to add.
     ///
     /// # Errors
     /// Returns `TagError` if the file is not found.
     //
-    // // 为文件添加单个标签。幂等操作。
+    // // 为文件路径添加单个标签。幂等操作。
     // //
     // // # 参数
-    // // * `hash` - 要标记的文件的哈希。
+    // // * `path` - 要标记的文件条目的保险库路径。
     // // * `tag` - 要添加的标签字符串。
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `TagError`。
-    pub fn add_tag(&mut self, hash: &VaultHash, tag: &str) -> Result<(), TagError> {
-        add_tag(self, hash, tag)?;
+    pub fn add_tag(&mut self, path: &VaultPath, tag: &str) -> Result<(), TagError> {
+        add_tag(self, path, tag)?;
         touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
-    /// Adds multiple tags to a file in a transaction.
+    /// Adds multiple tags to a file path in a transaction.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file to tag.
+    /// * `path` - The vault path of the file entry to tag.
     /// * `tags` - A slice of tag strings to add.
     ///
     /// # Errors
     /// Returns `TagError` if the file is not found.
     //
-    // // 在事务中为文件添加多个标签。
+    // // 在事务中为文件路径添加多个标签。
     // //
     // // # 参数
-    // // * `hash` - 要标记的文件的哈希。
+    // // * `path` - 要标记的文件条目的保险库路径。
     // // * `tags` - 要添加的标签字符串切片。
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `TagError`。
-    pub fn add_tags(&mut self, hash: &VaultHash, tags: &[&str]) -> Result<(), TagError> {
-        add_tags(self, hash, tags)?;
+    pub fn add_tags(&mut self, path: &VaultPath, tags: &[&str]) -> Result<(), TagError> {
+        add_tags(self, path, tags)?;
         touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
-    /// Removes a single tag from a file.
+    /// Removes a single tag from a file path.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file.
+    /// * `path` - The vault path of the file entry.
     /// * `tag` - The tag string to remove.
     ///
     /// # Errors
     /// Returns `TagError` if the file is not found.
     //
-    // // 从文件中移除单个标签。
+    // // 从文件路径中移除单个标签。
     // //
     // // # 参数
-    // // * `hash` - 文件的哈希。
+    // // * `path` - 文件条目的保险库路径。
     // // * `tag` - 要移除的标签字符串。
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `TagError`。
-    pub fn remove_tag(&mut self, hash: &VaultHash, tag: &str) -> Result<(), TagError> {
-        remove_tag(self, hash, tag)?;
+    pub fn remove_tag(&mut self, path: &VaultPath, tag: &str) -> Result<(), TagError> {
+        remove_tag(self, path, tag)?;
         touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
-    /// Removes all tags from a file.
+    /// Removes all tags from a file path.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file.
+    /// * `path` - The vault path of the file entry.
     ///
     /// # Errors
     /// Returns `TagError` if the file is not found.
     //
-    // // 移除文件的所有标签。
+    // // 移除文件路径的所有标签。
     // //
     // // # 参数
-    // // * `hash` - 文件的哈希。
+    // // * `path` - 文件条目的保险库路径。
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `TagError`。
-    pub fn clear_tags(&mut self, hash: &VaultHash) -> Result<(), TagError> {
-        clear_tags(self, hash)?;
+    pub fn clear_tags(&mut self, path: &VaultPath) -> Result<(), TagError> {
+        clear_tags(self, path)?;
         touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
@@ -1872,8 +1872,8 @@ impl Vault {
         // 1. First, ensure the file exists in the database. This is a fast check.
         // // 1. 首先，确保文件存在于数据库中。这是一个快速检查。
         match self.find_by_hash(hash)? {
-            QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
-            QueryResult::Found(_) => {
+            QueryFileResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
+            QueryFileResult::Found(_) => {
                 // File exists, proceed to hash verification.
                 // // 文件存在，继续进行哈希验证。
             }
@@ -1924,3 +1924,4 @@ pub fn resolve_file_metadata(
 ) -> Result<(VaultPath, u64, chrono::DateTime<chrono::Utc>), AddFileError> {
     _resolve_file_metadata(source_path, dest_path)
 }
+

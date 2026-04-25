@@ -1,7 +1,7 @@
-use std::fs;
+﻿use std::fs;
 use tempfile::tempdir;
 use vavavult::file::VaultPath;
-use vavavult::vault::QueryResult;
+use vavavult::vault::QueryFileResult;
 
 mod common;
 
@@ -29,7 +29,7 @@ fn test_force_remove_idempotency() {
     // 3. Check that the file is gone from the database and storage
     let query_result = vault.find_by_hash(&original_hash).unwrap();
     assert!(
-        matches!(query_result, QueryResult::NotFound),
+        matches!(query_result, QueryFileResult::NotFound),
         "File should be not found in DB after force remove"
     );
     let data_dir = vault_path.join("data");
@@ -73,7 +73,7 @@ fn test_force_remove_with_missing_physical_file() {
     // 4. Check that the file is gone from the database
     let query_result = vault.find_by_hash(&hash).unwrap();
     assert!(
-        matches!(query_result, QueryResult::NotFound),
+        matches!(query_result, QueryFileResult::NotFound),
         "File should be not found in DB after force remove"
     );
 }
@@ -117,3 +117,4 @@ fn test_force_remove_with_missing_db_record() {
         "Physical file should be removed by force_remove_file"
     );
 }
+

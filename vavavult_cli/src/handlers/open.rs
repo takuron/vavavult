@@ -1,4 +1,4 @@
-use crate::core::helpers::{
+﻿use crate::core::helpers::{
     Target, display_name_for_entry, display_path_for_entry, find_file_entry, identify_target,
 };
 use crate::errors::CliError;
@@ -46,3 +46,4 @@ pub fn handle_open(vault: &Vault, target: &str) -> Result<(), CliError> {
         ))),
     }
 }
+

@@ -1,10 +1,10 @@
-//! Implements the logic for re-keying a file in the vault.
+﻿//! Implements the logic for re-keying a file in the vault.
 use crate::common::hash::VaultHash;
 use crate::crypto::chunked::{ChunkedCryptoError, chunked_re_encrypt};
 use crate::file::FileEntry;
 use crate::storage::{StagingToken, StorageBackend};
 use crate::utils::random::generate_random_password;
-use crate::vault::query::{self, QueryError, QueryResult};
+use crate::vault::query::{self, QueryError, QueryFileResult};
 use crate::vault::{MetadataError, Vault};
 use rusqlite::OptionalExtension;
 use rusqlite::params;
@@ -143,8 +143,8 @@ pub(crate) fn prepare_rekey_tasks(
     for hash in hashes {
         // 1. 根据哈希从数据库解析完整文件条目。
         match query::check_by_hash(vault, hash)? {
-            QueryResult::Found(file_entry) => tasks.push(PendingRekeyTask { file_entry }),
-            QueryResult::NotFound => return Err(RekeyError::FileNotFound(hash.clone())),
+            QueryFileResult::Found(file_entry) => tasks.push(PendingRekeyTask { file_entry }),
+            QueryFileResult::NotFound => return Err(RekeyError::FileNotFound(hash.clone())),
         }
     }
 
@@ -217,7 +217,7 @@ pub(crate) fn commit_rekey_tasks(
 
     for task in tasks {
         // --- Database Operations ---
-        // 1. Fetch existing tags and metadata for the old hash, inside the transaction
+        // 1. Fetch existing metadata for the old hash, inside the transaction
         let old_entry = {
             let core_info: Option<(VaultHash, VaultHash, String)> = tx.query_row(
                 "SELECT sha256sum, original_sha256sum, encrypt_password FROM files WHERE sha256sum = ?1",
@@ -232,9 +232,19 @@ pub(crate) fn commit_rekey_tasks(
             }
         };
         let old_paths = query::list_paths_by_hash_in_conn(&tx, &task.old_hash)?;
+        let mut old_path_tags = Vec::new();
+        for old_path in &old_paths {
+            if let Some((file_entry_id, _)) = query::resolve_file_entry_in_conn(&tx, old_path)? {
+                let mut tag_stmt = tx.prepare("SELECT tag FROM tags WHERE file_entry_id = ?1")?;
+                let tags = tag_stmt
+                    .query_map(params![file_entry_id], |row| row.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                old_path_tags.push((old_path.clone(), tags));
+            }
+        }
 
         tx.execute(
-            "DELETE FROM tags WHERE file_sha256sum = ?1",
+            "DELETE FROM tags WHERE file_entry_id IN (SELECT id FROM file_entries WHERE file_sha256sum = ?1)",
             params![&task.old_hash],
         )?;
         tx.execute(
@@ -259,11 +269,12 @@ pub(crate) fn commit_rekey_tasks(
             query::insert_file_entry_in_conn(&tx, &old_path, &task.new_file_entry.sha256sum)?;
         }
 
-        if !old_entry.tags.is_empty() {
-            let mut tag_stmt =
-                tx.prepare("INSERT INTO tags (file_sha256sum, tag) VALUES (?1, ?2)")?;
-            for tag in old_entry.tags {
-                tag_stmt.execute(params![&task.new_file_entry.sha256sum, &tag])?;
+        let mut tag_stmt = tx.prepare("INSERT INTO tags (file_entry_id, tag) VALUES (?1, ?2)")?;
+        for (old_path, tags) in old_path_tags {
+            if let Some((file_entry_id, _)) = query::resolve_file_entry_in_conn(&tx, &old_path)? {
+                for tag in tags {
+                    tag_stmt.execute(params![file_entry_id, tag])?;
+                }
             }
         }
         if !old_entry.metadata.is_empty() {
@@ -289,3 +300,4 @@ pub(crate) fn commit_rekey_tasks(
     tx.commit()?;
     Ok(())
 }
+

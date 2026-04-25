@@ -1,6 +1,6 @@
-use crate::common::hash::VaultHash;
+﻿use crate::file::VaultPath;
 use crate::vault::metadata::{MetadataError, touch_file_update_time};
-use crate::vault::{QueryResult, Vault, query};
+use crate::vault::{Vault, query};
 use rusqlite::params;
 
 /// Defines errors that can occur during tag operations.
@@ -23,7 +23,7 @@ pub enum TagError {
     /// The file specified for tagging was not found.
     //
     // // 未找到指定要标记的文件。
-    #[error("File with SHA256 '{0}' not found.")]
+    #[error("File at path '{0}' not found.")]
     FileNotFound(String),
 
     /// Failed to update the file's modification timestamp.
@@ -33,67 +33,67 @@ pub enum TagError {
     TimestampError(#[from] MetadataError),
 }
 
-/// Adds a single tag to a file.
-pub(crate) fn add_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), TagError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(TagError::FileNotFound(sha256sum.to_string()));
-    }
+fn resolve_file_entry(
+    vault: &Vault,
+    path: &VaultPath,
+) -> Result<(i64, crate::common::hash::VaultHash), TagError> {
+    query::resolve_file_entry(vault, path)?.ok_or_else(|| TagError::FileNotFound(path.to_string()))
+}
+
+/// Adds a single tag to a file path.
+pub(crate) fn add_tag(vault: &Vault, path: &VaultPath, tag: &str) -> Result<(), TagError> {
+    let (file_entry_id, sha256sum) = resolve_file_entry(vault, path)?;
     vault.database_connection.execute(
-        "INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES (?1, ?2)",
-        params![sha256sum, tag],
+        "INSERT OR IGNORE INTO tags (file_entry_id, tag) VALUES (?1, ?2)",
+        params![file_entry_id, tag],
     )?;
 
-    touch_file_update_time(vault, sha256sum)?;
+    touch_file_update_time(vault, &sha256sum)?;
     Ok(())
 }
 
-/// Adds multiple tags to a file in a transaction.
+/// Adds multiple tags to a file path in a transaction.
 pub(crate) fn add_tags(
     vault: &mut Vault,
-    sha256sum: &VaultHash,
+    path: &VaultPath,
     tags: &[&str],
 ) -> Result<(), TagError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(TagError::FileNotFound(sha256sum.to_string()));
-    }
+    let (file_entry_id, sha256sum) = resolve_file_entry(vault, path)?;
     let tx = vault.database_connection.transaction()?;
     {
         let mut stmt =
-            tx.prepare("INSERT OR IGNORE INTO tags (file_sha256sum, tag) VALUES (?1, ?2)")?;
+            tx.prepare("INSERT OR IGNORE INTO tags (file_entry_id, tag) VALUES (?1, ?2)")?;
         for tag in tags {
-            stmt.execute(params![sha256sum, tag])?;
+            stmt.execute(params![file_entry_id, tag])?;
         }
     }
     tx.commit()?;
 
-    touch_file_update_time(vault, sha256sum)?;
+    touch_file_update_time(vault, &sha256sum)?;
     Ok(())
 }
 
-/// Removes a single tag from a file.
-pub(crate) fn remove_tag(vault: &Vault, sha256sum: &VaultHash, tag: &str) -> Result<(), TagError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(TagError::FileNotFound(sha256sum.to_string()));
-    }
+/// Removes a single tag from a file path.
+pub(crate) fn remove_tag(vault: &Vault, path: &VaultPath, tag: &str) -> Result<(), TagError> {
+    let (file_entry_id, sha256sum) = resolve_file_entry(vault, path)?;
     vault.database_connection.execute(
-        "DELETE FROM tags WHERE file_sha256sum = ?1 AND tag = ?2",
-        params![sha256sum, tag],
+        "DELETE FROM tags WHERE file_entry_id = ?1 AND tag = ?2",
+        params![file_entry_id, tag],
     )?;
 
-    touch_file_update_time(vault, sha256sum)?;
+    touch_file_update_time(vault, &sha256sum)?;
     Ok(())
 }
 
-/// Removes all tags from a file.
-pub(crate) fn clear_tags(vault: &Vault, sha256sum: &VaultHash) -> Result<(), TagError> {
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
-        return Err(TagError::FileNotFound(sha256sum.to_string()));
-    }
+/// Removes all tags from a file path.
+pub(crate) fn clear_tags(vault: &Vault, path: &VaultPath) -> Result<(), TagError> {
+    let (file_entry_id, sha256sum) = resolve_file_entry(vault, path)?;
     vault.database_connection.execute(
-        "DELETE FROM tags WHERE file_sha256sum = ?1",
-        params![sha256sum],
+        "DELETE FROM tags WHERE file_entry_id = ?1",
+        params![file_entry_id],
     )?;
 
-    touch_file_update_time(vault, sha256sum)?;
+    touch_file_update_time(vault, &sha256sum)?;
     Ok(())
 }
+

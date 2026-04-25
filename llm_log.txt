@@ -12,3 +12,4 @@
 [2026-04-25T09:57:16+08:00] 为添加阶段3增加重复原始哈希控制参数，默认自动归并，严格模式报错，并同步CLI与测试。
 [2026-04-25T10:08:23+08:00] 破坏性调整添加快捷API和阶段3提交API，直接接收重复原始哈希策略参数，并验证批内重复哈希自动归并。
 [2026-04-25T10:25:12+08:00] Refactored rekey API into prepare/re-encrypt/commit stages.
+[2026-04-25T11:09:15+08:00] Refactored tags to be vault-path scoped via file_entries, moved FilePathEntry to file module with tags, split query result enums into QueryFileResult and QueryPathResult, and updated API/tests.

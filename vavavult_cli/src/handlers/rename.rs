@@ -1,4 +1,4 @@
-use crate::core::helpers::{
+﻿use crate::core::helpers::{
     Target, display_path_for_entry, find_file_entry, first_path_for_entry, identify_target,
 };
 use crate::errors::CliError;
@@ -30,3 +30,4 @@ pub fn handle_file_rename(vault: &mut Vault, target: &str, new_name: &str) -> Re
     println!("File successfully renamed.");
     Ok(())
 }
+

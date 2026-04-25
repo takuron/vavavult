@@ -1,10 +1,10 @@
-use crate::core::helpers::{Target, display_path_for_entry, identify_target};
+﻿use crate::core::helpers::{Target, display_path_for_entry, identify_target};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
 use vavavult::common::hash::VaultHash;
 use vavavult::file::VaultPath;
-use vavavult::vault::{QueryResult, Vault};
+use vavavult::vault::{QueryFileResult, QueryPathResult, Vault};
 
 struct DeleteTarget {
     hash: Option<VaultHash>,
@@ -40,8 +40,8 @@ pub fn handle_remove(
                 )
             } else {
                 let file_entry = match vault.find_by_hash(&hash)? {
-                    QueryResult::Found(entry) => entry,
-                    QueryResult::NotFound => {
+                    QueryFileResult::Found(entry) => entry,
+                    QueryFileResult::NotFound => {
                         return Err(CliError::EntryNotFound(
                             "File not found by hash.".to_string(),
                         ));
@@ -72,8 +72,8 @@ pub fn handle_remove(
                     )
                 } else {
                     let file_entry = match vault.find_by_path(&vault_path)? {
-                        QueryResult::Found(entry) => entry,
-                        QueryResult::NotFound => {
+                        QueryPathResult::Found(entry) => entry,
+                        QueryPathResult::NotFound => {
                             return Err(CliError::EntryNotFound(
                                 "File not found by path.".to_string(),
                             ));
@@ -201,3 +201,4 @@ pub fn handle_remove(
 
     Ok(())
 }
+

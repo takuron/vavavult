@@ -8,7 +8,7 @@ use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::common::hash::VaultHash;
 use vavavult::file::VaultPath;
 use vavavult::storage::{StagingToken, StorageBackend, StorageReader, StorageWriter};
-use vavavult::vault::{QueryResult, Vault};
+use vavavult::vault::{QueryPathResult, Vault};
 
 // --- Mock In-Memory Storage (内存存储模拟) ---
 // 这个模拟后端将文件数据存储在 HashMap 中，而不是磁盘上。
@@ -209,7 +209,7 @@ fn test_memory_backend_persistence_simulation() {
 
     // 验证元数据存在（来自 SQLite）
     let entry = match reopened.find_by_path(&VaultPath::from("/f.txt")).unwrap() {
-        QueryResult::Found(e) => e,
+        QueryPathResult::Found(e) => e,
         _ => panic!("Metadata lost"),
     };
 
@@ -220,3 +220,5 @@ fn test_memory_backend_persistence_simulation() {
         .unwrap();
     assert_eq!(fs::read_to_string(extract_path).unwrap(), "Persist?");
 }
+
+

@@ -1,4 +1,4 @@
-use rayon::prelude::*;
+﻿use rayon::prelude::*;
 use sha2::{Digest, Sha512};
 use std::fs;
 use std::io::{Read, Write};
@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::file::VaultPath;
-use vavavult::vault::{AddFileError, ExtractionTask, PrepareAdditionRequest, QueryResult, Vault};
+use vavavult::vault::{AddFileError, ExtractionTask, PrepareAdditionRequest, QueryFileResult, QueryPathResult, Vault};
 use vavavult::vault::{ListPathEntry, resolve_file_metadata};
 
 mod common;
@@ -28,7 +28,7 @@ fn test_add_file_and_extract_file_cycle() {
 
     // 2. 验证文件已存在于数据库，且路径正确
     let entry = match vault.find_by_path(&dest_path).unwrap() {
-        QueryResult::Found(e) => e,
+        QueryPathResult::Found(e) => e,
         _ => panic!("File not found"),
     };
     assert_eq!(entry.sha256sum, encrypted_hash);
@@ -84,11 +84,11 @@ fn test_duplicate_content_creates_hardlink_mapping() {
 
     assert!(matches!(
         vault.find_by_path(&path1).unwrap(),
-        QueryResult::Found(_)
+        QueryPathResult::Found(_)
     ));
     assert!(matches!(
         vault.find_by_path(&path2).unwrap(),
-        QueryResult::Found(_)
+        QueryPathResult::Found(_)
     ));
 }
 
@@ -130,7 +130,7 @@ fn test_commit_duplicate_content_can_be_disallowed() {
     assert_eq!(vault.get_storage_file_count().unwrap(), 1);
     assert!(matches!(
         vault.find_by_path(&path2).unwrap(),
-        QueryResult::NotFound
+        QueryPathResult::NotFound
     ));
 }
 
@@ -162,12 +162,12 @@ fn test_batch_duplicate_content_merges_single_storage_entity() {
     vault.commit_addition_tasks(encrypted_files, None).unwrap();
 
     let hash1 = match vault.find_by_path(&path1).unwrap() {
-        QueryResult::Found(entry) => entry.sha256sum,
-        QueryResult::NotFound => panic!("first batch path not found"),
+        QueryPathResult::Found(entry) => entry.sha256sum,
+        QueryPathResult::NotFound => panic!("first batch path not found"),
     };
     let hash2 = match vault.find_by_path(&path2).unwrap() {
-        QueryResult::Found(entry) => entry.sha256sum,
-        QueryResult::NotFound => panic!("second batch path not found"),
+        QueryPathResult::Found(entry) => entry.sha256sum,
+        QueryPathResult::NotFound => panic!("second batch path not found"),
     };
 
     assert_eq!(hash1, hash2);
@@ -199,18 +199,18 @@ fn test_hardlink_remove_keeps_storage_until_last_reference() {
     assert!(internal_path.exists());
     assert!(matches!(
         vault.find_by_path(&path1).unwrap(),
-        QueryResult::NotFound
+        QueryPathResult::NotFound
     ));
     assert!(matches!(
         vault.find_by_path(&path2).unwrap(),
-        QueryResult::Found(_)
+        QueryPathResult::Found(_)
     ));
 
     vault.remove_file_by_path(&path2).unwrap();
     assert!(!internal_path.exists());
     assert!(matches!(
         vault.find_by_hash(&hash).unwrap(),
-        QueryResult::NotFound
+        QueryFileResult::NotFound
     ));
 }
 
@@ -231,7 +231,7 @@ fn test_move_and_rename_file() {
         vault
             .find_by_path(&VaultPath::from("/dir1/renamed.txt"))
             .unwrap(),
-        QueryResult::Found(_)
+        QueryPathResult::Found(_)
     ));
 
     // 测试移动 (改变目录)
@@ -240,7 +240,7 @@ fn test_move_and_rename_file() {
         vault
             .find_by_path(&VaultPath::from("/dir2/renamed.txt"))
             .unwrap(),
-        QueryResult::Found(_)
+        QueryPathResult::Found(_)
     ));
 }
 
@@ -265,7 +265,7 @@ fn test_remove_file() {
     assert!(!internal_path.exists());
     assert!(matches!(
         vault.find_by_hash(&hash).unwrap(),
-        QueryResult::NotFound
+        QueryFileResult::NotFound
     ));
 }
 
@@ -490,3 +490,5 @@ fn test_file_integrity_check() {
     let verification_result = vault.verify_file_integrity(&encrypted_hash);
     assert!(verification_result.is_err());
 }
+
+

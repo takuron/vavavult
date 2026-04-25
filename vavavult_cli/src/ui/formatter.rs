@@ -1,4 +1,4 @@
-//! UI-related string formatting, like colorization.
+﻿//! UI-related string formatting, like colorization.
 
 /// 使用 ANSI 代码为字符串着色
 pub fn colorize_string(s: &str, color: &str) -> String {
@@ -23,3 +23,4 @@ pub fn get_file_color(tags: &[String]) -> Option<&str> {
     }
     None
 }
+

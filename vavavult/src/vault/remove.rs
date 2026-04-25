@@ -1,6 +1,6 @@
-use crate::common::hash::{HashParseError, VaultHash};
+﻿use crate::common::hash::{HashParseError, VaultHash};
 use crate::vault::metadata::MetadataError;
-use crate::vault::{QueryResult, Vault, query};
+use crate::vault::{QueryFileResult, Vault, query};
 use rusqlite::params;
 
 /// Defines errors that can occur during the file removal process.
@@ -82,7 +82,7 @@ pub enum ForceRemoveError {
 /// 此操作会先解除该哈希的一条路径映射；当引用计数清零时，才删除文件实体和物理存储。
 pub(crate) fn remove_file(vault: &Vault, sha256sum: &VaultHash) -> Result<(), RemoveError> {
     // 1. 确认文件存在于数据库中
-    if let QueryResult::NotFound = query::check_by_hash(vault, sha256sum)? {
+    if let QueryFileResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(RemoveError::FileNotFound(sha256sum.to_string()));
     }
 
@@ -162,3 +162,4 @@ pub(crate) fn force_remove_file(
 
     Ok(())
 }
+

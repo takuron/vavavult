@@ -1,4 +1,4 @@
-use crate::core::helpers::{
+﻿use crate::core::helpers::{
     Target, determine_output_path, find_file_entry, first_path_for_entry, identify_target,
 };
 use crate::errors::CliError;
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{ExtractionTask, ListPathEntry, QueryResult, Vault};
+use vavavult::vault::{ExtractionTask, ListPathEntry, QueryFileResult, Vault};
 
 #[derive(Clone)]
 struct ExtractionCandidate {
@@ -154,7 +154,7 @@ fn handle_extract_directory(
                 .filter_map(|entry| match entry {
                     ListPathEntry::File(file_path_entry) => {
                         match vault_guard.find_by_hash(&file_path_entry.sha256sum) {
-                            Ok(QueryResult::Found(file_entry)) => Some(ExtractionCandidate {
+                            Ok(QueryFileResult::Found(file_entry)) => Some(ExtractionCandidate {
                                 entry: file_entry,
                                 path: file_path_entry.path,
                             }),
@@ -171,11 +171,11 @@ fn handle_extract_directory(
                 .into_iter()
                 .filter_map(|file_path_entry| {
                     match vault_guard.find_by_hash(&file_path_entry.sha256sum) {
-                        Ok(QueryResult::Found(file_entry)) => Some(Ok(ExtractionCandidate {
+                        Ok(QueryFileResult::Found(file_entry)) => Some(Ok(ExtractionCandidate {
                             entry: file_entry,
                             path: file_path_entry.path,
                         })),
-                        Ok(QueryResult::NotFound) => None,
+                        Ok(QueryFileResult::NotFound) => None,
                         Err(err) => Some(Err(CliError::from(err))),
                     }
                 })
@@ -414,3 +414,4 @@ fn run_directory_extract_parallel(
 
     Ok(())
 }
+

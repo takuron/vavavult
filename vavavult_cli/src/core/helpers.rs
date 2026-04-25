@@ -1,4 +1,4 @@
-//! Core business logic helpers, independent of UI.
+﻿//! Core business logic helpers, independent of UI.
 
 use crate::errors::CliError;
 use chrono::{DateTime, ParseError, Utc};
@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use vavavult::common::hash::VaultHash;
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{QueryResult, Vault};
+use vavavult::vault::{QueryFileResult, QueryPathResult, Vault};
 
 // 本地辅助函数：解析 RFC 3339 字符串
 pub fn parse_rfc3339_string(s: &str) -> Result<DateTime<Utc>, ParseError> {
@@ -51,8 +51,14 @@ pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, CliErro
         Target::Path(p) => {
             // 如果是路径，查询数据库
             match vault.find_by_path(&p)? {
-                QueryResult::Found(entry) => Ok(entry),
-                QueryResult::NotFound => Err(CliError::EntryNotFound(format!(
+                QueryPathResult::Found(path_entry) => match vault.find_by_hash(&path_entry.sha256sum)? {
+                    QueryFileResult::Found(entry) => Ok(entry),
+                    QueryFileResult::NotFound => Err(CliError::EntryNotFound(format!(
+                        "File not found at path '{}'.",
+                        p
+                    ))),
+                },
+                QueryPathResult::NotFound => Err(CliError::EntryNotFound(format!(
                     "File not found at path '{}'.",
                     p
                 ))),
@@ -61,8 +67,8 @@ pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, CliErro
         Target::Hash(h) => {
             // 如果是哈希，查询数据库
             match vault.find_by_hash(&h)? {
-                QueryResult::Found(entry) => Ok(entry),
-                QueryResult::NotFound => Err(CliError::EntryNotFound(format!(
+                QueryFileResult::Found(entry) => Ok(entry),
+                QueryFileResult::NotFound => Err(CliError::EntryNotFound(format!(
                     "File not found with hash '{}'.",
                     h
                 ))),
@@ -132,8 +138,11 @@ pub fn get_all_files_recursively(
     if !dir_vault_path.is_dir() {
         // 如果用户传入了文件路径，则只返回该文件
         return match vault.find_by_path(&dir_vault_path)? {
-            QueryResult::Found(entry) => Ok(vec![entry]),
-            QueryResult::NotFound => Ok(Vec::new()),
+            QueryPathResult::Found(path_entry) => match vault.find_by_hash(&path_entry.sha256sum)? {
+                QueryFileResult::Found(entry) => Ok(vec![entry]),
+                QueryFileResult::NotFound => Ok(Vec::new()),
+            },
+            QueryPathResult::NotFound => Ok(Vec::new()),
         };
     }
 
@@ -148,8 +157,8 @@ pub fn get_all_files_recursively(
             continue;
         }
         match vault.find_by_hash(&file_path_entry.sha256sum)? {
-            QueryResult::Found(entry) => all_files.push(entry),
-            QueryResult::NotFound => {
+            QueryFileResult::Found(entry) => all_files.push(entry),
+            QueryFileResult::NotFound => {
                 // 数据库不一致，但我们暂时忽略
             }
         }
@@ -163,3 +172,4 @@ pub fn get_all_files_recursively(
 pub fn is_hash_like(s: &str) -> bool {
     s.len() == VaultHash::BASE64_LEN && !s.contains('/')
 }
+

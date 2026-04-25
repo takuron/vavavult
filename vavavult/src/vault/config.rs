@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+﻿use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Represents the top-level structure of the `master.json` configuration file.
@@ -80,3 +80,4 @@ mod tests {
         assert_eq!(json_value["encryptCheck"].as_str(), Some(""));
     }
 }
+

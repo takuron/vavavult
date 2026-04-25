@@ -1,4 +1,4 @@
-use crate::common::constants::{
+﻿use crate::common::constants::{
     CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME,
 };
 use crate::crypto::encrypt::{EncryptError, create_v3_encrypt_check};
@@ -132,11 +132,11 @@ pub(crate) fn create_vault(
 
          CREATE TABLE IF NOT EXISTS tags (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_sha256sum      CHAR(43) NOT NULL,
+            file_entry_id       INTEGER NOT NULL,
             tag                 TEXT NOT NULL,
-            FOREIGN KEY (file_sha256sum) REFERENCES files(sha256sum) ON DELETE CASCADE
+            FOREIGN KEY (file_entry_id) REFERENCES file_entries(id) ON DELETE CASCADE
          );
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_link ON tags(file_sha256sum, tag);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_link ON tags(file_entry_id, tag);
 
          CREATE TABLE IF NOT EXISTS metadata (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,3 +169,4 @@ pub(crate) fn create_vault(
     };
     Ok(vault)
 }
+

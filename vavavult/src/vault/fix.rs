@@ -1,4 +1,4 @@
-//! This module implements the logic for legitimately fixing a lost file.
+﻿//! This module implements the logic for legitimately fixing a lost file.
 //
 // // 该模块实现了合法地修复一个已丢失文件的逻辑。
 
@@ -17,7 +17,7 @@ use crate::vault::add::{
     AddFileError, PendingAdditionTask, encrypt_addition_task, resolve_file_metadata,
 };
 use crate::vault::metadata::MetadataError;
-use crate::vault::query::{QueryError, QueryResult};
+use crate::vault::query::{QueryError, QueryFileResult, QueryPathResult};
 use crate::vault::remove::ForceRemoveError;
 use crate::vault::tags::TagError;
 
@@ -101,9 +101,13 @@ pub(crate) fn fix_file(
     }
 
     // 2. 查找现有的文件元数据记录，但不检查物理文件是否存在
-    let old_entry = match crate::vault::query::check_by_path_no_validation(vault, vault_path)? {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => return Err(FixError::NotFound(vault_path.as_str().to_string())),
+    let old_path_entry = match crate::vault::query::check_by_path_no_validation(vault, vault_path)? {
+        QueryPathResult::Found(entry) => entry,
+        QueryPathResult::NotFound => return Err(FixError::NotFound(vault_path.as_str().to_string())),
+    };
+    let old_entry = match crate::vault::query::check_by_hash_no_validation(vault, &old_path_entry.sha256sum)? {
+        QueryFileResult::Found(entry) => entry,
+        QueryFileResult::NotFound => return Err(FixError::NotFound(vault_path.as_str().to_string())),
     };
 
     // 3. 对新文件流式加密暂存
@@ -123,7 +127,7 @@ pub(crate) fn fix_file(
     }
 
     // 5. 保存旧文件的tag和metadata
-    let old_tags = old_entry.tags;
+    let old_tags = old_path_entry.tags;
     let old_add_time = old_entry
         .metadata
         .iter()
@@ -170,6 +174,9 @@ pub(crate) fn fix_file(
             ],
         )?;
         crate::vault::query::insert_file_entry_in_conn(&tx, vault_path, &new_entry.sha256sum)?;
+        let new_file_entry_id = crate::vault::query::resolve_file_entry_in_conn(&tx, vault_path)?
+            .ok_or_else(|| FixError::NotFound(vault_path.as_str().to_string()))?
+            .0;
 
         // 6c. 重新添加tag和metadata
         let mut meta_stmt = tx.prepare(
@@ -191,9 +198,9 @@ pub(crate) fn fix_file(
         let now = crate::utils::time::now_as_rfc3339_string();
         meta_stmt.execute(params![&new_entry.sha256sum, META_FILE_UPDATE_TIME, now])?;
 
-        let mut tag_stmt = tx.prepare("INSERT INTO tags (file_sha256sum, tag) VALUES (?1, ?2)")?;
+        let mut tag_stmt = tx.prepare("INSERT INTO tags (file_entry_id, tag) VALUES (?1, ?2)")?;
         for tag in &old_tags {
-            tag_stmt.execute(params![&new_entry.sha256sum, tag])?;
+            tag_stmt.execute(params![new_file_entry_id, tag])?;
         }
 
         // 7. 安全删除旧文件（如有）
@@ -214,3 +221,4 @@ pub(crate) fn fix_file(
 
     Ok(new_hash)
 }
+

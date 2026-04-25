@@ -1,4 +1,4 @@
-//! Vault file handle for WebDAV read/write operations.
+﻿//! Vault file handle for WebDAV read/write operations.
 //!
 //! This module implements the `DavFile` trait, providing lazy decryption and
 //! pipe-based streaming reads of vault files. Decryption is performed in a
@@ -216,7 +216,7 @@ impl VaultDavFile {
             // WebDAV PUT 操作通常意味着覆盖现有文件。
             if matches!(
                 v.find_by_path(&vault_path),
-                Ok(vavavult::vault::QueryResult::Found(_))
+                Ok(vavavult::vault::QueryPathResult::Found(_))
             ) {
                 if let Err(e) = v.remove_file_by_path(&vault_path) {
                     eprintln!("[vavavult_mount] 覆盖文件前移除旧文件失败: {:?}", e);
@@ -430,15 +430,20 @@ mod tests {
 
     fn open_vault_file(vault: &Vault, vault_path: &str) -> Option<VaultDavFile> {
         use vavavult::file::VaultPath;
-        use vavavult::vault::QueryResult;
+        use vavavult::vault::QueryPathResult;
 
         let vp = VaultPath::new(vault_path);
-        let entry = match vault.find_by_path(&vp) {
-            Ok(QueryResult::Found(e)) => e,
+        let path_entry = match vault.find_by_path(&vp) {
+            Ok(QueryPathResult::Found(e)) => e,
             _ => return None,
         };
 
-        let task = vault.prepare_extraction_task(&entry.sha256sum).ok()?;
+        let entry = match vault.find_by_hash(&path_entry.sha256sum) {
+            Ok(vavavult::vault::QueryFileResult::Found(e)) => e,
+            _ => return None,
+        };
+
+        let task = vault.prepare_extraction_task(&path_entry.sha256sum).ok()?;
         let storage = vault.storage.clone();
 
         let size = entry
@@ -583,3 +588,6 @@ mod tests {
         assert_eq!(all_data, large_content);
     }
 }
+
+
+

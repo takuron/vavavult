@@ -7,7 +7,7 @@ use crate::storage::StorageBackend;
 use crate::vault::config::VaultConfig;
 use crate::vault::metadata::{self, MetadataError};
 use crate::vault::open::OpenError;
-use crate::vault::{QueryResult, Vault, query};
+use crate::vault::{QueryFileResult, QueryPathResult, Vault, query};
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -129,7 +129,7 @@ fn move_file_mapping(
     };
 
     // 2. 检查目标路径是否已经被其他映射占用。
-    if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
+    if let QueryPathResult::Found(existing) = query::check_by_path(vault, &final_path)? {
         return if existing.sha256sum != *hash || &final_path != original_vault_path {
             Err(UpdateError::DuplicateTargetPath(
                 final_path.as_str().to_string(),
@@ -175,8 +175,8 @@ pub(crate) fn move_file(
     target_path: &VaultPath,
 ) -> Result<(), UpdateError> {
     match query::check_by_hash(vault, hash)? {
-        QueryResult::Found(_) => {}
-        QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
+        QueryFileResult::Found(_) => {}
+        QueryFileResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
     };
 
     // 兼容旧 hash API：多路径时默认移动第一条映射。
@@ -195,8 +195,8 @@ pub(crate) fn move_file_by_path(
     target_path: &VaultPath,
 ) -> Result<(), UpdateError> {
     let entry = match query::check_by_path(vault, source_path)? {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => return Err(UpdateError::FileNotFound(source_path.to_string())),
+        QueryPathResult::Found(entry) => entry,
+        QueryPathResult::NotFound => return Err(UpdateError::FileNotFound(source_path.to_string())),
     };
 
     move_file_mapping(vault, &entry.sha256sum, source_path, target_path)
@@ -212,7 +212,7 @@ fn rename_file_mapping(
     let parent_dir = original_path.parent()?;
     let final_path = parent_dir.join(new_filename)?;
 
-    if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
+    if let QueryPathResult::Found(existing) = query::check_by_path(vault, &final_path)? {
         if existing.sha256sum != *hash || &final_path != original_path {
             return Err(UpdateError::DuplicateTargetPath(
                 final_path.as_str().to_string(),
@@ -249,8 +249,8 @@ pub(crate) fn rename_file_inplace(
     }
 
     match query::check_by_hash(vault, hash)? {
-        QueryResult::Found(_) => {}
-        QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
+        QueryFileResult::Found(_) => {}
+        QueryFileResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
     };
 
     // 兼容旧 hash API：多路径时默认重命名第一条映射。
@@ -273,8 +273,8 @@ pub(crate) fn rename_file_inplace_by_path(
     }
 
     let entry = match query::check_by_path(vault, source_path)? {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => return Err(UpdateError::FileNotFound(source_path.to_string())),
+        QueryPathResult::Found(entry) => entry,
+        QueryPathResult::NotFound => return Err(UpdateError::FileNotFound(source_path.to_string())),
     };
 
     rename_file_mapping(vault, &entry.sha256sum, source_path, new_filename)
@@ -443,3 +443,4 @@ pub(crate) fn update_password(
 
     Ok(())
 }
+

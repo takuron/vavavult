@@ -1,57 +1,82 @@
-use crate::core::helpers::{
-    Target, display_path_for_entry, get_all_files_recursively, identify_target,
-};
+﻿use crate::core::helpers::{Target, identify_target};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
-use vavavult::file::FileEntry;
-use vavavult::vault::{QueryResult, Vault};
+use vavavult::file::{FilePathEntry, VaultPath};
+use vavavult::vault::{QueryPathResult, Vault};
+
+struct TaggedFile {
+    path: VaultPath,
+    entry: FilePathEntry,
+}
 
 /// 辅助函数：根据路径或哈希获取所有受影响的文件。
-fn get_files_to_tag(vault: &Vault, target: &str) -> Result<(Vec<FileEntry>, String), CliError> {
+fn get_files_to_tag(vault: &Vault, target: &str) -> Result<(Vec<TaggedFile>, String), CliError> {
     let target_obj = identify_target(target)?;
 
     match target_obj {
         Target::Hash(h) => {
             // --- 案例 1: 按哈希 ---
-            let file_entry = match vault.find_by_hash(&h)? {
-                QueryResult::Found(entry) => entry,
-                QueryResult::NotFound => {
-                    return Err(CliError::EntryNotFound(
-                        "File not found by hash.".to_string(),
-                    ));
-                }
+            let paths = vault.list_paths_by_hash(&h)?;
+            if paths.is_empty() {
+                return Err(CliError::EntryNotFound(
+                    "File not found by hash.".to_string(),
+                ));
+            }
+            let mut files = Vec::new();
+            for path in paths {
+                let entry = match vault.find_by_path(&path)? {
+                    QueryPathResult::Found(entry) => entry,
+                    QueryPathResult::NotFound => continue,
+                };
+                files.push(TaggedFile { path, entry });
+            }
+            if files.is_empty() {
+                return Err(CliError::EntryNotFound(
+                    "File not found by hash.".to_string(),
+                ));
+            }
+            let description = if files.len() == 1 {
+                format!("file '{}' (by hash)", files[0].path)
+            } else {
+                format!("{} paths for hash '{}'", files.len(), h)
             };
-            let description = format!(
-                "file '{}' (by hash)",
-                display_path_for_entry(vault, &file_entry)
-            );
-            Ok((vec![file_entry], description))
+            Ok((files, description))
         }
         Target::Path(vault_path) => {
             // --- 案例 2: 按路径 ---
             if vault_path.is_file() {
                 // 2a: 路径是文件
-                let file_entry = match vault.find_by_path(&vault_path)? {
-                    QueryResult::Found(entry) => entry,
-                    QueryResult::NotFound => {
+                let entry = match vault.find_by_path(&vault_path)? {
+                    QueryPathResult::Found(entry) => entry,
+                    QueryPathResult::NotFound => {
                         return Err(CliError::EntryNotFound(
                             "File not found by path.".to_string(),
                         ));
                     }
                 };
-                let description = format!("file '{}'", display_path_for_entry(vault, &file_entry));
-                Ok((vec![file_entry], description))
+                let description = format!("file '{}'", vault_path);
+                Ok((vec![TaggedFile { path: vault_path, entry }], description))
             } else {
                 // 2b: 路径是目录 (自动递归)
                 let description = format!("directory '{}' (recursive)", vault_path);
                 println!("Recursively scanning directory '{}'...", vault_path);
-                let files = get_all_files_recursively(vault, vault_path.as_str())?;
+                let mut files = Vec::new();
+                for file_path_entry in vault.list_all_recursive(&vault_path)? {
+                    if let QueryPathResult::Found(entry) = vault.find_by_path(&file_path_entry.path)? {
+                        files.push(TaggedFile {
+                            path: file_path_entry.path,
+                            entry,
+                        });
+                    }
+                }
                 Ok((files, description))
             }
         }
     }
 }
+
+
 
 /// 主处理器：添加标签
 
@@ -112,7 +137,7 @@ pub fn handle_tag_add(vault: &mut Vault, target: &str, tags: &[String]) -> Resul
     let mut fail_count = 0;
 
     for entry in &files_to_tag {
-        match vault.add_tags(&entry.sha256sum, &tags_as_str) {
+        match vault.add_tags(&entry.path, &tags_as_str) {
             Ok(_) => success_count += 1,
 
             Err(e) => {
@@ -120,7 +145,7 @@ pub fn handle_tag_add(vault: &mut Vault, target: &str, tags: &[String]) -> Resul
 
                 pb.println(format!(
                     "Failed to tag {}: {}",
-                    display_path_for_entry(vault, entry),
+                    entry.path,
                     e
                 ));
             }
@@ -212,11 +237,11 @@ pub fn handle_tag_remove(vault: &mut Vault, target: &str, tags: &[String]) -> Re
         let mut all_tags_removed_for_this_file = true;
 
         for tag in &tags_as_str {
-            if let Err(e) = vault.remove_tag(&entry.sha256sum, tag) {
+            if let Err(e) = vault.remove_tag(&entry.path, tag) {
                 pb.println(format!(
                     "Failed to remove tag '{}' from {}: {}",
                     tag,
-                    display_path_for_entry(vault, entry),
+                    entry.path,
                     e
                 ));
 
@@ -301,13 +326,13 @@ pub fn handle_tag_clear(vault: &mut Vault, target: &str) -> Result<(), CliError>
     let mut fail_count = 0;
 
     for entry in &files_to_tag {
-        match vault.clear_tags(&entry.sha256sum) {
+        match vault.clear_tags(&entry.path) {
             Ok(_) => success_count += 1,
             Err(e) => {
                 fail_count += 1;
                 pb.println(format!(
                     "Failed to clear tags for {}: {}",
-                    display_path_for_entry(vault, entry),
+                    entry.path,
                     e
                 ));
             }
@@ -379,12 +404,12 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
     let mut fail_count = 0;
 
     for entry in &files_to_tag {
-        for old_tag in &entry.tags {
+        for old_tag in &entry.entry.tags {
             if old_tag.starts_with("_color:") {
-                if let Err(e) = vault.remove_tag(&entry.sha256sum, old_tag) {
+                if let Err(e) = vault.remove_tag(&entry.path, old_tag) {
                     pb.println(format!(
                         "Failed to remove old color from {}: {}",
-                        display_path_for_entry(vault, entry),
+                        entry.path,
                         e
                     ));
                     fail_count += 1;
@@ -395,10 +420,10 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
 
         if color_lower != "none" {
             let new_tag = format!("_color:{}", color_lower);
-            if let Err(e) = vault.add_tag(&entry.sha256sum, &new_tag) {
+            if let Err(e) = vault.add_tag(&entry.path, &new_tag) {
                 pb.println(format!(
                     "Failed to set color for {}: {}",
-                    display_path_for_entry(vault, entry),
+                    entry.path,
                     e
                 ));
                 fail_count += 1;
@@ -418,3 +443,6 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
     );
     Ok(())
 }
+
+
+
