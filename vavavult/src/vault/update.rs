@@ -239,6 +239,23 @@ pub(crate) fn move_path(
         move_directory_path(vault, source_path, target_path)
     }
 }
+
+/// Renames a vault file or directory path in its current parent directory.
+pub(crate) fn rename_path_inplace(
+    vault: &Vault,
+    source_path: &VaultPath,
+    new_name: &str,
+) -> Result<(), UpdateError> {
+    let parent_path = source_path.parent()?;
+    let target_name = if source_path.is_dir() && !new_name.ends_with('/') {
+        format!("{}/", new_name)
+    } else {
+        new_name.to_string()
+    };
+    let target_path = parent_path.join(&target_name)?;
+
+    move_path(vault, source_path, &target_path)
+}
 // --- Vault Config Operations ---
 
 /// Sets the vault name.

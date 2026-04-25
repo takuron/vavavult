@@ -58,7 +58,8 @@ use crate::vault::rekey::{
 use crate::vault::remove::{force_remove_file, remove_file, remove_file_by_path};
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
 use crate::vault::update::{
-    enable_vault_feature, move_path, set_name, update_password as _update_password,
+    enable_vault_feature, move_path, rename_path_inplace, set_name,
+    update_password as _update_password,
 };
 
 //- Public API type re-exports
@@ -1370,6 +1371,42 @@ impl Vault {
         move_path(self, source_path, target_path)?;
         touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
     }
+
+    /// Renames a vault file or directory path in its current parent directory.
+    ///
+    /// This is a convenience API over `move_path`: it accepts the existing
+    /// `VaultPath` and a new leaf name, preserves whether the source is a file or
+    /// directory, and moves only the path metadata without rewriting encrypted
+    /// payloads.
+    ///
+    /// # Arguments
+    /// * `source_path` - The existing vault file or directory path.
+    /// * `new_name` - The new file or directory name inside the same parent.
+    ///
+    /// # Errors
+    /// Returns `UpdateError` if the source is missing, the target exists, the root
+    /// directory is renamed, or the generated target path is invalid.
+    //
+    // // 在当前父目录中重命名保险库文件或目录路径。
+    // //
+    // // 这是 `move_path` 的便捷 API：它接受现有 `VaultPath` 和新的末级名称，
+    // // 保留源路径是文件还是目录的类型，并且只移动路径元数据，不重写加密载荷。
+    // //
+    // // # 参数
+    // // * `source_path` - 现有的保险库文件或目录路径。
+    // // * `new_name` - 同一父目录中的新文件名或目录名。
+    // //
+    // // # 错误
+    // // 如果源不存在、目标已存在、重命名根目录或生成的目标路径无效，则返回 `UpdateError`。
+    pub fn rename_path_inplace(
+        &mut self,
+        source_path: &VaultPath,
+        new_name: &str,
+    ) -> Result<(), UpdateError> {
+        rename_path_inplace(self, source_path, new_name)?;
+        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
+    }
+
     // --- Remove API ---
     // // --- 删除 API ---
 

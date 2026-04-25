@@ -13,17 +13,8 @@ pub fn handle_file_rename(vault: &mut Vault, target: &str, new_name: &str) -> Re
         }
     };
 
-    // 构造同目录目标路径，让统一移动 API 处理文件或目录重命名。
-    let parent_path = source_path.parent()?;
-    let target_name = if source_path.is_dir() && !new_name.ends_with('/') {
-        format!("{}/", new_name)
-    } else {
-        new_name.to_string()
-    };
-    let target_path = parent_path.join(&target_name)?;
-
-    println!("Renaming '{}' to '{}'...", source_path, target_path);
-    vault.move_path(&source_path, &target_path)?;
+    println!("Renaming '{}' to '{}'...", source_path, new_name);
+    vault.rename_path_inplace(&source_path, new_name)?;
 
     println!("Path successfully renamed.");
     Ok(())

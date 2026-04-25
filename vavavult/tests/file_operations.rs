@@ -229,10 +229,7 @@ fn test_move_and_rename_file() {
 
     // 测试重命名 (保持父目录不变)
     vault
-        .move_path(
-            &VaultPath::from("/dir1/move.txt"),
-            &VaultPath::from("/dir1/renamed.txt"),
-        )
+        .rename_path_inplace(&VaultPath::from("/dir1/move.txt"), "renamed.txt")
         .unwrap();
     assert!(matches!(
         vault
@@ -269,7 +266,7 @@ fn test_move_and_rename_directory() {
 
     // 目录重命名只更新目录节点，子文件路径应随层级变化。
     vault
-        .move_path(&VaultPath::from("/dir1/"), &VaultPath::from("/renamed/"))
+        .rename_path_inplace(&VaultPath::from("/dir1/"), "renamed")
         .unwrap();
     assert!(matches!(
         vault
