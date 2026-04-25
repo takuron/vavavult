@@ -1,14 +1,14 @@
-﻿use crate::common::constants::META_VAULT_FEATURES;
+use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
-use crate::crypto::encrypt::{EncryptError, create_v3_encrypt_check, verify_v3_encrypt_check};
+use crate::crypto::encrypt::{create_v3_encrypt_check, verify_v3_encrypt_check, EncryptError};
 use crate::file::{PathError, VaultPath};
 use crate::storage::StorageBackend;
 use crate::vault::config::VaultConfig;
 use crate::vault::metadata::{self, MetadataError};
 use crate::vault::open::OpenError;
-use crate::vault::{QueryFileResult, QueryPathResult, Vault, query};
-use rusqlite::{Connection, params};
+use crate::vault::{query, QueryFileResult, QueryPathResult, Vault};
+use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
@@ -196,7 +196,9 @@ pub(crate) fn move_file_by_path(
 ) -> Result<(), UpdateError> {
     let entry = match query::check_by_path(vault, source_path)? {
         QueryPathResult::Found(entry) => entry,
-        QueryPathResult::NotFound => return Err(UpdateError::FileNotFound(source_path.to_string())),
+        QueryPathResult::NotFound => {
+            return Err(UpdateError::FileNotFound(source_path.to_string()))
+        }
     };
 
     move_file_mapping(vault, &entry.sha256sum, source_path, target_path)
@@ -274,7 +276,9 @@ pub(crate) fn rename_file_inplace_by_path(
 
     let entry = match query::check_by_path(vault, source_path)? {
         QueryPathResult::Found(entry) => entry,
-        QueryPathResult::NotFound => return Err(UpdateError::FileNotFound(source_path.to_string())),
+        QueryPathResult::NotFound => {
+            return Err(UpdateError::FileNotFound(source_path.to_string()))
+        }
     };
 
     rename_file_mapping(vault, &entry.sha256sum, source_path, new_filename)
@@ -443,4 +447,3 @@ pub(crate) fn update_password(
 
     Ok(())
 }
-

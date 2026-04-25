@@ -1,9 +1,9 @@
-﻿use crate::common::constants::META_VAULT_FEATURES;
+use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
 use crate::file::{FileEntry, FilePathEntry, PathError, VaultPath};
 use crate::vault::Vault;
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 
 /// Represents the result of a query that seeks a single `FileEntry`.
 //
@@ -307,20 +307,17 @@ pub(crate) fn remove_file_entry_by_path_in_conn(
     }
 }
 
-/// 删除指定哈希的一条文件映射，并返回是否删除了映射。
-pub(crate) fn remove_first_file_entry_by_hash_in_conn(
+/// 删除指定哈希的全部文件映射，并返回删除的映射数。
+pub(crate) fn remove_file_entries_by_hash_in_conn(
     conn: &Connection,
     hash: &VaultHash,
-) -> Result<bool, QueryError> {
+) -> Result<usize, QueryError> {
     let rows = conn.execute(
-        "DELETE FROM file_entries
-         WHERE id = (
-             SELECT id FROM file_entries WHERE file_sha256sum = ?1 ORDER BY id LIMIT 1
-         )",
+        "DELETE FROM file_entries WHERE file_sha256sum = ?1",
         params![hash],
     )?;
 
-    Ok(rows > 0)
+    Ok(rows)
 }
 
 /// 统计指定文件实体当前仍被多少路径映射引用。
@@ -420,7 +417,10 @@ fn fetch_full_entry_from_core(
     )
 }
 
-fn fetch_tags_for_file_entry(conn: &Connection, file_entry_id: i64) -> Result<Vec<String>, QueryError> {
+fn fetch_tags_for_file_entry(
+    conn: &Connection,
+    file_entry_id: i64,
+) -> Result<Vec<String>, QueryError> {
     let mut tags_stmt = conn.prepare("SELECT tag FROM tags WHERE file_entry_id = ?1")?;
     let tags = tags_stmt
         .query_map(params![file_entry_id], |row| row.get(0))?
@@ -429,7 +429,10 @@ fn fetch_tags_for_file_entry(conn: &Connection, file_entry_id: i64) -> Result<Ve
 }
 
 /// 根据文件路径在保险库中查找文件路径映射。
-pub(crate) fn check_by_path(vault: &Vault, path: &VaultPath) -> Result<QueryPathResult, QueryError> {
+pub(crate) fn check_by_path(
+    vault: &Vault,
+    path: &VaultPath,
+) -> Result<QueryPathResult, QueryError> {
     match fetch_file_core_by_path(&vault.database_connection, path)? {
         Some((file_entry_id, sha256sum, _, _)) => {
             if !vault.storage.exists(&sha256sum)? {
@@ -455,13 +458,11 @@ pub(crate) fn check_by_path_no_validation(
     path: &VaultPath,
 ) -> Result<QueryPathResult, QueryError> {
     match fetch_file_core_by_path(&vault.database_connection, path)? {
-        Some((file_entry_id, sha256sum, _, _)) => {
-            Ok(QueryPathResult::Found(FilePathEntry {
-                path: path.clone(),
-                sha256sum,
-                tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
-            }))
-        }
+        Some((file_entry_id, sha256sum, _, _)) => Ok(QueryPathResult::Found(FilePathEntry {
+            path: path.clone(),
+            sha256sum,
+            tags: fetch_tags_for_file_entry(&vault.database_connection, file_entry_id)?,
+        })),
         None => Ok(QueryPathResult::NotFound),
     }
 }
@@ -512,7 +513,10 @@ pub(crate) fn check_by_hash_no_validation(
 }
 
 /// 根据文件的加密后 SHA256 哈希值在保险库中查找文件。
-pub(crate) fn check_by_hash(vault: &Vault, hash: &VaultHash) -> Result<QueryFileResult, QueryError> {
+pub(crate) fn check_by_hash(
+    vault: &Vault,
+    hash: &VaultHash,
+) -> Result<QueryFileResult, QueryError> {
     fetch_file_core_by_hash(vault, hash, true)
 }
 
@@ -878,7 +882,10 @@ pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FilePathEntry>, Query
 }
 
 /// 统一的关键字模糊搜索 (不区分大小写)。
-pub(crate) fn find_by_keyword(vault: &Vault, keyword: &str) -> Result<Vec<FilePathEntry>, QueryError> {
+pub(crate) fn find_by_keyword(
+    vault: &Vault,
+    keyword: &str,
+) -> Result<Vec<FilePathEntry>, QueryError> {
     let like_pattern = format!("%{}%", keyword.to_lowercase());
 
     let mut stmt = vault.database_connection.prepare(
@@ -971,4 +978,3 @@ pub(crate) fn is_vault_feature_enabled(
         None => Ok(false),
     }
 }
-

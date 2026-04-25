@@ -1,4 +1,4 @@
-﻿use crate::common::constants::CURRENT_VAULT_VERSION;
+use crate::common::constants::CURRENT_VAULT_VERSION;
 use crate::crypto::encrypt::verify_v3_encrypt_check;
 use crate::storage::StorageBackend;
 use crate::vault::{Vault, VaultConfig};
@@ -137,4 +137,3 @@ pub(crate) fn open_vault(
         storage: backend,
     })
 }
-

@@ -1,6 +1,6 @@
-﻿use crate::file::VaultPath;
-use crate::vault::metadata::{MetadataError, touch_file_update_time};
-use crate::vault::{Vault, query};
+use crate::file::VaultPath;
+use crate::vault::metadata::{touch_file_update_time, MetadataError};
+use crate::vault::{query, Vault};
 use rusqlite::params;
 
 /// Defines errors that can occur during tag operations.
@@ -53,11 +53,7 @@ pub(crate) fn add_tag(vault: &Vault, path: &VaultPath, tag: &str) -> Result<(), 
 }
 
 /// Adds multiple tags to a file path in a transaction.
-pub(crate) fn add_tags(
-    vault: &mut Vault,
-    path: &VaultPath,
-    tags: &[&str],
-) -> Result<(), TagError> {
+pub(crate) fn add_tags(vault: &mut Vault, path: &VaultPath, tags: &[&str]) -> Result<(), TagError> {
     let (file_entry_id, sha256sum) = resolve_file_entry(vault, path)?;
     let tx = vault.database_connection.transaction()?;
     {
@@ -96,4 +92,3 @@ pub(crate) fn clear_tags(vault: &Vault, path: &VaultPath) -> Result<(), TagError
     touch_file_update_time(vault, &sha256sum)?;
     Ok(())
 }
-

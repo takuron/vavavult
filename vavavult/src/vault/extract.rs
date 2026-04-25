@@ -1,8 +1,8 @@
-﻿use crate::common::hash::{HashParseError, VaultHash};
-use crate::crypto::chunked::{ChunkedCryptoError, ChunkedReader, chunked_decrypt};
+use crate::common::hash::{HashParseError, VaultHash};
+use crate::crypto::chunked::{chunked_decrypt, ChunkedCryptoError, ChunkedReader};
 use crate::crypto::encrypt::EncryptError;
 use crate::storage::{StorageBackend, StorageReader};
-use crate::vault::{QueryFileResult, Vault, query};
+use crate::vault::{query, QueryFileResult, Vault};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -303,4 +303,3 @@ pub(crate) fn extract_file(
     let task = prepare_extraction_task(vault, sha256sum)?;
     decrypt_extraction_task_to_file(vault.storage.as_ref(), &task, destination_path)
 }
-

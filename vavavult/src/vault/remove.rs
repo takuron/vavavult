@@ -1,6 +1,6 @@
-﻿use crate::common::hash::{HashParseError, VaultHash};
+use crate::common::hash::{HashParseError, VaultHash};
 use crate::vault::metadata::MetadataError;
-use crate::vault::{QueryFileResult, Vault, query};
+use crate::vault::{query, QueryFileResult, Vault};
 use rusqlite::params;
 
 /// Defines errors that can occur during the file removal process.
@@ -77,26 +77,21 @@ pub enum ForceRemoveError {
     HashParseError(#[from] HashParseError),
 }
 
-/// 从保险库中删除一个文件映射。
+/// 从保险库中删除一个文件实体及其全部路径映射。
 ///
-/// 此操作会先解除该哈希的一条路径映射；当引用计数清零时，才删除文件实体和物理存储。
+/// 此操作会删除该哈希对应的所有路径映射，然后删除文件实体和物理存储。
 pub(crate) fn remove_file(vault: &Vault, sha256sum: &VaultHash) -> Result<(), RemoveError> {
     // 1. 确认文件存在于数据库中
     if let QueryFileResult::NotFound = query::check_by_hash(vault, sha256sum)? {
         return Err(RemoveError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 2. 先删除一条 dentry 映射。
-    if !query::remove_first_file_entry_by_hash_in_conn(&vault.database_connection, sha256sum)? {
+    // 2. 删除该文件实体的全部路径映射。
+    if query::remove_file_entries_by_hash_in_conn(&vault.database_connection, sha256sum)? == 0 {
         return Err(RemoveError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 3. 如果仍有其他路径引用该实体，则保留物理文件和 files 记录。
-    if query::file_entry_ref_count_in_conn(&vault.database_connection, sha256sum)? > 0 {
-        return Ok(());
-    }
-
-    // 4. 引用计数清零，删除文件实体和物理存储。
+    // 3. 删除文件实体和物理存储。
     vault.storage.delete(sha256sum)?;
     vault
         .database_connection
@@ -136,7 +131,7 @@ pub(crate) fn remove_file_by_path(
 ///
 /// 此操作会：
 /// 1. 尝试从文件系统 (`data/` 子目录) 中删除物理文件。如果文件不存在，操作将被忽略。
-/// 2. 从数据库中强制删除文件的记录 (级联删除标签和元数据)。如果记录不存在，操作将被忽略。
+/// 2. 从数据库中强制删除文件的全部路径映射和记录。如果记录不存在，操作将被忽略。
 ///
 /// # Arguments
 /// * `vault` - 一个 Vault 实例。
@@ -162,4 +157,3 @@ pub(crate) fn force_remove_file(
 
     Ok(())
 }
-

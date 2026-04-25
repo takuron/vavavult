@@ -1,4 +1,4 @@
-﻿use rusqlite::Connection;
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -17,10 +17,10 @@ mod update;
 
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
-pub use crate::file::{FileEntry, FilePathEntry};
 use crate::file::VaultPath;
-use crate::storage::StorageBackend;
+pub use crate::file::{FileEntry, FilePathEntry};
 use crate::storage::local::LocalStorage;
+use crate::storage::StorageBackend;
 use std::io::{Read, Seek};
 
 //- Internal implementation imports
@@ -76,8 +76,8 @@ pub use query::{
 pub use rekey::{PendingRekeyTask, RekeyError, RekeyTask};
 pub use remove::{ForceRemoveError, RemoveError};
 pub use tags::TagError;
-pub use update::UpdateError;
 pub use update::verify_encrypted_file_hash;
+pub use update::UpdateError;
 
 /// Represents a vault loaded into memory.
 ///
@@ -1455,11 +1455,10 @@ impl Vault {
     // --- Remove API ---
     // // --- 删除 API ---
 
-    /// Removes one path mapping for a file entity from the vault.
+    /// Removes a file entity and all of its path mappings from the vault.
     ///
-    /// The hash-based compatibility API unlinks the first mapping for this
-    /// entity. The database record and encrypted payload are deleted only when
-    /// no mappings remain.
+    /// The hash-based API deletes every path mapping that references this
+    /// entity, then removes the database record and encrypted payload.
     ///
     /// # Arguments
     /// * `hash` - The hash of the file to remove.
@@ -1467,10 +1466,10 @@ impl Vault {
     /// # Errors
     /// Returns `RemoveError` if file not found or deletion fails.
     //
-    // // 从保险库中移除一个文件实体的路径映射。
+    // // 从保险库中移除一个文件实体及其所有路径映射。
     // //
-    // // 这个基于哈希的兼容 API 会解除该实体的第一条映射。
-    // // 只有当没有剩余映射时，才删除数据库记录和加密载荷。
+    // // 这个基于哈希的 API 会删除引用该实体的每一条路径映射，
+    // // 然后删除数据库记录和加密载荷。
     // //
     // // # 参数
     // // * `hash` - 要移除的文件的哈希。
@@ -1509,11 +1508,11 @@ impl Vault {
         Ok(())
     }
 
-    /// Forcefully and permanently removes a file record from the vault.
+    /// Forcefully and permanently removes a file and all path mappings from the vault.
     ///
     /// This operation is idempotent and will not fail if the file or its
-    /// database record is already missing. It will attempt to delete both the
-    /// physical file from the storage backend and the database entry.
+    /// database record is already missing. It will attempt to delete the
+    /// physical file from the storage backend, all path mappings, and the database entry.
     ///
     /// Use this for cleanup operations where the state might be inconsistent.
     ///
@@ -1524,10 +1523,10 @@ impl Vault {
     /// Returns `ForceRemoveError` only on unexpected database or filesystem errors
     /// (e.g., permission denied), but not for "not found" errors.
     //
-    // // 从保险库中强制并永久地移除一个文件记录。
+    // // 从保险库中强制并永久地移除一个文件及其全部路径映射。
     // //
     // // 此操作是幂等的，如果文件或其数据库记录已经丢失，操作不会失败。
-    // // 它会尝试删除存储后端中的物理文件和数据库条目。
+    // // 它会尝试删除存储后端中的物理文件、全部路径映射和数据库条目。
     // //
     // // 用于清理可能存在状态不一致的情况。
     // //
@@ -1924,4 +1923,3 @@ pub fn resolve_file_metadata(
 ) -> Result<(VaultPath, u64, chrono::DateTime<chrono::Utc>), AddFileError> {
     _resolve_file_metadata(source_path, dest_path)
 }
-

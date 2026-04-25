@@ -1,4 +1,4 @@
-﻿use rayon::prelude::*;
+use rayon::prelude::*;
 use sha2::{Digest, Sha512};
 use std::fs;
 use std::io::{Read, Write};
@@ -6,8 +6,10 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::file::VaultPath;
-use vavavult::vault::{AddFileError, ExtractionTask, PrepareAdditionRequest, QueryFileResult, QueryPathResult, Vault};
-use vavavult::vault::{ListPathEntry, resolve_file_metadata};
+use vavavult::vault::{resolve_file_metadata, ListPathEntry};
+use vavavult::vault::{
+    AddFileError, ExtractionTask, PrepareAdditionRequest, QueryFileResult, QueryPathResult, Vault,
+};
 
 mod common;
 use common::{
@@ -269,6 +271,39 @@ fn test_remove_file() {
     ));
 }
 
+/// 测试：按哈希删除会删除同一文件实体的所有路径引用。
+#[test]
+fn test_remove_file_removes_all_hardlink_paths() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "del-all.txt", "shared content");
+
+    let path1 = VaultPath::from("/a/del-all.txt");
+    let path2 = VaultPath::from("/b/del-all.txt");
+    let hash = vault.add_file(&file_path, &path1, None).unwrap();
+    let second_hash = vault.add_file(&file_path, &path2, None).unwrap();
+    assert_eq!(hash, second_hash);
+
+    let internal_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
+    assert!(internal_path.exists());
+
+    vault.remove_file(&hash).unwrap();
+
+    assert!(!internal_path.exists());
+    assert!(matches!(
+        vault.find_by_hash(&hash).unwrap(),
+        QueryFileResult::NotFound
+    ));
+    assert!(matches!(
+        vault.find_by_path(&path1).unwrap(),
+        QueryPathResult::NotFound
+    ));
+    assert!(matches!(
+        vault.find_by_path(&path2).unwrap(),
+        QueryPathResult::NotFound
+    ));
+}
+
 /// 测试：大文件完整性。
 /// 验证流式加密/解密逻辑在处理超出缓冲区大小的文件时是否正确。
 /// 这是一个关键的测试，用于验证分块加密的逻辑。
@@ -364,11 +399,9 @@ fn test_batch_queries_and_search() {
         .list_all_recursive(&VaultPath::from("/docs/"))
         .unwrap();
     assert_eq!(recursive_entries.len(), 2);
-    assert!(
-        recursive_entries
-            .iter()
-            .any(|entry| entry.path == VaultPath::from("/docs/file_B.md"))
-    );
+    assert!(recursive_entries
+        .iter()
+        .any(|entry| entry.path == VaultPath::from("/docs/file_B.md")));
     assert!(recursive_entries.iter().any(|entry| {
         entry.path == VaultPath::from("/docs/deep/file_C.jpg") && entry.sha256sum == hash_c
     }));
@@ -490,5 +523,3 @@ fn test_file_integrity_check() {
     let verification_result = vault.verify_file_integrity(&encrypted_hash);
     assert!(verification_result.is_err());
 }
-
-

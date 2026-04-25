@@ -1,4 +1,4 @@
-﻿//! This module implements the logic for legitimately fixing a lost file.
+//! This module implements the logic for legitimately fixing a lost file.
 //
 // // 该模块实现了合法地修复一个已丢失文件的逻辑。
 
@@ -12,14 +12,14 @@ use thiserror::Error;
 
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
-use crate::vault::Vault;
 use crate::vault::add::{
-    AddFileError, PendingAdditionTask, encrypt_addition_task, resolve_file_metadata,
+    encrypt_addition_task, resolve_file_metadata, AddFileError, PendingAdditionTask,
 };
 use crate::vault::metadata::MetadataError;
 use crate::vault::query::{QueryError, QueryFileResult, QueryPathResult};
 use crate::vault::remove::ForceRemoveError;
 use crate::vault::tags::TagError;
+use crate::vault::Vault;
 
 /// Defines errors that can occur during the file fixing process.
 //
@@ -101,14 +101,20 @@ pub(crate) fn fix_file(
     }
 
     // 2. 查找现有的文件元数据记录，但不检查物理文件是否存在
-    let old_path_entry = match crate::vault::query::check_by_path_no_validation(vault, vault_path)? {
+    let old_path_entry = match crate::vault::query::check_by_path_no_validation(vault, vault_path)?
+    {
         QueryPathResult::Found(entry) => entry,
-        QueryPathResult::NotFound => return Err(FixError::NotFound(vault_path.as_str().to_string())),
+        QueryPathResult::NotFound => {
+            return Err(FixError::NotFound(vault_path.as_str().to_string()))
+        }
     };
-    let old_entry = match crate::vault::query::check_by_hash_no_validation(vault, &old_path_entry.sha256sum)? {
-        QueryFileResult::Found(entry) => entry,
-        QueryFileResult::NotFound => return Err(FixError::NotFound(vault_path.as_str().to_string())),
-    };
+    let old_entry =
+        match crate::vault::query::check_by_hash_no_validation(vault, &old_path_entry.sha256sum)? {
+            QueryFileResult::Found(entry) => entry,
+            QueryFileResult::NotFound => {
+                return Err(FixError::NotFound(vault_path.as_str().to_string()))
+            }
+        };
 
     // 3. 对新文件流式加密暂存
     let (resolved_path, file_size, source_modified_time) =
@@ -221,4 +227,3 @@ pub(crate) fn fix_file(
 
     Ok(new_hash)
 }
-

@@ -1,4 +1,4 @@
-﻿#![allow(dead_code)]
+#![allow(dead_code)]
 
 use std::fs;
 use std::io::Write;
@@ -96,15 +96,30 @@ pub fn setup_vault_with_search_data(
         .unwrap();
 
     // 3. 为文件打标签，构建丰富的搜索场景
-    vault.add_tag(&VaultPath::from("/file_A.txt"), "tag1").unwrap();
-    vault.add_tag(&VaultPath::from("/file_A.txt"), "common").unwrap();
-    vault.add_tag(&VaultPath::from("/docs/file_B.md"), "tag2").unwrap();
-    vault.add_tag(&VaultPath::from("/docs/file_B.md"), "common").unwrap();
-    vault.add_tag(&VaultPath::from("/docs/deep/file_C.jpg"), "tag3").unwrap();
-    vault.add_tag(&VaultPath::from("/docs/deep/file_C.jpg"), "image").unwrap();
-    vault.add_tag(&VaultPath::from("/another_file.txt"), "tag1").unwrap();
-    vault.add_tag(&VaultPath::from("/another_file.txt"), "unique").unwrap();
+    vault
+        .add_tag(&VaultPath::from("/file_A.txt"), "tag1")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/file_A.txt"), "common")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/docs/file_B.md"), "tag2")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/docs/file_B.md"), "common")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/docs/deep/file_C.jpg"), "tag3")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/docs/deep/file_C.jpg"), "image")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/another_file.txt"), "tag1")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/another_file.txt"), "unique")
+        .unwrap();
 
     (vault, hash_a, hash_b, hash_c, hash_d)
 }
-

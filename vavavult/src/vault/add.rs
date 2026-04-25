@@ -1,19 +1,19 @@
-﻿use crate::common::constants::{
+use crate::common::constants::{
     META_FILE_ADD_TIME, META_FILE_SIZE, META_FILE_UPDATE_TIME, META_SOURCE_MODIFIED_TIME,
 };
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
-use crate::crypto::chunked::{ChunkedCryptoError, chunked_encrypt_and_hash};
+use crate::crypto::chunked::{chunked_encrypt_and_hash, ChunkedCryptoError};
 use crate::crypto::encrypt::EncryptError;
-use crate::file::PathError;
 use crate::file::path::VaultPath;
+use crate::file::PathError;
 use crate::storage::{StagingToken, StorageBackend};
 use crate::utils::random::generate_random_password;
 use crate::utils::time::now_as_rfc3339_string;
-pub(crate) use crate::vault::Vault;
 use crate::vault::metadata::MetadataError;
 use crate::vault::query::{QueryFileResult, QueryPathResult};
-use crate::vault::{FileEntry, query};
+pub(crate) use crate::vault::Vault;
+use crate::vault::{query, FileEntry};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -681,4 +681,3 @@ pub(crate) fn resolve_file_metadata(
         .into();
     Ok((final_dest_path, file_size, source_modified_time))
 }
-

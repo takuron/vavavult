@@ -1,8 +1,8 @@
-﻿use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_UPDATE_TIME};
+use crate::common::constants::{META_FILE_UPDATE_TIME, META_PREFIX, META_VAULT_UPDATE_TIME};
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
 use crate::utils::time::now_as_rfc3339_string;
-use crate::vault::{QueryFileResult, Vault, query};
+use crate::vault::{query, QueryFileResult, Vault};
 use rusqlite::params;
 
 /// Defines errors that can occur during metadata operations.
@@ -147,4 +147,3 @@ pub(crate) fn touch_vault_update_time(vault: &Vault) -> Result<(), MetadataError
         },
     )
 }
-
