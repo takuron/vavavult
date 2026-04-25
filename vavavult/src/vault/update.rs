@@ -2,13 +2,13 @@ use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
 use crate::crypto::encrypt::{EncryptError, create_v3_encrypt_check, verify_v3_encrypt_check};
-use crate::file::{PathError, VaultPath};
+use crate::file::PathError;
 use crate::storage::StorageBackend;
 use crate::vault::config::VaultConfig;
 use crate::vault::metadata::{self, MetadataError};
 use crate::vault::open::OpenError;
-use crate::vault::{QueryPathResult, Vault, query};
-use rusqlite::{Connection, params};
+use crate::vault::{Vault, query};
+use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
@@ -121,141 +121,6 @@ pub enum UpdateError {
     EncryptCheck(#[from] EncryptError),
 }
 
-fn move_file_path(
-    vault: &Vault,
-    source_path: &VaultPath,
-    target_path: &VaultPath,
-) -> Result<(), UpdateError> {
-    if !target_path.is_file() {
-        return Err(UpdateError::IncompatiblePathTypes {
-            source_path: source_path.as_str().to_string(),
-            target_path: target_path.as_str().to_string(),
-        });
-    }
-
-    let entry = match query::check_by_path(vault, source_path)? {
-        QueryPathResult::Found(entry) => entry,
-        QueryPathResult::NotFound => {
-            return Err(UpdateError::FileNotFound(source_path.to_string()));
-        }
-    };
-
-    // 1. 检查目标文件路径是否已经被其他映射占用。
-    if let QueryPathResult::Found(existing) = query::check_by_path(vault, target_path)? {
-        if existing.sha256sum != entry.sha256sum || target_path != source_path {
-            return Err(UpdateError::DuplicateTargetPath(
-                target_path.as_str().to_string(),
-            ));
-        } else {
-            return Ok(());
-        }
-    }
-
-    // 2. 自动创建目标父目录，并只更新 file_entries 映射。
-    let source_parent_id = query::resolve_directory(vault, &source_path.parent()?)?
-        .ok_or_else(|| UpdateError::FileNotFound(source_path.to_string()))?;
-    let target_parent_id =
-        query::ensure_directory_in_conn(&vault.database_connection, &target_path.parent()?)?;
-    let target_name = target_path
-        .file_name()
-        .ok_or_else(|| UpdateError::VaultPathError(PathError::JoinToFile))?;
-
-    let rows_affected = vault.database_connection.execute(
-        "UPDATE file_entries SET directory_id = ?1, name = ?2
-         WHERE directory_id = ?3 AND name = ?4 AND file_sha256sum = ?5",
-        params![
-            target_parent_id,
-            target_name,
-            source_parent_id,
-            source_path.file_name().unwrap_or_default(),
-            entry.sha256sum
-        ],
-    )?;
-
-    if rows_affected == 0 {
-        return Err(UpdateError::FileNotFound(source_path.to_string()));
-    }
-
-    metadata::touch_file_update_time(vault, &entry.sha256sum)?;
-    Ok(())
-}
-
-fn move_directory_path(
-    vault: &Vault,
-    source_path: &VaultPath,
-    target_path: &VaultPath,
-) -> Result<(), UpdateError> {
-    if source_path.is_root() {
-        return Err(UpdateError::CannotMoveRoot);
-    }
-
-    if !target_path.is_dir() || target_path.as_str().starts_with(source_path.as_str()) {
-        return Err(UpdateError::IncompatiblePathTypes {
-            source_path: source_path.as_str().to_string(),
-            target_path: target_path.as_str().to_string(),
-        });
-    }
-
-    let source_id = query::resolve_directory(vault, source_path)?
-        .ok_or_else(|| UpdateError::FileNotFound(source_path.to_string()))?;
-    let target_parent_id =
-        query::ensure_directory_in_conn(&vault.database_connection, &target_path.parent()?)?;
-    let target_name = target_path
-        .dir_name()
-        .ok_or_else(|| UpdateError::VaultPathError(PathError::ParentOfRoot))?;
-
-    // 1. 若目标目录已存在，只允许源和目标完全相同。
-    if let Some(existing_id) = query::resolve_directory(vault, target_path)? {
-        if existing_id == source_id {
-            return Ok(());
-        }
-        return Err(UpdateError::DuplicateTargetPath(
-            target_path.as_str().to_string(),
-        ));
-    }
-
-    // 2. 直接更新目录节点，子目录和文件映射通过 parent_id 自动保留层级。
-    let rows_affected = vault.database_connection.execute(
-        "UPDATE directories SET parent_id = ?1, name = ?2 WHERE id = ?3",
-        params![target_parent_id, target_name, source_id],
-    )?;
-
-    if rows_affected == 0 {
-        return Err(UpdateError::FileNotFound(source_path.to_string()));
-    }
-
-    Ok(())
-}
-
-/// Moves or renames a vault path to another vault path.
-pub(crate) fn move_path(
-    vault: &Vault,
-    source_path: &VaultPath,
-    target_path: &VaultPath,
-) -> Result<(), UpdateError> {
-    if source_path.is_file() {
-        move_file_path(vault, source_path, target_path)
-    } else {
-        move_directory_path(vault, source_path, target_path)
-    }
-}
-
-/// Renames a vault file or directory path in its current parent directory.
-pub(crate) fn rename_path_inplace(
-    vault: &Vault,
-    source_path: &VaultPath,
-    new_name: &str,
-) -> Result<(), UpdateError> {
-    let parent_path = source_path.parent()?;
-    let target_name = if source_path.is_dir() && !new_name.ends_with('/') {
-        format!("{}/", new_name)
-    } else {
-        new_name.to_string()
-    };
-    let target_path = parent_path.join(&target_name)?;
-
-    move_path(vault, source_path, &target_path)
-}
 // --- Vault Config Operations ---
 
 /// Sets the vault name.

@@ -107,3 +107,77 @@ fn test_path_creation_rejects_conflicts() {
         PathOperationError::SourcePathNotFound(_)
     ));
 }
+
+/// 测试：文件的移动和重命名。
+/// 验证 `move_path` 能正确更新数据库路径。
+#[test]
+fn test_move_and_rename_file() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "move.txt", "content");
+    vault
+        .add_file(&file_path, &VaultPath::from("/dir1/move.txt"), None)
+        .unwrap();
+
+    // 测试重命名，保持父目录不变。
+    vault
+        .rename_path_inplace(&VaultPath::from("/dir1/move.txt"), "renamed.txt")
+        .unwrap();
+    assert!(matches!(
+        vault
+            .find_by_path(&VaultPath::from("/dir1/renamed.txt"))
+            .unwrap(),
+        QueryPathResult::Found(_)
+    ));
+
+    // 测试移动，改变父目录但不重写文件内容。
+    vault
+        .move_path(
+            &VaultPath::from("/dir1/renamed.txt"),
+            &VaultPath::from("/dir2/renamed.txt"),
+        )
+        .unwrap();
+    assert!(matches!(
+        vault
+            .find_by_path(&VaultPath::from("/dir2/renamed.txt"))
+            .unwrap(),
+        QueryPathResult::Found(_)
+    ));
+}
+
+/// 测试：目录的移动和重命名。
+#[test]
+fn test_move_and_rename_directory() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "nested.txt", "content");
+
+    vault
+        .add_file(&file_path, &VaultPath::from("/dir1/sub/nested.txt"), None)
+        .unwrap();
+
+    // 目录重命名只更新目录节点，子文件路径应随层级变化。
+    vault
+        .rename_path_inplace(&VaultPath::from("/dir1/"), "renamed")
+        .unwrap();
+    assert!(matches!(
+        vault
+            .find_by_path(&VaultPath::from("/renamed/sub/nested.txt"))
+            .unwrap(),
+        QueryPathResult::Found(_)
+    ));
+
+    // 目录移动到新父目录同样保留完整子树。
+    vault
+        .move_path(
+            &VaultPath::from("/renamed/"),
+            &VaultPath::from("/archive/renamed/"),
+        )
+        .unwrap();
+    assert!(matches!(
+        vault
+            .find_by_path(&VaultPath::from("/archive/renamed/sub/nested.txt"))
+            .unwrap(),
+        QueryPathResult::Found(_)
+    ));
+}

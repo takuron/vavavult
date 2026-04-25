@@ -45,7 +45,9 @@ use crate::vault::metadata::{
     set_vault_metadata, touch_vault_update_time,
 };
 use crate::vault::open::open_vault;
-use crate::vault::path_ops::{copy_file_path, create_empty_path, create_path_from_hash};
+use crate::vault::path_ops::{
+    copy_file_path, create_empty_path, create_path_from_hash, move_path, rename_path_inplace,
+};
 #[allow(unused_imports)]
 use crate::vault::query::{
     check_by_hash, check_by_hash_no_validation, check_by_original_hash, check_by_path,
@@ -59,10 +61,7 @@ use crate::vault::rekey::{
 };
 use crate::vault::remove::{force_remove_file, remove_file, remove_file_by_path};
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
-use crate::vault::update::{
-    enable_vault_feature, move_path, rename_path_inplace, set_name,
-    update_password as _update_password,
-};
+use crate::vault::update::{enable_vault_feature, set_name, update_password as _update_password};
 
 //- Public API type re-exports
 pub use add::{AddFileError, AdditionTask, PendingAdditionTask, PrepareAdditionRequest};
@@ -1365,14 +1364,15 @@ impl Vault {
     // // * `target_path` - 最终的保险库文件或目录路径。
     // //
     // // # 错误
-    // // 如果源不存在、目标已存在、路径类型不兼容或移动根目录，则返回 `UpdateError`。
+    // // 如果源不存在、目标已存在、路径类型不兼容或移动根目录，则返回 `PathOperationError`。
     pub fn move_path(
         &mut self,
         source_path: &VaultPath,
         target_path: &VaultPath,
-    ) -> Result<(), UpdateError> {
+    ) -> Result<(), PathOperationError> {
         move_path(self, source_path, target_path)?;
-        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
+        touch_vault_update_time(self)?;
+        Ok(())
     }
 
     /// Renames a vault file or directory path in its current parent directory.
@@ -1387,7 +1387,7 @@ impl Vault {
     /// * `new_name` - The new file or directory name inside the same parent.
     ///
     /// # Errors
-    /// Returns `UpdateError` if the source is missing, the target exists, the root
+    /// Returns `PathOperationError` if the source is missing, the target exists, the root
     /// directory is renamed, or the generated target path is invalid.
     //
     // // 在当前父目录中重命名保险库文件或目录路径。
@@ -1400,14 +1400,15 @@ impl Vault {
     // // * `new_name` - 同一父目录中的新文件名或目录名。
     // //
     // // # 错误
-    // // 如果源不存在、目标已存在、重命名根目录或生成的目标路径无效，则返回 `UpdateError`。
+    // // 如果源不存在、目标已存在、重命名根目录或生成的目标路径无效，则返回 `PathOperationError`。
     pub fn rename_path_inplace(
         &mut self,
         source_path: &VaultPath,
         new_name: &str,
-    ) -> Result<(), UpdateError> {
+    ) -> Result<(), PathOperationError> {
         rename_path_inplace(self, source_path, new_name)?;
-        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
+        touch_vault_update_time(self)?;
+        Ok(())
     }
 
     /// Creates a new file path that references the same stored file as an existing path.
