@@ -79,16 +79,20 @@ pub fn setup_vault_with_search_data(
 
     // 2. 添加文件到保险库
     let hash_a = vault
-        .add_file(&file_a_path, &VaultPath::from("/file_A.txt"))
+        .add_file(&file_a_path, &VaultPath::from("/file_A.txt"), None)
         .unwrap();
     let hash_b = vault
-        .add_file(&file_b_path, &VaultPath::from("/docs/file_B.md"))
+        .add_file(&file_b_path, &VaultPath::from("/docs/file_B.md"), None)
         .unwrap();
     let hash_c = vault
-        .add_file(&file_c_path, &VaultPath::from("/docs/deep/file_C.jpg"))
+        .add_file(
+            &file_c_path,
+            &VaultPath::from("/docs/deep/file_C.jpg"),
+            None,
+        )
         .unwrap();
     let hash_d = vault
-        .add_file(&file_d_path, &VaultPath::from("/another_file.txt"))
+        .add_file(&file_d_path, &VaultPath::from("/another_file.txt"), None)
         .unwrap();
 
     // 3. 为文件打标签，构建丰富的搜索场景

@@ -538,6 +538,7 @@ pub(crate) fn add_file(
     vault: &mut Vault,
     source_path: &Path,
     dest_path: &VaultPath,
+    allow_duplicate_files: Option<bool>,
 ) -> Result<VaultHash, AddFileError> {
     if !source_path.is_file() {
         return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
@@ -564,7 +565,7 @@ pub(crate) fn add_file(
     let addition_task = encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
 
     // 阶段 3
-    commit_addition_tasks(vault, vec![addition_task], None)?;
+    commit_addition_tasks(vault, vec![addition_task], allow_duplicate_files)?;
     committed_hash_for_path(vault, &final_dest_path)
 }
 
@@ -575,6 +576,7 @@ pub(crate) fn add_from_reader(
     dest_path: &VaultPath,
     source_size: u64,
     source_modified_time: DateTime<Utc>,
+    allow_duplicate_files: Option<bool>,
 ) -> Result<VaultHash, AddFileError> {
     // 阶段 1
     let requests = [PrepareAdditionRequest {
@@ -589,7 +591,7 @@ pub(crate) fn add_from_reader(
     let addition_task = encrypt_addition_task(vault.storage.as_ref(), pending, reader)?;
 
     // 阶段 3
-    commit_addition_tasks(vault, vec![addition_task], None)?;
+    commit_addition_tasks(vault, vec![addition_task], allow_duplicate_files)?;
     committed_hash_for_path(vault, dest_path)
 }
 

@@ -36,7 +36,7 @@ fn test_fix_lost_file_success() {
     let source_path = source_file.path();
 
     let dest_path = VaultPath::from("/test/original.txt");
-    let old_hash = vault.add_file(source_path, &dest_path).unwrap();
+    let old_hash = vault.add_file(source_path, &dest_path, None).unwrap();
     vault.add_tag(&old_hash, "test-tag").unwrap();
     vault
         .set_file_metadata(
@@ -157,7 +157,9 @@ fn test_fix_file_hash_mismatch() {
     let mut original_file = tempfile::NamedTempFile::new().unwrap();
     original_file.write_all(b"original content").unwrap();
     let vault_path = VaultPath::from("/file.txt");
-    vault.add_file(original_file.path(), &vault_path).unwrap();
+    vault
+        .add_file(original_file.path(), &vault_path, None)
+        .unwrap();
 
     // Create an "imposter" file with different content.
     let mut imposter_file = tempfile::NamedTempFile::new().unwrap();

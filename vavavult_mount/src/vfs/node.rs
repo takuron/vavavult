@@ -224,10 +224,11 @@ impl VaultDavFile {
                 }
             }
 
-            v.commit_addition_tasks(vec![addition_task]).map_err(|e| {
-                eprintln!("[vavavult_mount] 提交文件失败: {:?}", e);
-                FsError::GeneralFailure
-            })?;
+            v.commit_addition_tasks(vec![addition_task], None)
+                .map_err(|e| {
+                    eprintln!("[vavavult_mount] 提交文件失败: {:?}", e);
+                    FsError::GeneralFailure
+                })?;
 
             Ok(())
         });
@@ -423,7 +424,7 @@ mod tests {
         std::fs::write(&src_path, content).expect("无法写入源文件");
         let dest_path = vavavult::file::VaultPath::new(vault_path);
         vault
-            .add_file(&src_path, &dest_path)
+            .add_file(&src_path, &dest_path, None)
             .unwrap_or_else(|_| panic!("无法添加测试文件 {} 到保险库", vault_path));
     }
 

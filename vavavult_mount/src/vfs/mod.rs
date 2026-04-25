@@ -1,4 +1,4 @@
-//! Virtual filesystem layer for WebDAV access to Vavavult vaults.
+﻿//! Virtual filesystem layer for WebDAV access to Vavavult vaults.
 //!
 //! This module implements the `DavFileSystem` trait from `dav-server`, providing
 //! a read-only WebDAV interface to the encrypted vault. Files are transparently
@@ -754,7 +754,7 @@ mod tests {
 
         let dest_path = VaultPath::new(vault_path);
         vault
-            .add_file(&src_path, &dest_path)
+            .add_file(&src_path, &dest_path, None)
             .unwrap_or_else(|_| panic!("无法添加测试文件 {} 到保险库", vault_path));
     }
 

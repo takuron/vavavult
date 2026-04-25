@@ -11,38 +11,6 @@ use vavavult::vault::{
 };
 use walkdir::WalkDir;
 
-fn add_file_with_duplicate_control(
-    vault: &mut Vault,
-    source_path: &Path,
-    dest_path: &VaultPath,
-    allow_duplicate_files: bool,
-) -> Result<vavavult::common::hash::VaultHash, AddFileError> {
-    let (final_dest_path, source_size, source_modified_time) =
-        resolve_file_metadata(source_path, dest_path)?;
-    let requests = [PrepareAdditionRequest {
-        dest_path: &final_dest_path,
-        source_size,
-        source_modified_time,
-    }];
-    let pending_tasks = vault.prepare_addition_tasks(&requests)?;
-    let pending = pending_tasks.into_iter().next().unwrap();
-    let source_file = std::fs::File::open(source_path).map_err(AddFileError::IoError)?;
-    let addition_task = Vault::encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
-
-    // 阶段 3 根据 CLI 参数决定是否允许相同原始哈希自动归并。
-    vault.commit_addition_tasks_with_duplicate_control(
-        vec![addition_task],
-        Some(allow_duplicate_files),
-    )?;
-
-    match vault.find_by_path(&final_dest_path)? {
-        vavavult::vault::QueryResult::Found(entry) => Ok(entry.sha256sum),
-        vavavult::vault::QueryResult::NotFound => Err(AddFileError::DatabaseError(
-            rusqlite::Error::QueryReturnedNoRows,
-        )),
-    }
-}
-
 /// 根据新的 CLI 规则构建最终的 VaultPath (用于单文件添加)
 ///
 /// 优先级:
@@ -181,12 +149,7 @@ fn handle_add_file(
     );
     let mut vault_guard = vault.lock().unwrap();
 
-    let hash = add_file_with_duplicate_control(
-        &mut vault_guard,
-        local_path,
-        &dest_vault_path,
-        allow_duplicate_files,
-    )?;
+    let hash = vault_guard.add_file(local_path, &dest_vault_path, Some(allow_duplicate_files))?;
     println!("Successfully added file. Hash: {}", hash);
 
     Ok(())
@@ -273,12 +236,7 @@ fn handle_add_directory_single_threaded(
     for (source, target) in files_to_add {
         // 锁在循环内部获取和释放
         let mut vault_guard = vault.lock().unwrap();
-        match add_file_with_duplicate_control(
-            &mut vault_guard,
-            &source,
-            &target,
-            allow_duplicate_files,
-        ) {
+        match vault_guard.add_file(&source, &target, Some(allow_duplicate_files)) {
             Ok(_) => {
                 success_count += 1;
             }
@@ -473,10 +431,7 @@ fn handle_add_directory_parallel(
     {
         // **获取一次性的写锁**
         let mut vault_guard = vault.lock().unwrap();
-        match vault_guard.commit_addition_tasks_with_duplicate_control(
-            files_to_commit,
-            Some(allow_duplicate_files),
-        ) {
+        match vault_guard.commit_addition_tasks(files_to_commit, Some(allow_duplicate_files)) {
             Ok(_) => {
                 println!("Batch commit successful.");
             }

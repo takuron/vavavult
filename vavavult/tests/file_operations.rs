@@ -24,7 +24,7 @@ fn test_add_file_and_extract_file_cycle() {
 
     // 1. 添加文件
     let dest_path = VaultPath::from("/docs/hello.txt");
-    let encrypted_hash = vault.add_file(&dummy_file_path, &dest_path).unwrap();
+    let encrypted_hash = vault.add_file(&dummy_file_path, &dest_path, None).unwrap();
 
     // 2. 验证文件已存在于数据库，且路径正确
     let entry = match vault.find_by_path(&dest_path).unwrap() {
@@ -52,11 +52,11 @@ fn test_add_file_paths_and_errors() {
     let file2_path = create_dummy_file(&dir, "file2.txt", "content2");
 
     let path1 = VaultPath::from("/file1.txt");
-    vault.add_file(&file1_path, &path1).unwrap();
+    vault.add_file(&file1_path, &path1, None).unwrap();
 
     // 错误 1: 尝试向已存在的路径添加不同文件
     assert!(matches!(
-        vault.add_file(&file2_path, &path1).unwrap_err(),
+        vault.add_file(&file2_path, &path1, None).unwrap_err(),
         AddFileError::DuplicateFileName(_)
     ));
 }
@@ -71,8 +71,8 @@ fn test_duplicate_content_creates_hardlink_mapping() {
     let path1 = VaultPath::from("/a/shared.txt");
     let path2 = VaultPath::from("/b/shared-copy.txt");
 
-    let hash1 = vault.add_file(&file_path, &path1).unwrap();
-    let hash2 = vault.add_file(&file_path, &path2).unwrap();
+    let hash1 = vault.add_file(&file_path, &path1, None).unwrap();
+    let hash2 = vault.add_file(&file_path, &path2, None).unwrap();
 
     assert_eq!(hash1, hash2);
     assert_eq!(vault.get_file_count().unwrap(), 2);
@@ -101,7 +101,7 @@ fn test_commit_duplicate_content_can_be_disallowed() {
 
     let path1 = VaultPath::from("/a/strict.txt");
     let path2 = VaultPath::from("/b/strict-copy.txt");
-    vault.add_file(&file_path, &path1).unwrap();
+    vault.add_file(&file_path, &path1, None).unwrap();
 
     let (resolved_path, source_size, source_modified_time) =
         resolve_file_metadata(&file_path, &path2).unwrap();
@@ -122,7 +122,7 @@ fn test_commit_duplicate_content_can_be_disallowed() {
 
     assert!(matches!(
         vault
-            .commit_addition_tasks_with_duplicate_control(vec![addition_task], Some(false))
+            .commit_addition_tasks(vec![addition_task], Some(false))
             .unwrap_err(),
         AddFileError::DuplicateOriginalContent(_, _)
     ));
@@ -134,6 +134,51 @@ fn test_commit_duplicate_content_can_be_disallowed() {
     ));
 }
 
+/// 测试：同一批次中相同原始哈希会自动归并，只提交一个存储实体并创建多个路径映射。
+#[test]
+fn test_batch_duplicate_content_merges_single_storage_entity() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file1_path = create_dummy_file(&dir, "batch-a.txt", "same batch content");
+    let file2_path = create_dummy_file(&dir, "batch-b.txt", "same batch content");
+    let path1 = VaultPath::from("/batch/a.txt");
+    let path2 = VaultPath::from("/batch/b.txt");
+    let pairs = [
+        (file1_path.as_path(), &path1),
+        (file2_path.as_path(), &path2),
+    ];
+
+    let pending_tasks = vault.prepare_addition_tasks_from_files(&pairs).unwrap();
+    let storage = vault.storage.clone();
+    let encrypted_files: Vec<_> = pending_tasks
+        .into_iter()
+        .zip([file1_path.as_path(), file2_path.as_path()])
+        .map(|(pending, source_path)| {
+            let source_file = fs::File::open(source_path).unwrap();
+            Vault::encrypt_addition_task(storage.as_ref(), pending, source_file).unwrap()
+        })
+        .collect();
+
+    vault.commit_addition_tasks(encrypted_files, None).unwrap();
+
+    let hash1 = match vault.find_by_path(&path1).unwrap() {
+        QueryResult::Found(entry) => entry.sha256sum,
+        QueryResult::NotFound => panic!("first batch path not found"),
+    };
+    let hash2 = match vault.find_by_path(&path2).unwrap() {
+        QueryResult::Found(entry) => entry.sha256sum,
+        QueryResult::NotFound => panic!("second batch path not found"),
+    };
+
+    assert_eq!(hash1, hash2);
+    assert_eq!(vault.get_file_count().unwrap(), 2);
+    assert_eq!(vault.get_storage_file_count().unwrap(), 1);
+    assert_eq!(
+        vault.list_paths_by_hash(&hash1).unwrap(),
+        vec![path1.clone(), path2.clone()]
+    );
+}
+
 /// 测试：移除一个硬链接路径不会删除仍被其他路径引用的文件实体。
 #[test]
 fn test_hardlink_remove_keeps_storage_until_last_reference() {
@@ -143,8 +188,8 @@ fn test_hardlink_remove_keeps_storage_until_last_reference() {
 
     let path1 = VaultPath::from("/a/shared.txt");
     let path2 = VaultPath::from("/b/shared.txt");
-    let hash = vault.add_file(&file_path, &path1).unwrap();
-    let second_hash = vault.add_file(&file_path, &path2).unwrap();
+    let hash = vault.add_file(&file_path, &path1, None).unwrap();
+    let second_hash = vault.add_file(&file_path, &path2, None).unwrap();
     assert_eq!(hash, second_hash);
 
     let internal_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
@@ -177,7 +222,7 @@ fn test_move_and_rename_file() {
     let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
     let file_path = create_dummy_file(&dir, "move.txt", "content");
     let hash = vault
-        .add_file(&file_path, &VaultPath::from("/dir1/move.txt"))
+        .add_file(&file_path, &VaultPath::from("/dir1/move.txt"), None)
         .unwrap();
 
     // 测试重命名 (保持父目录不变)
@@ -209,7 +254,7 @@ fn test_remove_file() {
     let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
     let file_path = create_dummy_file(&dir, "del.txt", "content");
     let hash = vault
-        .add_file(&file_path, &VaultPath::from("/del.txt"))
+        .add_file(&file_path, &VaultPath::from("/del.txt"), None)
         .unwrap();
 
     let internal_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
@@ -252,7 +297,7 @@ fn test_large_file_integrity() {
 
     // 添加到 Vault 并重新提取
     let hash = vault
-        .add_file(&source_path, &VaultPath::from("/large.bin"))
+        .add_file(&source_path, &VaultPath::from("/large.bin"), None)
         .unwrap();
     let extract_path = dir.path().join("extracted.bin");
     vault.extract_file(&hash, &extract_path).unwrap();
@@ -384,7 +429,7 @@ fn test_parallel_add_and_extract() {
     // --- 阶段 3: 批量提交 ---
     {
         let mut v = vault_arc.lock().unwrap();
-        v.commit_addition_tasks(encrypted_files).unwrap();
+        v.commit_addition_tasks(encrypted_files, None).unwrap();
     }
 
     // --- 阶段 2: 并行提取 ---
@@ -426,7 +471,7 @@ fn test_file_integrity_check() {
 
     // 1. Add file
     let dest_path = VaultPath::from("/docs/integrity.txt");
-    let encrypted_hash = vault.add_file(&dummy_file_path, &dest_path).unwrap();
+    let encrypted_hash = vault.add_file(&dummy_file_path, &dest_path, None).unwrap();
 
     // 2. Verify integrity of the good file and assert it's OK
     assert!(vault.verify_file_integrity(&encrypted_hash).is_ok());

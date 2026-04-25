@@ -691,8 +691,9 @@ impl Vault {
         &mut self,
         source_path: &Path,
         dest_path: &VaultPath,
+        allow_duplicate_files: Option<bool>,
     ) -> Result<VaultHash, AddFileError> {
-        let result = add_file(self, source_path, dest_path)?;
+        let result = add_file(self, source_path, dest_path, allow_duplicate_files)?;
 
         touch_vault_update_time(self)?;
         Ok(result)
@@ -842,15 +843,6 @@ impl Vault {
     // //
     // // # 错误
     // // 如果数据库事务失败或文件提交失败，则返回 `AddFileError`。
-    pub fn commit_addition_tasks(&mut self, files: Vec<AdditionTask>) -> Result<(), AddFileError> {
-        if files.is_empty() {
-            return Ok(());
-        }
-        _commit_addition_tasks(self, files, None)?;
-        touch_vault_update_time(self)?;
-        Ok(())
-    }
-
     /// Stage 3 (Add): Commits encrypted files with optional duplicate-content control.
     ///
     /// `allow_duplicate_files` controls whether files with the same original hash may
@@ -880,7 +872,7 @@ impl Vault {
     // //
     // // # 错误
     // // 如果禁止重复内容且检测到重复，或数据库事务、存储提交失败，则返回 `AddFileError`。
-    pub fn commit_addition_tasks_with_duplicate_control(
+    pub fn commit_addition_tasks(
         &mut self,
         files: Vec<AdditionTask>,
         allow_duplicate_files: Option<bool>,
@@ -932,8 +924,16 @@ impl Vault {
         dest_path: &VaultPath,
         source_size: u64,
         source_modified_time: chrono::DateTime<chrono::Utc>,
+        allow_duplicate_files: Option<bool>,
     ) -> Result<VaultHash, AddFileError> {
-        let result = add_from_reader(self, reader, dest_path, source_size, source_modified_time)?;
+        let result = add_from_reader(
+            self,
+            reader,
+            dest_path,
+            source_size,
+            source_modified_time,
+            allow_duplicate_files,
+        )?;
         touch_vault_update_time(self)?;
         Ok(result)
     }

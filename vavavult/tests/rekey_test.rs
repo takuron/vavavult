@@ -1,4 +1,4 @@
-use std::fs;
+﻿use std::fs;
 use std::io::Write;
 use tempfile::tempdir;
 use vavavult::file::VaultPath;
@@ -22,7 +22,7 @@ fn test_rekey_file_e2e() {
     let dest_path = VaultPath::from("/rekey_test.txt");
 
     // 添加文件
-    let old_hash = vault.add_file(source_path, &dest_path).unwrap();
+    let old_hash = vault.add_file(source_path, &dest_path, None).unwrap();
 
     // 从数据库中获取完整的 FileEntry
     let old_entry = match vault.find_by_hash(&old_hash).unwrap() {
@@ -82,7 +82,7 @@ fn update_password_e2e() {
     let source_path = source_file.path();
     let dest_path = VaultPath::from("/secret.txt");
 
-    let file_hash = vault.add_file(source_path, &dest_path).unwrap();
+    let file_hash = vault.add_file(source_path, &dest_path, None).unwrap();
     // Drop the vault to release the file lock
     drop(vault);
 

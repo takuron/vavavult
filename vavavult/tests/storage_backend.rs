@@ -1,4 +1,4 @@
-use std::any::Any;
+﻿use std::any::Any;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Cursor, Seek, SeekFrom, Write};
@@ -164,7 +164,7 @@ fn test_decoupling_with_in_memory_backend() {
     let source_path = dir.path().join("source.txt");
     fs::write(&source_path, "RAM Data").unwrap();
     let hash = vault
-        .add_file(&source_path, &VaultPath::from("/file.txt"))
+        .add_file(&source_path, &VaultPath::from("/file.txt"), None)
         .unwrap();
 
     // 验证物理隔离：磁盘上的 data 目录不应有文件
@@ -200,7 +200,7 @@ fn test_memory_backend_persistence_simulation() {
         let mut vault =
             Vault::create_vault(&vault_path, "test", Some("pass"), memory_backend.clone()).unwrap();
         vault
-            .add_file(&source_path, &VaultPath::from("/f.txt"))
+            .add_file(&source_path, &VaultPath::from("/f.txt"), None)
             .unwrap();
     } // vault 在此处被 Drop (模拟关闭)
 

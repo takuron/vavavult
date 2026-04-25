@@ -13,7 +13,11 @@ fn test_force_remove_idempotency() {
     let file_path = common::create_dummy_file(&dir, "test_file.txt", "some content");
 
     let original_hash = vault
-        .add_file(&file_path, &VaultPath::try_from("/test_file.txt").unwrap())
+        .add_file(
+            &file_path,
+            &VaultPath::try_from("/test_file.txt").unwrap(),
+            None,
+        )
         .unwrap();
 
     // 2. First removal should succeed
@@ -49,7 +53,11 @@ fn test_force_remove_with_missing_physical_file() {
     let (vault_path, mut vault) = common::setup_encrypted_vault(&dir);
     let file_path = common::create_dummy_file(&dir, "test_file.txt", "some content");
     let hash = vault
-        .add_file(&file_path, &VaultPath::try_from("/test_file.txt").unwrap())
+        .add_file(
+            &file_path,
+            &VaultPath::try_from("/test_file.txt").unwrap(),
+            None,
+        )
         .unwrap();
 
     // 2. Manually delete the physical file from storage
@@ -77,7 +85,11 @@ fn test_force_remove_with_missing_db_record() {
     let (vault_path, mut vault) = common::setup_encrypted_vault(&dir);
     let file_path = common::create_dummy_file(&dir, "test_file.txt", "some content");
     let hash = vault
-        .add_file(&file_path, &VaultPath::try_from("/test_file.txt").unwrap())
+        .add_file(
+            &file_path,
+            &VaultPath::try_from("/test_file.txt").unwrap(),
+            None,
+        )
         .unwrap();
 
     // 2. Manually delete the record from the database

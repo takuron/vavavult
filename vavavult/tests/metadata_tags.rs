@@ -1,4 +1,4 @@
-use std::thread;
+﻿use std::thread;
 use std::time::Duration;
 use tempfile::tempdir;
 use vavavult::common::constants::META_FILE_UPDATE_TIME;
@@ -17,7 +17,7 @@ fn test_file_tag_lifecycle() {
     let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
     let file_path = create_dummy_file(&dir, "tag.txt", "content");
     let hash = vault
-        .add_file(&file_path, &VaultPath::from("/tag.txt"))
+        .add_file(&file_path, &VaultPath::from("/tag.txt"), None)
         .unwrap();
 
     // 1. 添加单个
@@ -59,7 +59,7 @@ fn test_file_metadata_lifecycle() {
     let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
     let file_path = create_dummy_file(&dir, "meta.txt", "content");
     let hash = vault
-        .add_file(&file_path, &VaultPath::from("/meta.txt"))
+        .add_file(&file_path, &VaultPath::from("/meta.txt"), None)
         .unwrap();
 
     thread::sleep(Duration::from_millis(10)); // 确保时间戳有变化
