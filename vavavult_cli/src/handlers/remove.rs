@@ -7,9 +7,14 @@ use vavavult::file::VaultPath;
 use vavavult::vault::{QueryFileResult, QueryPathResult, Vault};
 
 struct DeleteTarget {
-    hash: Option<VaultHash>,
-    path: Option<VaultPath>,
+    action: DeleteAction,
     display: String,
+}
+
+enum DeleteAction {
+    FileByHash(VaultHash),
+    FileByPath(VaultPath),
+    Directory(VaultPath),
 }
 
 /// 处理 'rm' (Remove) 命令
@@ -21,7 +26,7 @@ pub fn handle_remove(
 ) -> Result<(), CliError> {
     let target_obj = identify_target(target)?;
 
-    let (files_to_delete, target_description) = match target_obj {
+    let (targets_to_delete, target_description) = match target_obj {
         Target::Hash(hash) => {
             if recursive {
                 println!("Warning: -r (recursive) has no effect when deleting by hash.");
@@ -38,8 +43,7 @@ pub fn handle_remove(
             let display = display_path_for_entry(vault, &file_entry);
             (
                 vec![DeleteTarget {
-                    hash: Some(file_entry.sha256sum),
-                    path: None,
+                    action: DeleteAction::FileByHash(file_entry.sha256sum),
                     display: display.clone(),
                 }],
                 format!("file '{}' (by hash)", display),
@@ -47,19 +51,18 @@ pub fn handle_remove(
         }
         Target::Path(vault_path) => {
             if vault_path.is_file() {
-                let file_entry = match vault.find_by_path(&vault_path)? {
-                    QueryPathResult::Found(entry) => entry,
+                match vault.find_by_path(&vault_path)? {
+                    QueryPathResult::Found(_) => {}
                     QueryPathResult::NotFound => {
                         return Err(CliError::EntryNotFound(
                             "File not found by path.".to_string(),
                         ));
                     }
-                };
+                }
                 let description = format!("file '{}'", vault_path);
                 (
                     vec![DeleteTarget {
-                        hash: Some(file_entry.sha256sum),
-                        path: Some(vault_path.clone()),
+                        action: DeleteAction::FileByPath(vault_path.clone()),
                         display: vault_path.to_string(),
                     }],
                     description,
@@ -72,24 +75,18 @@ pub fn handle_remove(
                         vault_path
                     )));
                 }
-                println!("Recursively scanning directory '{}'...", vault_path);
-                let files = vault.list_all_recursive(&vault_path)?;
-                let delete_targets = files
-                    .into_iter()
-                    .map(|file_path_entry| {
-                        Ok(DeleteTarget {
-                            hash: Some(file_path_entry.sha256sum),
-                            display: file_path_entry.path.to_string(),
-                            path: Some(file_path_entry.path),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, CliError>>()?;
-                (delete_targets, description)
+                (
+                    vec![DeleteTarget {
+                        action: DeleteAction::Directory(vault_path.clone()),
+                        display: vault_path.to_string(),
+                    }],
+                    description,
+                )
             }
         }
     };
 
-    if files_to_delete.is_empty() {
+    if targets_to_delete.is_empty() {
         println!(
             "No files found matching {}. Nothing to delete.",
             target_description
@@ -98,15 +95,15 @@ pub fn handle_remove(
     }
 
     if !yes {
-        let prompt = if files_to_delete.len() == 1 {
+        let prompt = if targets_to_delete.len() == 1 {
             format!(
                 "Are you sure you want to PERMANENTLY DELETE {}?",
                 target_description
             )
         } else {
             format!(
-                "Are you sure you want to PERMANENTLY DELETE {} files from {}?",
-                files_to_delete.len(),
+                "Are you sure you want to PERMANENTLY DELETE {} targets from {}?",
+                targets_to_delete.len(),
                 target_description
             )
         };
@@ -117,7 +114,7 @@ pub fn handle_remove(
         }
     }
 
-    let total_count = files_to_delete.len();
+    let total_count = targets_to_delete.len();
     let pb = ProgressBar::new(total_count as u64);
     if total_count > 1 {
         pb.set_style(
@@ -133,13 +130,15 @@ pub fn handle_remove(
     let mut success_count = 0;
     let mut fail_count = 0;
 
-    for target in files_to_delete {
-        let result = if let Some(path) = &target.path {
-            vault.remove_file_by_path(path).map_err(|e| e.to_string())
-        } else if let Some(hash) = &target.hash {
-            vault.remove_file(hash).map_err(|e| e.to_string())
-        } else {
-            Err("Internal delete target has neither path nor hash.".to_string())
+    for target in targets_to_delete {
+        let result = match &target.action {
+            DeleteAction::FileByHash(hash) => vault.remove_file(hash).map_err(|e| e.to_string()),
+            DeleteAction::FileByPath(path) => {
+                vault.remove_file_by_path(path).map_err(|e| e.to_string())
+            }
+            DeleteAction::Directory(path) => {
+                vault.remove_directory(path).map_err(|e| e.to_string())
+            }
         };
 
         match result {

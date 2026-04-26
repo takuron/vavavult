@@ -17,6 +17,7 @@ mod common;
 use crate::common::TestContext;
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::fs;
 
 /// Tests the complete lifecycle of creating a vault and checking its status.
 ///
@@ -265,6 +266,72 @@ fn test_copy_accepts_only_vault_path_source() -> anyhow::Result<()> {
         .stdout(predicate::str::contains("/copy_a.txt"))
         .stdout(predicate::str::contains("/copy_b.txt"))
         .stdout(predicate::str::contains("/copy_c.txt"));
+
+    Ok(())
+}
+
+#[test]
+fn test_remove_all_paths_by_hash() -> anyhow::Result<()> {
+    let context = TestContext::new("remove-hash-all-paths-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let (hash, _) = context.get_file_hash_and_path("/test_file.txt")?;
+
+    // 1. 先通过 copy 产生同一哈希的多个路径映射。
+    let mut cmd_copy = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_copy.arg("open").arg(&context.vault_path);
+    cmd_copy
+        .write_stdin("copy /test_file.txt /copy.txt\nexit\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("File successfully copied."));
+
+    // 2. 按哈希删除必须移除该哈希对应的所有文件路径。
+    let mut cmd_remove = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_remove.arg("open").arg(&context.vault_path);
+    let repl_input = format!("rm -y {}\nls /\nexit\n", hash);
+
+    cmd_remove
+        .write_stdin(repl_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 file(s) successfully deleted"))
+        .stdout(predicate::str::contains("(empty)"));
+
+    Ok(())
+}
+
+#[test]
+fn test_remove_empty_directory_path() -> anyhow::Result<()> {
+    let context = TestContext::new("remove-empty-directory-vault", "")?;
+    let local_empty_dir = context.path().join("empty_dir");
+    fs::create_dir(&local_empty_dir)?;
+
+    // 1. 添加空本地目录会在保险库中创建空路径。
+    let mut cmd_add = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_add.arg("open").arg(&context.vault_path);
+    let add_input = format!(
+        "add \"{}\" -p /empty/\nls /\nexit\n",
+        local_empty_dir.display()
+    );
+
+    cmd_add
+        .write_stdin(add_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("/empty/"));
+
+    // 2. rm -r 应删除空目录本身，而不是因没有文件而跳过。
+    let mut cmd_remove = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_remove.arg("open").arg(&context.vault_path);
+    let remove_input = "rm -r -y /empty/\nls /\nexit\n".to_string();
+
+    cmd_remove
+        .write_stdin(remove_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 file(s) successfully deleted"))
+        .stdout(predicate::str::contains("(empty)"));
 
     Ok(())
 }

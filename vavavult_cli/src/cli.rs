@@ -117,7 +117,7 @@ pub enum ReplCommand {
     Extract {
         /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
         //  目标标识符：保险库路径（以 '/' 开头）或哈希（43 个字符）。
-        #[arg(required = true, value_name = "TARGET")]
+        #[arg(required = true, value_name = "TARGET", allow_hyphen_values = true)]
         target: String,
 
         /// The local destination directory where the file(s) will be saved.

@@ -101,6 +101,17 @@ pub fn handle_add(
             )));
         }
 
+        {
+            // 先创建目标目录节点，确保空目录也能作为路径保存。
+            let mut vault_guard = vault.lock().unwrap();
+            if let Err(e) = vault_guard.create_empty_path(&dest_dir_path) {
+                let message = e.to_string();
+                if !message.contains("already exists") {
+                    return Err(e.into());
+                }
+            }
+        }
+
         // `dest_dir_path` 此时保证是一个目录 (例如 /docs/ 或 /)
         if parallel {
             // 调用新的并行实现
