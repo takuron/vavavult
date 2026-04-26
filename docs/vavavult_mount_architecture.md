@@ -9,20 +9,21 @@ A WebDAV server extension that allows mounting a Vavavult vault as a read-only (
 The crate implements the `DavFileSystem` trait from the `dav-server` crate, providing a virtual filesystem layer (VFS) that transparently decrypts vault files on demand. The architecture follows a two-phase approach for file reads to minimize lock contention:
 
 1. **Phase 1 (under vault mutex lock):** Query metadata and prepare an `ExtractionTask`.
-2. **Phase 2 (lock-free):** Execute decryption using `execute_extraction_task_standalone` with a cloned `Arc<dyn StorageBackend>`.
+2. **Phase 2 (lock-free):** Open a pull-based plaintext reader using `Vault::open_extraction_task_reader` with a cloned `Arc<dyn StorageBackend>`.
 
-### Streaming Architecture
+### Seekable Reader Architecture
 
-`VaultDavFile` uses a **pipe-based streaming** approach:
+`VaultDavFile` uses a **pull-based seekable reader** approach:
 
-- **Streaming mode:** Decryption runs in a background `spawn_blocking` task, writing 8KB chunks through an `mpsc` channel. `read_bytes()` pulls from the channel on demand, so the client receives data as soon as each chunk is decrypted — no need to wait for the entire file. Memory usage is O(chunk_size).
-- **No seek support:** `seek()` always returns `FsError::NotImplemented`. Random access and concurrency are handled by rclone's `--vfs-cache-mode=full` at the VFS layer.
-- The state machine transitions: `Pending` → `Streaming`.
+- **Lazy open:** The file handle stores an `ExtractionTask` and cloned `Arc<dyn StorageBackend>`. The core `Read + Seek` plaintext reader is opened only on the first `read_bytes()` or `seek()` call.
+- **Random access:** `seek()` delegates to the core chunked reader, which maps plaintext offsets to encrypted chunk offsets and decrypts only the chunk needed by the next read.
+- **Blocking isolation:** Synchronous `Read` and `Seek` operations run through `spawn_blocking`, keeping Tokio worker threads responsive while storage and crypto work execute on the blocking pool.
+- **State machine:** Read handles transition from `Pending` to `Active`; failed initialization restores `Pending` so the operation can be retried.
 
 ### rclone Performance Parameters
 
 When mounting via rclone, the following cache/performance parameters are applied:
-- `--vfs-cache-mode=full`: Full VFS caching; rclone downloads files sequentially via the streaming pipe, then handles random access and concurrent reads locally.
+- `--vfs-cache-mode=writes` or the default cache mode is sufficient for read-only random access because WebDAV `seek()` is supported by the backend. `--vfs-cache-mode=full` remains a compatibility option for clients that perform unusual concurrent reads on the same handle.
 - `--dir-cache-time=30m` / `--attr-timeout=30m`: Reduce PROPFIND and attribute query frequency.
 
 ### 3.5.2. Key Modules and Their Functions
@@ -31,7 +32,7 @@ When mounting via rclone, the following cache/performance parameters are applied
     *   **Path:** `vavavult_mount/src/vfs/`
     *   **Description:** The virtual filesystem layer implementing `DavFileSystem`.
     *   `mod.rs`: Defines `VaultDavFs` (the main `DavFileSystem` implementation), `VaultDavMetaData`, and `VaultDavDirEntry`. Provides `metadata()`, `read_dir()`, and `open()` methods.
-    *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy decryption via a background `spawn_blocking` task and pipe-based streaming reads through `mpsc` channel. Seek is not supported (`FsError::NotImplemented`); rclone `--vfs-cache-mode=full` handles random access at the VFS layer.
+    *   `node.rs`: Defines `VaultDavFile` (the `DavFile` implementation), providing lazy pull-based decryption through the core `Read + Seek` plaintext reader. `read_bytes()` and `seek()` run blocking storage/crypto work on Tokio's blocking pool and support random access without full-file prefetching.
 
 *   **`vavavult_mount::sys_mount`**
     *   **Path:** `vavavult_mount/src/sys_mount.rs`
@@ -56,7 +57,7 @@ When mounting via rclone, the following cache/performance parameters are applied
 ### 3.5.3. Key Public Types
 
 *   **`VaultDavFs`**: The main `DavFileSystem` implementation. Wraps `Arc<Mutex<Vault>>` and translates WebDAV paths to `VaultPath` queries.
-*   **`VaultDavFile`**: A `DavFile` implementation with lazy decryption. Stores an `ExtractionTask` and `Arc<dyn StorageBackend>`; on first read, starts a background `spawn_blocking` decryption task that streams 8KB chunks through an `mpsc` channel. Reads pull from the channel on demand (pipe-based streaming). `seek()` returns `FsError::NotImplemented`; random access is delegated to rclone `--vfs-cache-mode=full`.
+*   **`VaultDavFile`**: A `DavFile` implementation with lazy decryption. Stores an `ExtractionTask` and `Arc<dyn StorageBackend>` while pending; on first read or seek, opens the core `Read + Seek` plaintext reader with `Vault::open_extraction_task_reader`. Reads and seeks are dispatched via `spawn_blocking`, and random access is handled directly by the chunked decryptor.
 *   **`VaultDavMetaData`**: Metadata for vault entries (files and directories). Carries size, directory flag, and modification time.
 *   **`VaultDavDirEntry`**: Directory entry for `read_dir()` results. Contains only the entry name (not full path), as required by WebDAV.
 *   **`MountConfig`**: Server configuration (bind address, port, read-only mode, auth, prefix).
@@ -74,7 +75,7 @@ When mounting via rclone, the following cache/performance parameters are applied
     - Metadata for root directories, files, and non-existent paths
     - Directory listing (root and subdirectories)
     - File opening (success, not found, forbidden for directories)
-    - Lazy decryption (metadata without decryption, pipe-based streaming reads)
-    - Seek returns `FsError::NotImplemented`
+    - Lazy decryption (metadata without opening the plaintext reader)
+    - Seekable reads (`SeekFrom::Start`, `SeekFrom::Current`, and `SeekFrom::End`)
     - Write prohibition in read-only mode
-    - Large file reading (streaming via mpsc channel)
+    - Large file reading through pull-based chunked decryption

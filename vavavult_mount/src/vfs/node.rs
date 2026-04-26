@@ -19,8 +19,12 @@ use super::VaultDavMetaData;
 ///
 /// This trait combines `Read`, `Seek`, and `Send` to represent a reader
 /// that can be used for random-access decryption of vault files.
-/// `Sync` is not required here because we wrap the reader in a `Mutex`.
-pub trait PlainReader: Read + Seek + Send {}
+//
+// // 可寻址、可发送的明文读取器 trait 别名。
+// //
+// // 此 trait 组合 `Read`、`Seek` 与 `Send`，用于表示可对保险库文件
+// // 执行随机访问解密的读取器。
+pub(crate) trait PlainReader: Read + Seek + Send {}
 
 impl<T> PlainReader for T where T: Read + Seek + Send {}
 
@@ -60,10 +64,9 @@ pub(crate) enum ReadContent {
         storage: Arc<dyn StorageBackend>,
     },
     /// Reader is initialized and ready for random-access reads.
-    /// Contains a boxed seekable plaintext reader from the core library,
-    /// wrapped in a `Mutex` for thread safety.
+    /// Contains a boxed seekable plaintext reader from the core library.
     Active {
-        reader: Mutex<Box<dyn PlainReader>>,
+        reader: Box<dyn PlainReader>,
     },
     /// State has been consumed (used for take operations).
     Consumed,
@@ -83,6 +86,10 @@ struct VaultDavFileInner {
 ///
 /// A WebDAV file handle can be opened for either reading (e.g., GET requests)
 /// or writing (e.g., PUT requests).
+//
+// // 表示 `VaultDavFile` 的操作状态。
+// //
+// // WebDAV 文件句柄可以以读取模式（例如 GET 请求）或写入模式（例如 PUT 请求）打开。
 pub enum VaultDavFileState {
     /// State for a file opened for reading (lazy-initialized random-access reader).
     Read { content: ReadContent },
@@ -91,8 +98,7 @@ pub enum VaultDavFileState {
         /// Channel to send incoming bytes to the background encryption task.
         write_tx: Option<tokio::sync::mpsc::Sender<bytes::Bytes>>,
         /// Handle to await the completion of the background encryption task.
-        /// Wrapped in a `Mutex` for thread safety.
-        write_join_handle: Option<Mutex<tokio::task::JoinHandle<Result<(), FsError>>>>,
+        write_join_handle: Option<tokio::task::JoinHandle<Result<(), FsError>>>,
     },
 }
 
@@ -104,17 +110,31 @@ pub enum VaultDavFileState {
 /// # Thread Safety
 /// The inner state is wrapped in `Arc<Mutex<...>>`, allowing this struct to be
 /// cheaply cloned and shared across async tasks.
+//
+// // 用于保险库文件 WebDAV 读写操作的文件句柄。
+// //
+// // 此结构体实现 `DavFile` trait，通过核心库的 `Read + Seek` API
+// // 提供惰性解密与随机访问读取。
+// //
+// // # 线程安全
+// // 内部状态包装在 `Arc<Mutex<...>>` 中，便于廉价克隆并在异步任务间共享。
 pub struct VaultDavFile {
     inner: Arc<Mutex<VaultDavFileInner>>,
 }
 
 impl std::fmt::Debug for VaultDavFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let inner_guard = self.inner.lock().unwrap();
-        f.debug_struct("VaultDavFile")
-            .field("file_size", &inner_guard.file_size)
-            .field("modified", &inner_guard.modified)
-            .finish_non_exhaustive()
+        match self.inner.lock() {
+            Ok(inner_guard) => f
+                .debug_struct("VaultDavFile")
+                .field("file_size", &inner_guard.file_size)
+                .field("modified", &inner_guard.modified)
+                .finish_non_exhaustive(),
+            Err(_) => f
+                .debug_struct("VaultDavFile")
+                .field("state", &"poisoned")
+                .finish_non_exhaustive(),
+        }
     }
 }
 
@@ -139,6 +159,19 @@ impl VaultDavFile {
     ///
     /// # Returns
     /// A new `VaultDavFile` instance in `Read` state with `Pending` content.
+    //
+    // // 以读取模式创建新的 `VaultDavFile`，并启用惰性初始化。
+    // //
+    // // 读取器直到第一次 read 或 seek 操作才会初始化。
+    // //
+    // // # 参数
+    // // * `task` - 包含解密密钥和元数据的提取任务。
+    // // * `storage` - 用于读取加密数据的存储后端。
+    // // * `file_size` - 预期的明文文件大小。
+    // // * `modified` - 文件修改时间。
+    // //
+    // // # 返回
+    // // 一个处于 `Read` 状态且内容为 `Pending` 的新 `VaultDavFile` 实例。
     pub fn new(
         task: ExtractionTask,
         storage: Arc<dyn StorageBackend>,
@@ -169,6 +202,17 @@ impl VaultDavFile {
     ///
     /// # Returns
     /// A new `VaultDavFile` instance ready for writing.
+    //
+    // // 以写入模式创建新的 `VaultDavFile`。
+    // //
+    // // 此函数会创建后台任务，流式消费传入数据、加密并在完成后提交到保险库。
+    // //
+    // // # 参数
+    // // * `vault` - 要写入的保险库实例。
+    // // * `vault_path` - 保险库内的目标路径。
+    // //
+    // // # 返回
+    // // 一个可以执行写入的新 `VaultDavFile` 实例。
     pub fn new_write(
         vault: Arc<std::sync::Mutex<vavavult::vault::Vault>>,
         vault_path: vavavult::file::VaultPath,
@@ -227,7 +271,7 @@ impl VaultDavFile {
         let inner = VaultDavFileInner {
             state: VaultDavFileState::Write {
                 write_tx: Some(tx),
-                write_join_handle: Some(Mutex::new(join_handle)),
+                write_join_handle: Some(join_handle),
             },
             file_size: 0,
             modified: std::time::SystemTime::UNIX_EPOCH,
@@ -257,7 +301,7 @@ impl VaultDavFile {
                     match result {
                         Ok(reader) => {
                             *content = ReadContent::Active {
-                                reader: Mutex::new(Box::new(reader)),
+                                reader: Box::new(reader),
                             };
                             Ok(())
                         }
@@ -288,9 +332,8 @@ impl VaultDavFile {
 
                 match content {
                     ReadContent::Active { reader } => {
-                        let mut reader_guard = reader.lock().map_err(|_| FsError::GeneralFailure)?;
                         let mut buffer = vec![0u8; count];
-                        let bytes_read = reader_guard.read(&mut buffer).map_err(|e| {
+                        let bytes_read = reader.read(&mut buffer).map_err(|e| {
                             log::error!("[vavavult_mount] read failed: {:?}", e);
                             FsError::GeneralFailure
                         })?;
@@ -316,8 +359,7 @@ impl VaultDavFile {
 
                 match content {
                     ReadContent::Active { reader } => {
-                        let mut reader_guard = reader.lock().map_err(|_| FsError::GeneralFailure)?;
-                        let new_pos = reader_guard.seek(pos).map_err(|e| {
+                        let new_pos = reader.seek(pos).map_err(|e| {
                             log::error!("[vavavult_mount] seek failed: {:?}", e);
                             FsError::GeneralFailure
                         })?;
@@ -333,12 +375,14 @@ impl VaultDavFile {
 
 impl DavFile for VaultDavFile {
     fn metadata(&mut self) -> FsFuture<'_, Box<dyn DavMetaData>> {
-        let inner_guard = self.inner.lock().unwrap();
-        let file_size = inner_guard.file_size;
-        let modified = inner_guard.modified;
-        drop(inner_guard);
+        let metadata = self
+            .inner
+            .lock()
+            .map(|inner_guard| (inner_guard.file_size, inner_guard.modified))
+            .map_err(|_| FsError::GeneralFailure);
 
         Box::pin(async move {
+            let (file_size, modified) = metadata?;
             Ok(Box::new(VaultDavMetaData::file(file_size, modified)) as Box<dyn DavMetaData>)
         })
     }
@@ -379,8 +423,15 @@ impl DavFile for VaultDavFile {
 
     fn write_buf(&mut self, mut buf: Box<dyn Buf + Send>) -> FsFuture<'_, ()> {
         Box::pin(async move {
-            let bytes = buf.copy_to_bytes(buf.remaining());
-            self.write_bytes(bytes).await
+            const WRITE_CHUNK_SIZE: usize = 64 * 1024;
+
+            while buf.has_remaining() {
+                let chunk_len = buf.remaining().min(WRITE_CHUNK_SIZE);
+                let bytes = buf.copy_to_bytes(chunk_len);
+                self.write_bytes(bytes).await?;
+            }
+
+            Ok(())
         })
     }
 
@@ -408,10 +459,8 @@ impl DavFile for VaultDavFile {
                     } => {
                         drop(write_tx.take());
 
-                        if let Some(join_handle_mutex) = write_join_handle.take() {
-                            join_handle_mutex
-                                .into_inner()
-                                .map_err(|_| FsError::GeneralFailure)?
+                        if let Some(join_handle) = write_join_handle.take() {
+                            join_handle
                         } else {
                             return Ok(());
                         }
@@ -439,6 +488,8 @@ impl DavFile for VaultDavFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vavavult::file::VaultPath;
+    use vavavult::vault::{QueryPathResult, Vault};
 
     #[test]
     fn test_plain_reader_trait() {
@@ -494,5 +545,43 @@ mod tests {
         let cloned = file.clone();
         let debug_str = format!("{:?}", cloned);
         assert!(debug_str.contains("VaultDavFile"));
+    }
+
+    #[tokio::test]
+    async fn test_seek_reads_expected_ranges() {
+        let temp_dir = tempfile::tempdir().expect("无法创建临时目录");
+        let mut vault = Vault::create_vault_local(temp_dir.path(), "test_vault", Some("password"))
+            .expect("无法创建测试保险库");
+
+        let source_path = temp_dir.path().join("source.txt");
+        std::fs::write(&source_path, b"hello seekable world").expect("无法写入源文件");
+        let vault_path = VaultPath::new("/source.txt");
+        vault
+            .add_file(&source_path, &vault_path, None)
+            .expect("无法添加测试文件到保险库");
+
+        let path_entry = match vault.find_by_path(&vault_path).expect("无法查询路径") {
+            QueryPathResult::Found(entry) => entry,
+            QueryPathResult::NotFound => panic!("测试文件不存在"),
+        };
+        let task = vault
+            .prepare_extraction_task(&path_entry.sha256sum)
+            .expect("无法准备提取任务");
+        let storage = vault.storage.clone();
+        let mut file = VaultDavFile::new(
+            task,
+            storage,
+            20,
+            std::time::SystemTime::UNIX_EPOCH,
+        );
+
+        assert_eq!(file.seek(SeekFrom::Start(6)).await.expect("seek 失败"), 6);
+        assert_eq!(file.read_bytes(8).await.expect("读取失败"), "seekable");
+
+        assert_eq!(file.seek(SeekFrom::Current(-14)).await.expect("seek 失败"), 0);
+        assert_eq!(file.read_bytes(5).await.expect("读取失败"), "hello");
+
+        assert_eq!(file.seek(SeekFrom::End(-5)).await.expect("seek 失败"), 15);
+        assert_eq!(file.read_bytes(5).await.expect("读取失败"), "world");
     }
 }
