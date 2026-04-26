@@ -59,10 +59,10 @@ pub enum ReplCommand {
         #[arg(short = 'n', long = "name")]
         name: Option<String>,
 
-        /// Use multiple threads to add files in parallel
-        // 使用多线程并行添加文件
-        #[arg(long)]
-        parallel: bool,
+        /// Add multiple files sequentially in a single thread.
+        // 以单线程顺序添加多个文件。
+        #[arg(long = "single-thread")]
+        single_thread: bool,
 
         /// Reject files whose original content hash already exists in the vault or batch
         // 拒绝原始内容哈希已存在于保险库或批次中的文件
@@ -144,10 +144,10 @@ pub enum ReplCommand {
         #[arg(long)]
         delete: bool,
 
-        /// Use multiple threads to extract files in parallel.
-        // 使用多线程并行提取文件。
-        #[arg(long)]
-        parallel: bool,
+        /// Extract multiple files sequentially in a single thread.
+        // 以单线程顺序提取多个文件。
+        #[arg(long = "single-thread")]
+        single_thread: bool,
     },
     /// Permanently delete a file or directory from the vault
     //  从保险库中永久删除一个文件或目录
@@ -261,10 +261,10 @@ pub enum ReplCommand {
         #[arg(required = true, num_args = 1..)]
         targets: Vec<String>,
 
-        /// Use multiple threads to verify files in parallel.
-        //  使用多线程并行校验文件。
-        #[arg(long)]
-        parallel: bool,
+        /// Verify multiple files sequentially in a single thread.
+        //  以单线程顺序校验多个文件。
+        #[arg(long = "single-thread")]
+        single_thread: bool,
     },
     /// Exit the interactive session
     //  退出交互式会话

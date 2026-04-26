@@ -37,6 +37,8 @@ A user-facing CLI application for interacting with `vavavult` vaults.
 *   **`vavavult_cli::cli`**
     *   **Path:** `vavavult_cli/src/cli.rs`
     *   **Description:** Defines the command-line interface structure using `clap`. It specifies all available commands, subcommands, and their arguments.
+    *   Multi-file `add`, `extract`, and `verify` operations run in parallel by default; users can pass `--single-thread` to force the legacy sequential execution path.
+    *   多文件 `add`、`extract` 和 `verify` 操作默认并行执行；用户可传入 `--single-thread` 强制使用旧的顺序单线程执行路径。
 
 ### 3.3. Testing
 *   **Path:** `vavavult_cli/tests/`

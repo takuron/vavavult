@@ -20,7 +20,7 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
             local_path,
             path,
             name,
-            parallel,
+            single_thread,
             no_duplicate_files,
         } => {
             handlers::add::handle_add(
@@ -28,7 +28,7 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
                 &local_path,
                 path,
                 name,
-                parallel,
+                !single_thread,
                 !no_duplicate_files,
             )?;
         }
@@ -54,7 +54,7 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
             output_name,
             non_recursive,
             delete,
-            parallel,
+            single_thread,
         } => {
             handlers::extract::handle_extract(
                 Arc::clone(&vault_arc),
@@ -63,7 +63,7 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
                 output_name,
                 non_recursive,
                 delete,
-                parallel,
+                !single_thread,
             )?;
         }
         ReplCommand::Remove {
@@ -95,8 +95,11 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
             let mut vault = vault_arc.lock().unwrap();
             handlers::rename::handle_file_rename(&mut vault, &source_path, &new_name)?;
         }
-        ReplCommand::Verify { targets, parallel } => {
-            handlers::verify::handle_verify(Arc::clone(&vault_arc), &targets, parallel)?;
+        ReplCommand::Verify {
+            targets,
+            single_thread,
+        } => {
+            handlers::verify::handle_verify(Arc::clone(&vault_arc), &targets, !single_thread)?;
         }
         /*
         ReplCommand::Mount {

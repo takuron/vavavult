@@ -35,8 +35,8 @@ pub fn handle_extract(
             if non_recursive {
                 println!("Warning: --non-recursive has no effect when extracting by hash.");
             }
-            if parallel {
-                println!("Warning: --parallel has no effect when extracting a single file.");
+            if !parallel {
+                println!("Warning: --single-thread has no effect when extracting a single file.");
             }
 
             let file_entry = {
@@ -52,8 +52,10 @@ pub fn handle_extract(
                         "Warning: --non-recursive has no effect when extracting a single file."
                     );
                 }
-                if parallel {
-                    println!("Warning: --parallel has no effect when extracting a single file.");
+                if !parallel {
+                    println!(
+                        "Warning: --single-thread has no effect when extracting a single file."
+                    );
                 }
                 let file_entry = {
                     let vault_guard = vault.lock().unwrap();
