@@ -5,6 +5,7 @@ use crate::handlers::list::ListResult;
 use crate::handlers::vault::VaultStatus;
 use crate::ui::formatter::{colorize_string, get_file_color};
 use chrono::{DateTime, Local, Utc};
+use std::collections::HashSet;
 use vavavult::file::VaultPath;
 use vavavult::vault::{DirectoryEntry, FilePathEntry, ListPathEntry, QueryFileResult, Vault};
 
@@ -67,6 +68,16 @@ pub fn print_directory_entry(_vault: &Vault, entry: &ListPathEntry, colors_enabl
 
 /// 打印单个文件的详细信息 (风格 3)
 pub fn print_file_details(vault: &Vault, path_entry: &FilePathEntry, colors_enabled: bool) {
+    print_file_details_with_paths(vault, path_entry, &[path_entry], colors_enabled);
+}
+
+/// 打印单个文件实体及其路径映射的详细信息 (风格 3)。
+fn print_file_details_with_paths(
+    vault: &Vault,
+    path_entry: &FilePathEntry,
+    path_entries: &[&FilePathEntry],
+    colors_enabled: bool,
+) {
     println!("----------------------------------------");
 
     let file_entry = match vault.find_by_hash(&path_entry.sha256sum) {
@@ -74,20 +85,15 @@ pub fn print_file_details(vault: &Vault, path_entry: &FilePathEntry, colors_enab
         _ => None,
     };
 
-    // 1. 获取颜色 (如果功能开启)
-    let color_tag = if colors_enabled {
-        get_file_color(&path_entry.tags)
-    } else {
-        None
-    };
-
-    // 2. 处理文件名显示 (仅对文件名变色)
+    // 1. 使用第一个路径映射作为文件名展示来源。
     let filename = path_entry
         .path
         .file_name()
         .map(str::to_string)
         .unwrap_or_else(|| path_entry.sha256sum.to_string());
-    let display_name = if let Some(c) = color_tag {
+
+    // 2. 如果启用颜色，则用第一个路径映射的颜色标签渲染文件名。
+    let display_name = if colors_enabled && let Some(c) = get_file_color(&path_entry.tags) {
         colorize_string(&filename, c)
     } else {
         filename
@@ -95,27 +101,39 @@ pub fn print_file_details(vault: &Vault, path_entry: &FilePathEntry, colors_enab
 
     println!("  Name:            {}", display_name);
     println!("  Type:            File");
-    println!("  Path:            {}", path_entry.path);
+    println!("  Paths:");
+    for entry in path_entries {
+        let mut display_path = entry.path.to_string();
+        if colors_enabled && let Some(color) = get_file_color(&entry.tags) {
+            display_path = colorize_string(&display_path, color);
+        }
+        println!("    - {}", display_path);
+    }
     println!("  SHA256 (ID):     {}", path_entry.sha256sum);
     if let Some(file_entry) = &file_entry {
         println!("  Original SHA256: {}", file_entry.original_sha256sum);
     }
 
-    // [新增] 显示当前颜色名称
-    if let Some(c) = color_tag {
-        println!("  Color:           {}", c);
-    }
-
-    // 过滤掉以 '_' 开头的标签
-    let visible_tags: Vec<&str> = path_entry
-        .tags
-        .iter()
-        .filter(|t| !t.starts_with('_'))
-        .map(|t| t.as_str())
-        .collect();
-
-    if !visible_tags.is_empty() {
-        println!("  Tags:            {}", visible_tags.join(", "));
+    // 3. 标签按路径分行展示，避免多路径文件的标签被误合并。
+    if path_entries.iter().any(|entry| !entry.tags.is_empty()) {
+        println!("  Tags:");
+        for entry in path_entries {
+            let mut visible_tags: Vec<String> = entry
+                .tags
+                .iter()
+                .filter(|tag| !tag.starts_with('_'))
+                .map(|tag| tag.to_string())
+                .collect();
+            if colors_enabled && let Some(color) = get_file_color(&entry.tags) {
+                visible_tags.push(format!("color:{}", color));
+            }
+            let display_tags = if visible_tags.is_empty() {
+                "(none)".to_string()
+            } else {
+                visible_tags.join(", ")
+            };
+            println!("    - {}: {}", entry.path, display_tags);
+        }
     }
 
     // 系统元数据：保留以 _vavavult_ 开头的
@@ -188,17 +206,44 @@ pub fn print_dir_details(directory_entry: &DirectoryEntry) {
     );
 }
 
-/// 打印路径化文件条目的详细信息。
-fn print_file_path_details(vault: &Vault, entry: &FilePathEntry, colors_enabled: bool) {
-    match vault.find_by_hash(&entry.sha256sum) {
-        Ok(QueryFileResult::Found(_)) => print_file_details(vault, entry, colors_enabled),
-        _ => {
-            println!("----------------------------------------");
-            println!("  Name:        {}", entry.path.file_name().unwrap_or(""));
-            println!("  Type:        File");
-            println!("  Path:        {}", entry.path);
-            println!("  SHA256 (ID): {}", entry.sha256sum);
+/// 读取某个文件实体的全部路径映射，失败时退回当前列表中的路径。
+fn collect_display_path_entries<'a>(
+    vault: &Vault,
+    fallback_entries: Vec<&'a FilePathEntry>,
+) -> Vec<FilePathEntry> {
+    let Some(first_entry) = fallback_entries.first() else {
+        return Vec::new();
+    };
+
+    vault
+        .list_paths_by_hash(&first_entry.sha256sum)
+        .and_then(|paths| vault.find_by_paths(&paths))
+        .unwrap_or_else(|_| fallback_entries.into_iter().cloned().collect())
+}
+
+/// 按文件实体哈希归并并打印详细文件信息。
+fn print_merged_file_details<'a, I>(vault: &Vault, file_entries: I, colors_enabled: bool)
+where
+    I: IntoIterator<Item = &'a FilePathEntry>,
+{
+    let entries: Vec<&FilePathEntry> = file_entries.into_iter().collect();
+    let mut printed_hashes = HashSet::new();
+
+    for entry in &entries {
+        let hash_key = entry.sha256sum.to_string();
+        if !printed_hashes.insert(hash_key) {
+            continue;
         }
+
+        // 当前列表中相同文件实体只打印一次，路径详情再扩展为全量路径映射。
+        let same_file_entries: Vec<&FilePathEntry> = entries
+            .iter()
+            .copied()
+            .filter(|candidate| candidate.sha256sum == entry.sha256sum)
+            .collect();
+        let display_path_entries = collect_display_path_entries(vault, same_file_entries);
+        let display_path_refs: Vec<&FilePathEntry> = display_path_entries.iter().collect();
+        print_file_details_with_paths(vault, entry, &display_path_refs, colors_enabled);
     }
 }
 
@@ -225,13 +270,21 @@ pub fn print_list_result(
                         ListPathEntry::Directory(directory_entry) => {
                             print_dir_details(directory_entry)
                         }
-                        ListPathEntry::File(file_path_entry) => {
-                            print_file_path_details(vault, file_path_entry, colors_enabled)
-                        }
+                        ListPathEntry::File(_) => {}
                     }
                 } else {
                     print_directory_entry(vault, entry, colors_enabled);
                 }
+            }
+            if long {
+                print_merged_file_details(
+                    vault,
+                    entries.iter().filter_map(|entry| match entry {
+                        ListPathEntry::Directory(_) => None,
+                        ListPathEntry::File(file_path_entry) => Some(file_path_entry),
+                    }),
+                    colors_enabled,
+                );
             }
             if long && !entries.is_empty() {
                 println!("----------------------------------------");
@@ -251,10 +304,13 @@ pub fn print_list_result(
 
             for file_path_entry in all_files {
                 if long {
-                    print_file_path_details(vault, file_path_entry, colors_enabled);
+                    continue;
                 } else {
                     print_file_path_item(vault, file_path_entry, colors_enabled);
                 }
+            }
+            if long {
+                print_merged_file_details(vault, all_files.iter(), colors_enabled);
             }
             if long && !all_files.is_empty() {
                 println!("----------------------------------------");

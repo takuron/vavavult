@@ -277,8 +277,8 @@ pub enum TagCommand {
     /// Add one or more tags to a file or directory
     //  将一个或多个标签添加到一个文件或目录
     Add {
-        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
-        //  目标标识符。
+        /// The target vault path. Hash targets are not accepted.
+        //  目标保险库路径。不再接受哈希目标。
         #[arg(required = true, value_name = "TARGET")]
         target: String,
 
@@ -290,8 +290,8 @@ pub enum TagCommand {
     /// Remove one or more tags from a file or directory
     //  从一个文件或目录中删除一个或多个标签
     Remove {
-        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
-        //  目标标识符。
+        /// The target vault path. Hash targets are not accepted.
+        //  目标保险库路径。不再接受哈希目标。
         #[arg(required = true, value_name = "TARGET")]
         target: String,
 
@@ -303,16 +303,16 @@ pub enum TagCommand {
     /// Clear all tags from a file or directory
     //  清除一个文件或目录的所有标签
     Clear {
-        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
-        //  目标标识符。
+        /// The target vault path. Hash targets are not accepted.
+        //  目标保险库路径。不再接受哈希目标。
         #[arg(required = true, value_name = "TARGET")]
         target: String,
     },
     /// Set a display color for a file or directory (Requires 'colorfulTag' feature)
     //  设置文件或目录的显示颜色 (需要启用 'colorfulTag' 功能)
     Color {
-        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
-        //  目标标识符。
+        /// The target vault path. Hash targets are not accepted.
+        //  目标保险库路径。不再接受哈希目标。
         #[arg(required = true, value_name = "TARGET")]
         target: String,
 

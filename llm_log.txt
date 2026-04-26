@@ -27,3 +27,7 @@
 [2026-04-25T13:35:10+08:00] Refactored and reorganized llm_readme.txt into modular markdown documents (llm_readme.md and docs/*.md) and comprehensively restructured vavavult_core_architecture.md to improve readability and architecture documentation.
 [2026-04-25T13:54:44+08:00] Refactored docs/TODO.md by splitting it into TODO.md, RoadMap.md, and TODO_finished.md to better track active tasks, long-term plans, and completed items.
 [2026-04-25T13:59:16+08:00] Simplified RoadMap.md to a checklist format and moved vague core feature descriptions from TODO.md to RoadMap.md, leaving only actionable tasks with complete plans in TODO.md.
+[2026-04-26T09:40:40+08:00] Improve CLI long list output for multi-path file details.
+[2026-04-26T09:48:15+08:00] Restrict CLI tag commands to path targets and show color fallback tags.
+[2026-04-26T09:57:44+08:00] Add Vault colorful tag extension methods and route CLI color operations through them.
+[2026-04-26T10:00:30+08:00] Add Vault method to read path color from colorful tag extension.

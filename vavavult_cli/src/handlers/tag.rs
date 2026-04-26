@@ -1,86 +1,63 @@
-use crate::core::helpers::{Target, identify_target};
+use crate::core::helpers::is_hash_like;
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
-use vavavult::file::{FilePathEntry, VaultPath};
+use vavavult::extension::colorful_tag::COLORFUL_TAG_FEATURE;
+use vavavult::file::VaultPath;
 use vavavult::vault::{QueryPathResult, Vault};
 
 struct TaggedFile {
     path: VaultPath,
-    entry: FilePathEntry,
 }
 
-/// 辅助函数：根据路径或哈希获取所有受影响的文件。
-fn get_files_to_tag(vault: &Vault, target: &str) -> Result<(Vec<TaggedFile>, String), CliError> {
-    let target_obj = identify_target(target)?;
+/// 辅助函数：解析 tag 命令的路径目标。
+fn parse_tag_target_path(target: &str) -> Result<VaultPath, CliError> {
+    if is_hash_like(target) {
+        return Err(CliError::InvalidTarget(
+            "Tag commands now operate on vault paths only; hash targets are not accepted."
+                .to_string(),
+        ));
+    }
 
-    match target_obj {
-        Target::Hash(h) => {
-            // --- 案例 1: 按哈希 ---
-            let paths = vault.list_paths_by_hash(&h)?;
-            if paths.is_empty() {
+    if !target.starts_with('/') {
+        return Err(CliError::InvalidTarget(format!(
+            "Tag target '{}' must be an absolute vault path starting with '/'.",
+            target
+        )));
+    }
+
+    Ok(VaultPath::from(target))
+}
+
+/// 辅助函数：根据路径获取所有受影响的文件。
+fn get_files_to_tag(vault: &Vault, target: &str) -> Result<(Vec<TaggedFile>, String), CliError> {
+    let vault_path = parse_tag_target_path(target)?;
+
+    if vault_path.is_file() {
+        // 1. 文件路径只影响该路径映射本身。
+        match vault.find_by_path(&vault_path)? {
+            QueryPathResult::Found(_) => {}
+            QueryPathResult::NotFound => {
                 return Err(CliError::EntryNotFound(
-                    "File not found by hash.".to_string(),
+                    "File not found by path.".to_string(),
                 ));
             }
-            let mut files = Vec::new();
-            for path in paths {
-                let entry = match vault.find_by_path(&path)? {
-                    QueryPathResult::Found(entry) => entry,
-                    QueryPathResult::NotFound => continue,
-                };
-                files.push(TaggedFile { path, entry });
-            }
-            if files.is_empty() {
-                return Err(CliError::EntryNotFound(
-                    "File not found by hash.".to_string(),
-                ));
-            }
-            let description = if files.len() == 1 {
-                format!("file '{}' (by hash)", files[0].path)
-            } else {
-                format!("{} paths for hash '{}'", files.len(), h)
-            };
-            Ok((files, description))
-        }
-        Target::Path(vault_path) => {
-            // --- 案例 2: 按路径 ---
-            if vault_path.is_file() {
-                // 2a: 路径是文件
-                let entry = match vault.find_by_path(&vault_path)? {
-                    QueryPathResult::Found(entry) => entry,
-                    QueryPathResult::NotFound => {
-                        return Err(CliError::EntryNotFound(
-                            "File not found by path.".to_string(),
-                        ));
-                    }
-                };
-                let description = format!("file '{}'", vault_path);
-                Ok((
-                    vec![TaggedFile {
-                        path: vault_path,
-                        entry,
-                    }],
-                    description,
-                ))
-            } else {
-                // 2b: 路径是目录 (自动递归)
-                let description = format!("directory '{}' (recursive)", vault_path);
-                println!("Recursively scanning directory '{}'...", vault_path);
-                let mut files = Vec::new();
-                for file_path_entry in vault.list_all_recursive(&vault_path)? {
-                    if let QueryPathResult::Found(entry) =
-                        vault.find_by_path(&file_path_entry.path)?
-                    {
-                        files.push(TaggedFile {
-                            path: file_path_entry.path,
-                            entry,
-                        });
-                    }
-                }
-                Ok((files, description))
+        };
+        let description = format!("file '{}'", vault_path);
+        Ok((vec![TaggedFile { path: vault_path }], description))
+    } else {
+        // 2. 目录路径保留递归行为，但实际操作仍逐个落到文件路径映射上。
+        let description = format!("directory '{}' (recursive)", vault_path);
+        println!("Recursively scanning directory '{}'...", vault_path);
+        let mut files = Vec::new();
+        for file_path_entry in vault.list_all_recursive(&vault_path)? {
+            if let QueryPathResult::Found(_) = vault.find_by_path(&file_path_entry.path)? {
+                files.push(TaggedFile {
+                    path: file_path_entry.path,
+                });
             }
         }
+        Ok((files, description))
     }
 }
 
@@ -355,7 +332,6 @@ pub fn handle_tag_clear(vault: &mut Vault, target: &str) -> Result<(), CliError>
 
 /// 处理颜色设置命令
 pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<(), CliError> {
-    const FEATURE_NAME: &str = "colorfulTag";
     const ALLOWED_COLORS: &[&str] = &["red", "green", "yellow", "blue", "magenta", "cyan", "none"];
 
     let color_lower = color.to_lowercase();
@@ -367,13 +343,13 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
         )));
     }
 
-    if !vault.is_feature_enabled(FEATURE_NAME)? {
+    if !vault.is_colorful_tag_enabled()? {
         println!(
             "Feature '{}' is not enabled. Enabling it now...",
-            FEATURE_NAME
+            COLORFUL_TAG_FEATURE
         );
-        vault.enable_feature(FEATURE_NAME)?;
-        println!("Feature '{}' enabled.", FEATURE_NAME);
+        vault.enable_colorful_tag()?;
+        println!("Feature '{}' enabled.", COLORFUL_TAG_FEATURE);
     }
 
     let (files_to_tag, target_description) = get_files_to_tag(vault, target)?;
@@ -400,27 +376,15 @@ pub fn handle_tag_color(vault: &mut Vault, target: &str, color: &str) -> Result<
     let mut fail_count = 0;
 
     for entry in &files_to_tag {
-        for old_tag in &entry.entry.tags {
-            if old_tag.starts_with("_color:") {
-                if let Err(e) = vault.remove_tag(&entry.path, old_tag) {
-                    pb.println(format!(
-                        "Failed to remove old color from {}: {}",
-                        entry.path, e
-                    ));
-                    fail_count += 1;
-                    continue;
-                }
-            }
-        }
+        let result = if color_lower == "none" {
+            vault.remove_path_color(&entry.path)
+        } else {
+            vault.set_path_color(&entry.path, &color_lower)
+        };
 
-        if color_lower != "none" {
-            let new_tag = format!("_color:{}", color_lower);
-            if let Err(e) = vault.add_tag(&entry.path, &new_tag) {
-                pb.println(format!("Failed to set color for {}: {}", entry.path, e));
-                fail_count += 1;
-            } else {
-                success_count += 1;
-            }
+        if let Err(e) = result {
+            pb.println(format!("Failed to set color for {}: {}", entry.path, e));
+            fail_count += 1;
         } else {
             success_count += 1;
         }
