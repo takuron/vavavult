@@ -16,6 +16,7 @@
 - Updated the CLI `move`/`mv` command to accept only vault path sources and reject hash sources.
 - Updated the CLI `rename`/`ren` command to accept only vault path sources and reject hash sources.
 - Added the CLI `copy` command with `cp` and `cpoy` aliases for path-based file copies.
+- Allowed CLI `move`/`mv` and `copy`/`cp` to target a directory when the source is a file, automatically preserving the original filename.
 
 #### Tests & Chores:
 
@@ -41,6 +42,7 @@
 - 更新 CLI 的 `move`/`mv` 命令，使其仅接受保险库路径作为源，并拒绝哈希源。
 - 更新 CLI 的 `rename`/`ren` 命令，使其仅接受保险库路径作为源，并拒绝哈希源。
 - 新增 CLI `copy` 命令，并提供 `cp` 和 `cpoy` 别名用于基于路径的文件复制。
+- 允许 CLI `move`/`mv` 和 `copy`/`cp` 在源为文件时以目录作为目标，并自动保留原文件名。
 
 #### 测试与维护:
 

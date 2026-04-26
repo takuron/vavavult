@@ -1,6 +1,23 @@
-﻿use crate::errors::CliError;
+use crate::errors::CliError;
 use vavavult::file::VaultPath;
 use vavavult::vault::{QueryPathResult, Vault};
+
+fn resolve_file_destination(
+    source_path: &VaultPath,
+    destination: &str,
+) -> Result<VaultPath, CliError> {
+    let dest_path = VaultPath::from(destination);
+    if dest_path.is_dir() {
+        let file_name = source_path.file_name().ok_or_else(|| {
+            CliError::InvalidTarget(format!(
+                "Source '{}' is not a file path and cannot be moved into a directory.",
+                source_path
+            ))
+        })?;
+        return Ok(dest_path.join(file_name)?);
+    }
+    Ok(dest_path)
+}
 
 /// 处理 'mv' (Move) 命令
 pub fn handle_move(
@@ -16,10 +33,14 @@ pub fn handle_move(
     }
 
     let source_path = VaultPath::from(source_path);
-    let dest_path = VaultPath::from(destination.as_str());
+    let dest_path = if source_path.is_file() {
+        resolve_file_destination(&source_path, destination.as_str())?
+    } else {
+        VaultPath::from(destination.as_str())
+    };
 
     if source_path.is_file() {
-        // 文件移动、跨目录重命名和原地重命名都交给统一路径 API。
+        // 文件移动、文件到目录移动、跨目录重命名和原地重命名都交给统一路径 API。
         match vault.find_by_path(&source_path)? {
             QueryPathResult::Found(_) => {}
             QueryPathResult::NotFound => {

@@ -149,6 +149,27 @@ fn test_move_accepts_only_vault_path_source() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_move_file_to_directory_keeps_original_name() -> anyhow::Result<()> {
+    let context = TestContext::new("move-file-to-directory-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd.arg("open").arg(&context.vault_path);
+    let repl_input = "mv /test_file.txt /docs/\nls /docs/\nls /\nexit\n".to_string();
+
+    cmd.write_stdin(repl_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Moving file '/test_file.txt' to '/docs/test_file.txt'",
+        ))
+        .stdout(predicate::str::contains("/docs/test_file.txt"))
+        .stdout(predicate::str::contains("/docs/"));
+
+    Ok(())
+}
+
+#[test]
 fn test_rename_accepts_only_vault_path_source() -> anyhow::Result<()> {
     let context = TestContext::new("rename-path-only-vault", "")?;
     context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
@@ -179,6 +200,27 @@ fn test_rename_accepts_only_vault_path_source() -> anyhow::Result<()> {
         .success()
         .stdout(predicate::str::contains("Path successfully renamed."))
         .stdout(predicate::str::contains("/renamed.txt"));
+
+    Ok(())
+}
+
+#[test]
+fn test_copy_file_to_directory_keeps_original_name() -> anyhow::Result<()> {
+    let context = TestContext::new("copy-file-to-directory-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd.arg("open").arg(&context.vault_path);
+    let repl_input = "copy /test_file.txt /copies/\nls /copies/\nls /\nexit\n".to_string();
+
+    cmd.write_stdin(repl_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Copying file '/test_file.txt' to '/copies/test_file.txt'",
+        ))
+        .stdout(predicate::str::contains("/copies/test_file.txt"))
+        .stdout(predicate::str::contains("/test_file.txt"));
 
     Ok(())
 }

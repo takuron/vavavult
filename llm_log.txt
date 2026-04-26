@@ -35,3 +35,4 @@
 [2026-04-26T10:08:07+08:00] Fix CLI test helper for new multi-path detail output.
 [2026-04-26T10:22:10+08:00] Updated CLI move command to accept only vault path sources and reject hash sources.
 [2026-04-26T10:30:32+08:00] Updated CLI rename to accept only vault path sources and added path-based copy/cp/cpoy command.
+[2026-04-26T10:39:14+08:00] Allowed CLI move and copy file sources to target directories while preserving original filenames.
