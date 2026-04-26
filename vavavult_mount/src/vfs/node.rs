@@ -69,6 +69,16 @@ pub(crate) enum ReadContent {
     Consumed,
 }
 
+/// Inner state of VaultDavFile, wrapped in Arc<Mutex> for shared access.
+struct VaultDavFileInner {
+    /// Operation state (read or write).
+    state: VaultDavFileState,
+    /// Expected plaintext file size.
+    file_size: u64,
+    /// File modification time.
+    modified: std::time::SystemTime,
+}
+
 /// Represents the operation state of a `VaultDavFile`.
 ///
 /// A WebDAV file handle can be opened for either reading (e.g., GET requests)
@@ -86,18 +96,33 @@ pub enum VaultDavFileState {
     },
 }
 
+/// A file handle for WebDAV read/write operations on vault files.
+///
+/// This struct implements the `DavFile` trait, providing lazy decryption and
+/// random-access reads using the core library's `Read + Seek` API.
+///
+/// # Thread Safety
+/// The inner state is wrapped in `Arc<Mutex<...>>`, allowing this struct to be
+/// cheaply cloned and shared across async tasks.
 pub struct VaultDavFile {
-    state: Mutex<VaultDavFileState>,
-    file_size: u64,
-    modified: std::time::SystemTime,
+    inner: Arc<Mutex<VaultDavFileInner>>,
 }
 
 impl std::fmt::Debug for VaultDavFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner_guard = self.inner.lock().unwrap();
         f.debug_struct("VaultDavFile")
-            .field("file_size", &self.file_size)
-            .field("modified", &self.modified)
+            .field("file_size", &inner_guard.file_size)
+            .field("modified", &inner_guard.modified)
             .finish_non_exhaustive()
+    }
+}
+
+impl Clone for VaultDavFile {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
     }
 }
 
@@ -120,12 +145,16 @@ impl VaultDavFile {
         file_size: u64,
         modified: std::time::SystemTime,
     ) -> Self {
-        Self {
-            state: Mutex::new(VaultDavFileState::Read {
+        let inner = VaultDavFileInner {
+            state: VaultDavFileState::Read {
                 content: ReadContent::Pending { task, storage },
-            }),
+            },
             file_size,
             modified,
+        };
+
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
         }
     }
 
@@ -195,28 +224,67 @@ impl VaultDavFile {
             Ok(())
         });
 
-        Self {
-            state: Mutex::new(VaultDavFileState::Write {
+        let inner = VaultDavFileInner {
+            state: VaultDavFileState::Write {
                 write_tx: Some(tx),
                 write_join_handle: Some(Mutex::new(join_handle)),
-            }),
+            },
             file_size: 0,
             modified: std::time::SystemTime::UNIX_EPOCH,
+        };
+
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
         }
     }
 
-    /// Ensures the reader is initialized and performs a read operation.
+    /// Synchronously initializes the reader if it's in Pending state.
     ///
-    /// This is a synchronous helper that must be called within a lock.
-    fn ensure_and_read(
-        &self,
-        count: usize,
-    ) -> Result<bytes::Bytes, FsError> {
-        let mut state_guard = self.state.lock().map_err(|_| FsError::GeneralFailure)?;
+    /// This function properly handles error recovery: if initialization fails,
+    /// the Pending state is restored so the operation can be retried.
+    ///
+    /// Must be called while holding the inner lock.
+    fn sync_ensure_reader_initialized(content: &mut ReadContent) -> Result<(), FsError> {
+        match content {
+            ReadContent::Pending { .. } => {
+                let old = std::mem::replace(content, ReadContent::Consumed);
+                if let ReadContent::Pending { task, storage } = old {
+                    let result = vavavult::vault::Vault::open_extraction_task_reader(
+                        storage.as_ref(),
+                        &task,
+                    );
 
-        match &mut *state_guard {
+                    match result {
+                        Ok(reader) => {
+                            *content = ReadContent::Active {
+                                reader: Mutex::new(Box::new(reader)),
+                            };
+                            Ok(())
+                        }
+                        Err(e) => {
+                            log::error!("[vavavult_mount] failed to open reader: {:?}", e);
+                            *content = ReadContent::Pending { task, storage };
+                            Err(FsError::GeneralFailure)
+                        }
+                    }
+                } else {
+                    unreachable!()
+                }
+            }
+            ReadContent::Active { .. } => Ok(()),
+            ReadContent::Consumed => Err(FsError::GeneralFailure),
+        }
+    }
+
+    /// Synchronously performs a read operation.
+    ///
+    /// Must be called from within a blocking context (e.g., spawn_blocking).
+    pub fn sync_read(&self, count: usize) -> Result<bytes::Bytes, FsError> {
+        let mut inner_guard = self.inner.lock().map_err(|_| FsError::GeneralFailure)?;
+
+        match &mut inner_guard.state {
             VaultDavFileState::Read { content } => {
-                Self::ensure_reader_initialized(content)?;
+                Self::sync_ensure_reader_initialized(content)?;
 
                 match content {
                     ReadContent::Active { reader } => {
@@ -236,18 +304,15 @@ impl VaultDavFile {
         }
     }
 
-    /// Ensures the reader is initialized and performs a seek operation.
+    /// Synchronously performs a seek operation.
     ///
-    /// This is a synchronous helper that must be called within a lock.
-    fn ensure_and_seek(
-        &self,
-        pos: SeekFrom,
-    ) -> Result<u64, FsError> {
-        let mut state_guard = self.state.lock().map_err(|_| FsError::GeneralFailure)?;
+    /// Must be called from within a blocking context (e.g., spawn_blocking).
+    pub fn sync_seek(&self, pos: SeekFrom) -> Result<u64, FsError> {
+        let mut inner_guard = self.inner.lock().map_err(|_| FsError::GeneralFailure)?;
 
-        match &mut *state_guard {
+        match &mut inner_guard.state {
             VaultDavFileState::Read { content } => {
-                Self::ensure_reader_initialized(content)?;
+                Self::sync_ensure_reader_initialized(content)?;
 
                 match content {
                     ReadContent::Active { reader } => {
@@ -264,58 +329,38 @@ impl VaultDavFile {
             _ => Err(FsError::Forbidden),
         }
     }
-
-    /// Helper to initialize the reader if it's in Pending state.
-    ///
-    /// This must be called while holding the state lock.
-    fn ensure_reader_initialized(content: &mut ReadContent) -> Result<(), FsError> {
-        match content {
-            ReadContent::Pending { .. } => {
-                let old = std::mem::replace(content, ReadContent::Consumed);
-                if let ReadContent::Pending { task, storage } = old {
-                    let reader = vavavult::vault::Vault::open_extraction_task_reader(
-                        storage.as_ref(),
-                        &task,
-                    )
-                    .map_err(|e| {
-                        log::error!("[vavavult_mount] failed to open reader: {:?}", e);
-                        FsError::GeneralFailure
-                    })?;
-
-                    *content = ReadContent::Active {
-                        reader: Mutex::new(Box::new(reader)),
-                    };
-                } else {
-                    unreachable!()
-                }
-            }
-            ReadContent::Active { .. } => {}
-            ReadContent::Consumed => return Err(FsError::GeneralFailure),
-        }
-        Ok(())
-    }
 }
 
 impl DavFile for VaultDavFile {
     fn metadata(&mut self) -> FsFuture<'_, Box<dyn DavMetaData>> {
-        let file_size = self.file_size;
-        let modified = self.modified;
+        let inner_guard = self.inner.lock().unwrap();
+        let file_size = inner_guard.file_size;
+        let modified = inner_guard.modified;
+        drop(inner_guard);
+
         Box::pin(async move {
             Ok(Box::new(VaultDavMetaData::file(file_size, modified)) as Box<dyn DavMetaData>)
         })
     }
 
     fn read_bytes(&mut self, count: usize) -> FsFuture<'_, bytes::Bytes> {
+        let self_clone = self.clone();
         Box::pin(async move {
-            self.ensure_and_read(count)
+            tokio::task::spawn_blocking(move || self_clone.sync_read(count))
+                .await
+                .map_err(|e| {
+                    log::error!("[vavavult_mount] read task panicked: {:?}", e);
+                    FsError::GeneralFailure
+                })?
         })
     }
 
     fn write_bytes(&mut self, buf: bytes::Bytes) -> FsFuture<'_, ()> {
+        let self_clone = self.clone();
         Box::pin(async move {
             let tx = {
-                let state_guard = self.state.lock().map_err(|_| FsError::GeneralFailure)?;
-                match &*state_guard {
+                let inner_guard = self_clone.inner.lock().map_err(|_| FsError::GeneralFailure)?;
+                match &inner_guard.state {
                     VaultDavFileState::Write { write_tx, .. } => {
                         write_tx.clone().ok_or(FsError::Forbidden)?
                     }
@@ -340,17 +385,23 @@ impl DavFile for VaultDavFile {
     }
 
     fn seek(&mut self, pos: SeekFrom) -> FsFuture<'_, u64> {
+        let self_clone = self.clone();
         Box::pin(async move {
-            self.ensure_and_seek(pos)
+            tokio::task::spawn_blocking(move || self_clone.sync_seek(pos))
+                .await
+                .map_err(|e| {
+                    log::error!("[vavavult_mount] seek task panicked: {:?}", e);
+                    FsError::GeneralFailure
+                })?
         })
     }
 
     fn flush(&mut self) -> FsFuture<'_, ()> {
         Box::pin(async move {
             let join_handle = {
-                let mut state_guard = self.state.lock().map_err(|_| FsError::GeneralFailure)?;
+                let mut inner_guard = self.inner.lock().map_err(|_| FsError::GeneralFailure)?;
 
-                match &mut *state_guard {
+                match &mut inner_guard.state {
                     VaultDavFileState::Write {
                         write_tx,
                         write_join_handle,
@@ -400,21 +451,48 @@ mod tests {
     #[test]
     fn test_vault_dav_file_debug() {
         use std::sync::Mutex;
-        use vavavult::storage::StorageBackend;
-        use vavavult::vault::ExtractionTask;
 
-        let state = Mutex::new(VaultDavFileState::Read {
-            content: ReadContent::Consumed,
-        });
-
-        let file = VaultDavFile {
-            state,
+        let inner = VaultDavFileInner {
+            state: VaultDavFileState::Read {
+                content: ReadContent::Consumed,
+            },
             file_size: 100,
             modified: std::time::SystemTime::UNIX_EPOCH,
+        };
+
+        let file = VaultDavFile {
+            inner: Arc::new(Mutex::new(inner)),
         };
 
         let debug_str = format!("{:?}", file);
         assert!(debug_str.contains("VaultDavFile"));
         assert!(debug_str.contains("100"));
+    }
+
+    #[test]
+    fn test_vault_dav_file_clone() {
+        use vavavult::storage::local::LocalStorage;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let storage = Arc::new(LocalStorage::new(temp_dir.path()));
+
+        let task = ExtractionTask {
+            file_hash: vavavult::common::hash::VaultHash::new([0u8; 32]),
+            password: "test".to_string(),
+            expected_original_hash: vavavult::common::hash::VaultHash::new([0u8; 32]),
+            original_vault_path: "/test.txt".to_string(),
+        };
+
+        let file = VaultDavFile::new(
+            task,
+            storage,
+            100,
+            std::time::SystemTime::UNIX_EPOCH,
+        );
+
+        let cloned = file.clone();
+        let debug_str = format!("{:?}", cloned);
+        assert!(debug_str.contains("VaultDavFile"));
     }
 }
