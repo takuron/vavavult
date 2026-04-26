@@ -861,6 +861,64 @@ pub(crate) fn list_all_recursive(
     Ok(file_entries)
 }
 
+/// 递归列出一个目录下的所有子目录路径，按深度从大到小排序。
+///
+/// 这对于需要先删除最深层子目录的操作（如递归删除）很有用。
+///
+/// # Arguments
+/// * `vault` - 保险库实例
+/// * `path` - 根目录路径
+///
+/// # Returns
+/// 所有子目录的路径向量，按深度降序排列（最深的在前）。
+/// 不包含传入的根目录本身。
+//
+// // 递归列出一个目录下的所有子目录路径，按深度从大到小排序。
+// //
+// // 这对于需要先删除最深层子目录的操作（如递归删除）很有用。
+// //
+// // # 参数
+// // * `vault` - 保险库实例
+// // * `path` - 根目录路径
+// //
+// // # 返回
+// // 所有子目录的路径向量，按深度降序排列（最深的在前）。
+// // 不包含传入的根目录本身。
+pub(crate) fn list_all_subdirectories_recursive(
+    vault: &Vault,
+    path: &VaultPath,
+) -> Result<Vec<VaultPath>, QueryError> {
+    if !path.is_dir() {
+        return Err(QueryError::NotADirectory(path.as_str().to_string()));
+    }
+
+    let Some(directory_id) = resolve_directory(vault, path)? else {
+        return Ok(Vec::new());
+    };
+
+    let mut stmt = vault.database_connection.prepare(
+        "WITH RECURSIVE subtree(id, path, depth) AS (
+             SELECT ?1, ?2, 0
+             UNION ALL
+             SELECT d.id, subtree.path || d.name || '/', subtree.depth + 1
+             FROM directories d
+             JOIN subtree ON d.parent_id = subtree.id
+         )
+         SELECT path
+         FROM subtree
+         WHERE depth > 0
+         ORDER BY depth DESC, path",
+    )?;
+
+    let dir_rows = stmt
+        .query_map(params![directory_id, path.as_str()], |row| {
+            row.get::<_, VaultPath>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(dir_rows)
+}
+
 /// 按特定标签查找文件。
 pub fn find_by_tag(vault: &Vault, tag: &str) -> Result<Vec<FilePathEntry>, QueryError> {
     let mut stmt = vault.database_connection.prepare(
