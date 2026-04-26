@@ -108,32 +108,27 @@ fn print_file_details_with_paths(
             display_path = colorize_string(&display_path, color);
         }
         println!("    - {}", display_path);
+
+        // 3. 每条路径下面紧跟自己的可见标签，避免多路径文件的标签被误合并。
+        let mut visible_tags: Vec<String> = entry
+            .tags
+            .iter()
+            .filter(|tag| !tag.starts_with('_'))
+            .map(|tag| tag.to_string())
+            .collect();
+        if colors_enabled && let Some(color) = get_file_color(&entry.tags) {
+            visible_tags.push(format!("color:{}", color));
+        }
+        let display_tags = if visible_tags.is_empty() {
+            "(none)".to_string()
+        } else {
+            visible_tags.join(", ")
+        };
+        println!("      Tag: {}", display_tags);
     }
     println!("  SHA256 (ID):     {}", path_entry.sha256sum);
     if let Some(file_entry) = &file_entry {
         println!("  Original SHA256: {}", file_entry.original_sha256sum);
-    }
-
-    // 3. 标签按路径分行展示，避免多路径文件的标签被误合并。
-    if path_entries.iter().any(|entry| !entry.tags.is_empty()) {
-        println!("  Tags:");
-        for entry in path_entries {
-            let mut visible_tags: Vec<String> = entry
-                .tags
-                .iter()
-                .filter(|tag| !tag.starts_with('_'))
-                .map(|tag| tag.to_string())
-                .collect();
-            if colors_enabled && let Some(color) = get_file_color(&entry.tags) {
-                visible_tags.push(format!("color:{}", color));
-            }
-            let display_tags = if visible_tags.is_empty() {
-                "(none)".to_string()
-            } else {
-                visible_tags.join(", ")
-            };
-            println!("    - {}: {}", entry.path, display_tags);
-        }
     }
 
     // 系统元数据：保留以 _vavavult_ 开头的
