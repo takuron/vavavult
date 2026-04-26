@@ -123,31 +123,7 @@ pub(crate) fn remove_file_by_path(
     Ok(())
 }
 
-/// 从保险库中删除单个空目录。
-///
-/// 此函数假设目录已经为空（没有文件和子目录）。
-fn remove_single_directory(
-    vault: &Vault,
-    path: &crate::file::VaultPath,
-) -> Result<(), RemoveError> {
-    // 1. 解析目录 ID
-    let dir_id = query::resolve_directory(vault, path)?
-        .ok_or_else(|| RemoveError::PathNotFound(path.as_str().to_string()))?;
-
-    // 2. 删除目录节点
-    vault
-        .database_connection
-        .execute("DELETE FROM directories WHERE id = ?1", params![dir_id])?;
-
-    Ok(())
-}
-
 /// 递归删除保险库中的目录及其所有内容。
-///
-/// 此函数会按以下顺序执行删除：
-/// 1. 先遍历并删除目录下的所有文件（包括子目录中的文件）
-/// 2. 然后按深度从大到小删除所有子目录（先删最深层的子目录）
-/// 3. 最后删除根目录
 pub(crate) fn remove_directory(
     vault: &Vault,
     path: &crate::file::VaultPath,
@@ -161,7 +137,7 @@ pub(crate) fn remove_directory(
     }
 
     // 1. 检查目录是否存在
-    let _dir_id = query::resolve_directory(vault, path)?
+    let dir_id = query::resolve_directory(vault, path)?
         .ok_or_else(|| RemoveError::PathNotFound(path.as_str().to_string()))?;
 
     // 2. 获取该目录下的所有文件并逐一删除，以触发物理文件清理评估
@@ -171,16 +147,11 @@ pub(crate) fn remove_directory(
         remove_file_by_path(vault, &file.path)?;
     }
 
-    // 3. 获取所有子目录，按深度从大到小排序（最深的在前）
-    let subdirectories = query::list_all_subdirectories_recursive(vault, path)?;
-
-    // 4. 按深度从大到小删除子目录（先删最深层的）
-    for subdir in subdirectories {
-        remove_single_directory(vault, &subdir)?;
-    }
-
-    // 5. 最后删除根目录
-    remove_single_directory(vault, path)?;
+    // 3. 删除目录节点。由于开启了 ON DELETE CASCADE，所有剩余的空子目录和文件映射将被自动清理。
+    // 文件映射已在第2步被逐一清空，这里主要清理目录树本身。
+    vault
+        .database_connection
+        .execute("DELETE FROM directories WHERE id = ?1", params![dir_id])?;
 
     Ok(())
 }
