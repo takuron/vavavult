@@ -108,8 +108,11 @@ impl TestContext {
         let blocks = stdout.split("----------------------------------------");
 
         for block in blocks {
-            let path_line_match = format!("Path:            {}", vault_path);
-            if block.contains(&path_line_match) {
+            let path_line_match = format!("- {}", vault_path);
+            if block
+                .lines()
+                .any(|line| line.trim() == path_line_match)
+            {
                 // This is the correct block for our file.
                 let hash_line = block
                     .lines()
