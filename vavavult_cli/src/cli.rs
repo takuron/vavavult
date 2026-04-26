@@ -168,29 +168,44 @@ pub enum ReplCommand {
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Move (mv) or rename a file within the vault
-    //  在保险库中移动 (mv) 或重命名一个文件
+    /// Move (mv) or rename a file or directory by vault path
+    //  通过保险库路径移动 (mv) 或重命名文件或目录
     #[command(visible_alias = "mv")]
     Move {
-        /// The target file to move (path or hash).
-        //  要移动的目标文件（路径或哈希）。
-        #[arg(required = true, value_name = "TARGET")]
-        target: String,
+        /// The source vault path to move. Hash targets are not accepted.
+        //  要移动的源保险库路径。不再接受哈希目标。
+        #[arg(required = true, value_name = "SOURCE_PATH")]
+        source_path: String,
 
-        /// The new destination.
-        //  新的目标位置。
+        /// The destination vault path.
+        //  目标保险库路径。
         #[arg(required = true, value_name = "DESTINATION")]
         destination: String,
     },
 
-    /// Rename a file in its current directory (in-place)
-    //  在当前目录中就地重命名一个文件
+    /// Copy a file within the vault by vault path
+    //  通过保险库路径在保险库内复制文件
+    #[command(visible_aliases = ["cp", "cpoy"])]
+    Copy {
+        /// The source vault file path to copy. Hash targets are not accepted.
+        //  要复制的源保险库文件路径。不再接受哈希目标。
+        #[arg(required = true, value_name = "SOURCE_PATH")]
+        source_path: String,
+
+        /// The destination vault file path.
+        //  目标保险库文件路径。
+        #[arg(required = true, value_name = "DESTINATION")]
+        destination: String,
+    },
+
+    /// Rename a file or directory in its current directory by vault path
+    //  通过保险库路径在当前目录中就地重命名文件或目录
     #[command(visible_alias = "ren")]
     Rename {
-        /// The target file to rename (path or hash).
-        //  要重命名的目标文件（路径或哈希）。
-        #[arg(required = true, value_name = "TARGET")]
-        target: String,
+        /// The source vault path to rename. Hash targets are not accepted.
+        //  要重命名的源保险库路径。不再接受哈希目标。
+        #[arg(required = true, value_name = "SOURCE_PATH")]
+        source_path: String,
 
         /// The new filename (must not contain path separators '/')
         //  新的文件名 (不能包含路径分隔符 '/')

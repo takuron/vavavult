@@ -75,15 +75,25 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
             handlers::remove::handle_remove(&mut vault, &target, recursive, yes)?;
         }
         ReplCommand::Move {
-            target,
+            source_path,
             destination,
         } => {
             let mut vault = vault_arc.lock().unwrap();
-            handlers::move_cl::handle_move(&mut vault, &target, destination)?;
+            handlers::move_cl::handle_move(&mut vault, &source_path, destination)?;
         }
-        ReplCommand::Rename { target, new_name } => {
+        ReplCommand::Copy {
+            source_path,
+            destination,
+        } => {
             let mut vault = vault_arc.lock().unwrap();
-            handlers::rename::handle_file_rename(&mut vault, &target, &new_name)?;
+            handlers::copy::handle_copy(&mut vault, &source_path, destination)?;
+        }
+        ReplCommand::Rename {
+            source_path,
+            new_name,
+        } => {
+            let mut vault = vault_arc.lock().unwrap();
+            handlers::rename::handle_file_rename(&mut vault, &source_path, &new_name)?;
         }
         ReplCommand::Verify { targets, parallel } => {
             handlers::verify::handle_verify(Arc::clone(&vault_arc), &targets, parallel)?;

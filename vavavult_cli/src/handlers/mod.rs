@@ -1,4 +1,5 @@
 pub(crate) mod add;
+pub(crate) mod copy;
 pub(crate) mod extract;
 pub(crate) mod list;
 // pub(crate) mod mount;

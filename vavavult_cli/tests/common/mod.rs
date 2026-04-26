@@ -109,10 +109,7 @@ impl TestContext {
 
         for block in blocks {
             let path_line_match = format!("- {}", vault_path);
-            if block
-                .lines()
-                .any(|line| line.trim() == path_line_match)
-            {
+            if block.lines().any(|line| line.trim() == path_line_match) {
                 // This is the correct block for our file.
                 let hash_line = block
                     .lines()

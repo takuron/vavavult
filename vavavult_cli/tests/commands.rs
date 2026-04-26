@@ -112,3 +112,117 @@ fn test_remove_missing_storage_file() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_move_accepts_only_vault_path_source() -> anyhow::Result<()> {
+    let context = TestContext::new("move-path-only-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let (hash, _) = context.get_file_hash_and_path("/test_file.txt")?;
+
+    // 1. 哈希源必须被拒绝，避免 mv 继续接受非路径目标。
+    let mut cmd_hash = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_hash.arg("open").arg(&context.vault_path);
+    let repl_input_hash = format!("mv {} /hash_moved.txt\nexit\n", hash);
+
+    cmd_hash
+        .write_stdin(repl_input_hash)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "The mv command only accepts source paths starting with '/'",
+        ));
+
+    // 2. 保险库路径源仍然可以正常移动。
+    let mut cmd_path = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_path.arg("open").arg(&context.vault_path);
+    let repl_input_path = "mv /test_file.txt /path_moved.txt\nls /\nexit\n".to_string();
+
+    cmd_path
+        .write_stdin(repl_input_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("File successfully moved."))
+        .stdout(predicate::str::contains("/path_moved.txt"));
+
+    Ok(())
+}
+
+#[test]
+fn test_rename_accepts_only_vault_path_source() -> anyhow::Result<()> {
+    let context = TestContext::new("rename-path-only-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let (hash, _) = context.get_file_hash_and_path("/test_file.txt")?;
+
+    // 1. 哈希源必须被拒绝，避免 rename 继续接受非路径目标。
+    let mut cmd_hash = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_hash.arg("open").arg(&context.vault_path);
+    let repl_input_hash = format!("rename {} renamed.txt\nexit\n", hash);
+
+    cmd_hash
+        .write_stdin(repl_input_hash)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "The rename command only accepts source paths starting with '/'",
+        ));
+
+    // 2. 保险库路径源仍然可以正常重命名。
+    let mut cmd_path = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_path.arg("open").arg(&context.vault_path);
+    let repl_input_path = "rename /test_file.txt renamed.txt\nls /\nexit\n".to_string();
+
+    cmd_path
+        .write_stdin(repl_input_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Path successfully renamed."))
+        .stdout(predicate::str::contains("/renamed.txt"));
+
+    Ok(())
+}
+
+#[test]
+fn test_copy_accepts_only_vault_path_source() -> anyhow::Result<()> {
+    let context = TestContext::new("copy-path-only-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let (hash, _) = context.get_file_hash_and_path("/test_file.txt")?;
+
+    // 1. 哈希源必须被拒绝，copy/cp 只通过路径复制文件映射。
+    let mut cmd_hash = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_hash.arg("open").arg(&context.vault_path);
+    let repl_input_hash = format!("copy {} /hash_copy.txt\nexit\n", hash);
+
+    cmd_hash
+        .write_stdin(repl_input_hash)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "The copy command only accepts source paths starting with '/'",
+        ));
+
+    // 2. 主命令、cp 别名和兼容拼写 cpoy 都能通过路径复制。
+    let mut cmd_path = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_path.arg("open").arg(&context.vault_path);
+    let repl_input_path = concat!(
+        "copy /test_file.txt /copy_a.txt\n",
+        "cp /test_file.txt /copy_b.txt\n",
+        "cpoy /test_file.txt /copy_c.txt\n",
+        "ls /\n",
+        "exit\n"
+    )
+    .to_string();
+
+    cmd_path
+        .write_stdin(repl_input_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("File successfully copied."))
+        .stdout(predicate::str::contains("/copy_a.txt"))
+        .stdout(predicate::str::contains("/copy_b.txt"))
+        .stdout(predicate::str::contains("/copy_c.txt"));
+
+    Ok(())
+}

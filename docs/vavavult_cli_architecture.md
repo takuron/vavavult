@@ -20,6 +20,12 @@ A user-facing CLI application for interacting with `vavavult` vaults.
 *   **`vavavult_cli::handlers`**
     *   **Path:** `vavavult_cli/src/handlers/`
     *   **Description:** Contains the implementation for each REPL command (e.g., `add.rs`, `extract.rs`, `list.rs`, `search.rs`). Each handler function receives the current `AppState` and the command arguments, calls the corresponding `vavavult` library functions, and uses the `ui` module to print the results.
+    *   `move_cl.rs`: Implements `move`/`mv` by accepting only source vault paths (starting with `/`) and delegating to `Vault::move_path`; hash sources are rejected at the CLI layer.
+    *   `move_cl.rs`: 通过仅接受以 `/` 开头的源保险库路径来实现 `move`/`mv`，并委托给 `Vault::move_path`；哈希源会在 CLI 层被拒绝。
+    *   `rename.rs`: Implements `rename`/`ren` with the same source-path-only rule and delegates to `Vault::rename_path_inplace`.
+    *   `rename.rs`: 以相同的仅源路径规则实现 `rename`/`ren`，并委托给 `Vault::rename_path_inplace`。
+    *   `copy.rs`: Implements `copy`/`cp`/`cpoy` for file path copies by delegating to `Vault::copy_file_path`; hash sources are rejected at the CLI layer.
+    *   `copy.rs`: 通过委托给 `Vault::copy_file_path` 实现文件路径复制命令 `copy`/`cp`/`cpoy`；哈希源会在 CLI 层被拒绝。
 
 *   **`vavavult_cli::ui`**
     *   **Path:** `vavavult_cli/src/ui/`

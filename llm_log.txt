@@ -32,3 +32,6 @@
 [2026-04-26T09:57:44+08:00] Add Vault colorful tag extension methods and route CLI color operations through them.
 [2026-04-26T10:00:30+08:00] Add Vault method to read path color from colorful tag extension.
 [2026-04-26T10:04:29+08:00] Adjust CLI detail output to print path-local tag lines under each path.
+[2026-04-26T10:08:07+08:00] Fix CLI test helper for new multi-path detail output.
+[2026-04-26T10:22:10+08:00] Updated CLI move command to accept only vault path sources and reject hash sources.
+[2026-04-26T10:30:32+08:00] Updated CLI rename to accept only vault path sources and added path-based copy/cp/cpoy command.
