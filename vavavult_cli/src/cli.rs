@@ -59,10 +59,15 @@ pub enum ReplCommand {
         #[arg(short = 'n', long = "name")]
         name: Option<String>,
 
-        /// Use multiple threads to add files in parallel
-        // 使用多线程并行添加文件
-        #[arg(long)]
-        parallel: bool,
+        /// Add multiple files sequentially in a single thread.
+        // 以单线程顺序添加多个文件。
+        #[arg(long = "single-thread")]
+        single_thread: bool,
+
+        /// Reject files whose original content hash already exists in the vault or batch
+        // 拒绝原始内容哈希已存在于保险库或批次中的文件
+        #[arg(long = "no-duplicate-files")]
+        no_duplicate_files: bool,
     },
     /// List files and directories in the vault
     //  列出保险库中的文件和目录
@@ -112,7 +117,7 @@ pub enum ReplCommand {
     Extract {
         /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
         //  目标标识符：保险库路径（以 '/' 开头）或哈希（43 个字符）。
-        #[arg(required = true, value_name = "TARGET")]
+        #[arg(required = true, value_name = "TARGET", allow_hyphen_values = true)]
         target: String,
 
         /// The local destination directory where the file(s) will be saved.
@@ -139,10 +144,10 @@ pub enum ReplCommand {
         #[arg(long)]
         delete: bool,
 
-        /// Use multiple threads to extract files in parallel.
-        // 使用多线程并行提取文件。
-        #[arg(long)]
-        parallel: bool,
+        /// Extract multiple files sequentially in a single thread.
+        // 以单线程顺序提取多个文件。
+        #[arg(long = "single-thread")]
+        single_thread: bool,
     },
     /// Permanently delete a file or directory from the vault
     //  从保险库中永久删除一个文件或目录
@@ -158,39 +163,49 @@ pub enum ReplCommand {
         #[arg(short = 'r', long)]
         recursive: bool,
 
-        /// (Experimental) Force removal of inconsistent entries (e.g., DB entry exists but data file is missing)
-        // (实验性) 强制删除不一致的条目 (例如，数据库条目存在但数据文件丢失)
-        #[arg(short = 'f', long)]
-        force: bool,
-
         /// Skip all confirmation prompts
         //  跳过所有确认提示
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Move (mv) or rename a file within the vault
-    //  在保险库中移动 (mv) 或重命名一个文件
+    /// Move (mv) or rename a file or directory by vault path
+    //  通过保险库路径移动 (mv) 或重命名文件或目录
     #[command(visible_alias = "mv")]
     Move {
-        /// The target file to move (path or hash).
-        //  要移动的目标文件（路径或哈希）。
-        #[arg(required = true, value_name = "TARGET")]
-        target: String,
+        /// The source vault path to move. Hash targets are not accepted.
+        //  要移动的源保险库路径。不再接受哈希目标。
+        #[arg(required = true, value_name = "SOURCE_PATH")]
+        source_path: String,
 
-        /// The new destination.
-        //  新的目标位置。
+        /// The destination vault path.
+        //  目标保险库路径。
         #[arg(required = true, value_name = "DESTINATION")]
         destination: String,
     },
 
-    /// Rename a file in its current directory (in-place)
-    //  在当前目录中就地重命名一个文件
+    /// Copy a file within the vault by vault path
+    //  通过保险库路径在保险库内复制文件
+    #[command(visible_aliases = ["cp", "cpoy"])]
+    Copy {
+        /// The source vault file path to copy. Hash targets are not accepted.
+        //  要复制的源保险库文件路径。不再接受哈希目标。
+        #[arg(required = true, value_name = "SOURCE_PATH")]
+        source_path: String,
+
+        /// The destination vault file path.
+        //  目标保险库文件路径。
+        #[arg(required = true, value_name = "DESTINATION")]
+        destination: String,
+    },
+
+    /// Rename a file or directory in its current directory by vault path
+    //  通过保险库路径在当前目录中就地重命名文件或目录
     #[command(visible_alias = "ren")]
     Rename {
-        /// The target file to rename (path or hash).
-        //  要重命名的目标文件（路径或哈希）。
-        #[arg(required = true, value_name = "TARGET")]
-        target: String,
+        /// The source vault path to rename. Hash targets are not accepted.
+        //  要重命名的源保险库路径。不再接受哈希目标。
+        #[arg(required = true, value_name = "SOURCE_PATH")]
+        source_path: String,
 
         /// The new filename (must not contain path separators '/')
         //  新的文件名 (不能包含路径分隔符 '/')
@@ -246,10 +261,10 @@ pub enum ReplCommand {
         #[arg(required = true, num_args = 1..)]
         targets: Vec<String>,
 
-        /// Use multiple threads to verify files in parallel.
-        //  使用多线程并行校验文件。
-        #[arg(long)]
-        parallel: bool,
+        /// Verify multiple files sequentially in a single thread.
+        //  以单线程顺序校验多个文件。
+        #[arg(long = "single-thread")]
+        single_thread: bool,
     },
     /// Exit the interactive session
     //  退出交互式会话
@@ -277,8 +292,8 @@ pub enum TagCommand {
     /// Add one or more tags to a file or directory
     //  将一个或多个标签添加到一个文件或目录
     Add {
-        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
-        //  目标标识符。
+        /// The target vault path. Hash targets are not accepted.
+        //  目标保险库路径。不再接受哈希目标。
         #[arg(required = true, value_name = "TARGET")]
         target: String,
 
@@ -290,8 +305,8 @@ pub enum TagCommand {
     /// Remove one or more tags from a file or directory
     //  从一个文件或目录中删除一个或多个标签
     Remove {
-        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
-        //  目标标识符。
+        /// The target vault path. Hash targets are not accepted.
+        //  目标保险库路径。不再接受哈希目标。
         #[arg(required = true, value_name = "TARGET")]
         target: String,
 
@@ -303,16 +318,16 @@ pub enum TagCommand {
     /// Clear all tags from a file or directory
     //  清除一个文件或目录的所有标签
     Clear {
-        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
-        //  目标标识符。
+        /// The target vault path. Hash targets are not accepted.
+        //  目标保险库路径。不再接受哈希目标。
         #[arg(required = true, value_name = "TARGET")]
         target: String,
     },
     /// Set a display color for a file or directory (Requires 'colorfulTag' feature)
     //  设置文件或目录的显示颜色 (需要启用 'colorfulTag' 功能)
     Color {
-        /// The target identifier: a vault path (starts with '/') or a hash (43 chars).
-        //  目标标识符。
+        /// The target vault path. Hash targets are not accepted.
+        //  目标保险库路径。不再接受哈希目标。
         #[arg(required = true, value_name = "TARGET")]
         target: String,
 

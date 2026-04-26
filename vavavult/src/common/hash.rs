@@ -1,9 +1,15 @@
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
+};
+use rusqlite::types::{FromSql, ToSqlOutput};
+use rusqlite::{
+    ToSql,
+    types::{FromSqlError, FromSqlResult, Value, ValueRef},
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
-use base64::{Engine as _, engine::general_purpose::{STANDARD, STANDARD_NO_PAD}};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use rusqlite::{ToSql, types::{ValueRef, FromSqlResult, FromSqlError, Value}};
-use rusqlite::types::{FromSql, ToSqlOutput};
 
 /// A type-safe wrapper for a 256-bit hash value (e.g., SHA-256).
 ///
@@ -103,7 +109,9 @@ impl VaultHash {
         let bytes = STANDARD_NO_PAD.decode(s_standard.as_bytes())?;
 
         // 4. 转换回 [u8; 32]
-        let byte_array = bytes.clone().try_into()
+        let byte_array = bytes
+            .clone()
+            .try_into()
             .map_err(|_| HashParseError::InvalidByteLength(bytes.len()))?;
 
         Ok(Self(byte_array))
@@ -121,7 +129,9 @@ impl VaultHash {
     // // 从标准的、可能带填充的 Base64 字符串解码回 `VaultHash`。
     pub fn from_standard_base64(s: &str) -> Result<Self, HashParseError> {
         let bytes = STANDARD.decode(s)?;
-        let byte_array = bytes.clone().try_into()
+        let byte_array = bytes
+            .clone()
+            .try_into()
             .map_err(|_| HashParseError::InvalidByteLength(bytes.len()))?;
         Ok(Self(byte_array))
     }
@@ -138,7 +148,9 @@ impl VaultHash {
     // // 从 Hex 字符串 (大小写不敏感) 解码回 `VaultHash`。
     pub fn from_hex(s: &str) -> Result<Self, HashParseError> {
         let bytes = hex::decode(s)?;
-        let byte_array = bytes.clone().try_into()
+        let byte_array = bytes
+            .clone()
+            .try_into()
             .map_err(|_| HashParseError::InvalidByteLength(bytes.len()))?;
         Ok(Self(byte_array))
     }
@@ -218,10 +230,9 @@ impl ToSql for VaultHash {
 /// 从数据库 TEXT (Base64 字符串) 读取
 impl FromSql for VaultHash {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        value.as_str().and_then(|s| {
-            VaultHash::from_str(s)
-                .map_err(|e| FromSqlError::Other(Box::new(e)))
-        })
+        value
+            .as_str()
+            .and_then(|s| VaultHash::from_str(s).map_err(|e| FromSqlError::Other(Box::new(e))))
     }
 }
 
@@ -233,10 +244,9 @@ mod tests {
     fn test_hash_roundtrip_bytes_and_string() {
         // 一个 SHA256 结果 (32 字节)
         let sha256_bytes: [u8; 32] = [
-            0xBA, 0x78, 0x16, 0xBF, 0x8F, 0x01, 0xCF, 0xEA,
-            0x41, 0x41, 0x40, 0xDE, 0x5D, 0xA2, 0x22, 0x3B,
-            0xA5, 0x73, 0xF2, 0x67, 0x9B, 0xF0, 0x8D, 0x4B,
-            0x0C, 0x85, 0xF9, 0x6F, 0x5F, 0x6C, 0xBA, 0x31
+            0xBA, 0x78, 0x16, 0xBF, 0x8F, 0x01, 0xCF, 0xEA, 0x41, 0x41, 0x40, 0xDE, 0x5D, 0xA2,
+            0x22, 0x3B, 0xA5, 0x73, 0xF2, 0x67, 0x9B, 0xF0, 0x8D, 0x4B, 0x0C, 0x85, 0xF9, 0x6F,
+            0x5F, 0x6C, 0xBA, 0x31,
         ];
 
         // 1. Bytes -> VaultHash
@@ -272,7 +282,8 @@ mod tests {
         assert!(json_string.starts_with('"') && json_string.ends_with('"'));
         assert_eq!(json_string.len(), 43 + 2); // 43 字符 + 2 个引号
 
-        let deserialized_hash: VaultHash = serde_json::from_str(&json_string).expect("Deserialization failed");
+        let deserialized_hash: VaultHash =
+            serde_json::from_str(&json_string).expect("Deserialization failed");
 
         assert_eq!(hash, deserialized_hash);
     }

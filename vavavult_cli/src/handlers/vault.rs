@@ -14,6 +14,7 @@ pub struct VaultStatus {
     pub features: Vec<String>,
     pub encrypted: bool,
     pub file_count: i64,
+    pub storage_file_count: i64,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -35,6 +36,7 @@ pub fn handle_vault_rename(vault: &mut Vault, new_name: &str) -> Result<(), CliE
 /// Gathers vault status information and prints it.
 pub fn handle_status(vault: &Vault) -> Result<(), CliError> {
     let file_count = vault.get_file_count()?;
+    let storage_file_count = vault.get_storage_file_count()?;
     let features = vault.get_enabled_features()?;
 
     let get_time = |key: &str| -> Option<DateTime<Utc>> {
@@ -51,6 +53,7 @@ pub fn handle_status(vault: &Vault) -> Result<(), CliError> {
         features,
         encrypted: vault.config.encrypted,
         file_count,
+        storage_file_count,
         created_at: get_time(META_VAULT_CREATE_TIME),
         updated_at: get_time(META_VAULT_UPDATE_TIME),
     };

@@ -1,14 +1,14 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Cursor, Write};
+use std::io::{self, Cursor, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::common::hash::VaultHash;
 use vavavult::file::VaultPath;
-use vavavult::storage::{StagingToken, StorageBackend};
-use vavavult::vault::{QueryResult, Vault};
+use vavavult::storage::{StagingToken, StorageBackend, StorageReader, StorageWriter};
+use vavavult::vault::{QueryPathResult, Vault};
 
 // --- Mock In-Memory Storage (内存存储模拟) ---
 // 这个模拟后端将文件数据存储在 HashMap 中，而不是磁盘上。
@@ -21,7 +21,9 @@ struct InMemoryStorage {
 
 impl InMemoryStorage {
     fn new() -> Self {
-        Self { files: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            files: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
@@ -31,20 +33,61 @@ struct MemoryStagingToken {
 }
 
 impl StagingToken for MemoryStagingToken {
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 struct MemoryWriter {
     buffer: Arc<Mutex<Vec<u8>>>,
+    position: u64,
 }
 
 impl Write for MemoryWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut data = self.buffer.lock().unwrap();
-        data.extend_from_slice(buf);
+        let start = usize::try_from(self.position)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "position too large"))?;
+        let end = start
+            .checked_add(buf.len())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "write length overflow"))?;
+
+        // Seek 后写入可能在当前缓冲区之后，按文件语义用零填充空洞。
+        if start > data.len() {
+            data.resize(start, 0);
+        }
+        if end > data.len() {
+            data.resize(end, 0);
+        }
+        data[start..end].copy_from_slice(buf);
+        self.position = end as u64;
         Ok(buf.len())
     }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Seek for MemoryWriter {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let data_len = self.buffer.lock().unwrap().len() as i128;
+        let current = i128::from(self.position);
+        let next = match pos {
+            SeekFrom::Start(offset) => i128::from(offset),
+            SeekFrom::End(offset) => data_len + i128::from(offset),
+            SeekFrom::Current(offset) => current + i128::from(offset),
+        };
+
+        if next < 0 || next > i128::from(u64::MAX) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid seek position",
+            ));
+        }
+
+        self.position = next as u64;
+        Ok(self.position)
+    }
 }
 
 impl StorageBackend for InMemoryStorage {
@@ -52,27 +95,45 @@ impl StorageBackend for InMemoryStorage {
         Ok(self.files.lock().unwrap().contains_key(hash))
     }
 
-    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn io::Read + Send>> {
+    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn StorageReader>> {
         let map = self.files.lock().unwrap();
-        let data = map.get(hash).ok_or(io::Error::new(io::ErrorKind::NotFound, "File not found in memory"))?;
+        let data = map.get(hash).ok_or(io::Error::new(
+            io::ErrorKind::NotFound,
+            "File not found in memory",
+        ))?;
         Ok(Box::new(Cursor::new(data.clone())))
     }
 
-    fn prepare_write(&self) -> io::Result<(Box<dyn Write + Send>, Box<dyn StagingToken>)> {
+    fn prepare_write(&self) -> io::Result<(Box<dyn StorageWriter>, Box<dyn StagingToken>)> {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         // 返回 Writer 用于写入数据，返回 Token 用于后续提交
-        Ok((Box::new(MemoryWriter { buffer: buffer.clone() }), Box::new(MemoryStagingToken { buffer })))
+        Ok((
+            Box::new(MemoryWriter {
+                buffer: buffer.clone(),
+                position: 0,
+            }),
+            Box::new(MemoryStagingToken { buffer }),
+        ))
     }
 
-    fn commit_write(&self, mut token: Box<dyn StagingToken>, final_hash: &VaultHash) -> io::Result<()> {
+    fn commit_write(
+        &self,
+        mut token: Box<dyn StagingToken>,
+        final_hash: &VaultHash,
+    ) -> io::Result<()> {
         // 从 Token 中取出暂存数据，移动到主存储 (HashMap)
-        let mem_token = token.as_any_mut().downcast_mut::<MemoryStagingToken>().unwrap();
+        let mem_token = token
+            .as_any_mut()
+            .downcast_mut::<MemoryStagingToken>()
+            .unwrap();
         let data = mem_token.buffer.lock().unwrap().clone();
         self.files.lock().unwrap().insert(final_hash.clone(), data);
         Ok(())
     }
 
-    fn rollback_write(&self, _token: Box<dyn StagingToken>) -> io::Result<()> { Ok(()) }
+    fn rollback_write(&self, _token: Box<dyn StagingToken>) -> io::Result<()> {
+        Ok(())
+    }
 
     fn delete(&self, hash: &VaultHash) -> io::Result<()> {
         self.files.lock().unwrap().remove(hash);
@@ -92,14 +153,28 @@ fn test_decoupling_with_in_memory_backend() {
     let memory_backend = Arc::new(InMemoryStorage::new());
 
     // 注入自定义后端
-    let mut vault = Vault::create_vault(&vault_path, "mem-test", Some("pass"), memory_backend.clone()).unwrap();
+    let mut vault = Vault::create_vault(
+        &vault_path,
+        "mem-test",
+        Some("pass"),
+        memory_backend.clone(),
+    )
+    .unwrap();
 
     let source_path = dir.path().join("source.txt");
     fs::write(&source_path, "RAM Data").unwrap();
-    let hash = vault.add_file(&source_path, &VaultPath::from("/file.txt")).unwrap();
+    let hash = vault
+        .add_file(&source_path, &VaultPath::from("/file.txt"), None)
+        .unwrap();
 
     // 验证物理隔离：磁盘上的 data 目录不应有文件
-    assert!(!vault.root_path.join(DATA_SUBDIR).join(hash.to_string()).exists());
+    assert!(
+        !vault
+            .root_path
+            .join(DATA_SUBDIR)
+            .join(hash.to_string())
+            .exists()
+    );
     // 验证内存存储：后端应有数据
     assert!(memory_backend.exists(&hash).unwrap());
 
@@ -122,8 +197,11 @@ fn test_memory_backend_persistence_simulation() {
 
     // 步骤 1: 创建并添加
     {
-        let mut vault = Vault::create_vault(&vault_path, "test", Some("pass"), memory_backend.clone()).unwrap();
-        vault.add_file(&source_path, &VaultPath::from("/f.txt")).unwrap();
+        let mut vault =
+            Vault::create_vault(&vault_path, "test", Some("pass"), memory_backend.clone()).unwrap();
+        vault
+            .add_file(&source_path, &VaultPath::from("/f.txt"), None)
+            .unwrap();
     } // vault 在此处被 Drop (模拟关闭)
 
     // 步骤 2: 重新打开，注入同一个后端实例
@@ -131,12 +209,14 @@ fn test_memory_backend_persistence_simulation() {
 
     // 验证元数据存在（来自 SQLite）
     let entry = match reopened.find_by_path(&VaultPath::from("/f.txt")).unwrap() {
-        QueryResult::Found(e) => e,
+        QueryPathResult::Found(e) => e,
         _ => panic!("Metadata lost"),
     };
 
     // 验证内容存在（来自 MemoryBackend）
     let extract_path = dir.path().join("out.txt");
-    reopened.extract_file(&entry.sha256sum, &extract_path).unwrap();
+    reopened
+        .extract_file(&entry.sha256sum, &extract_path)
+        .unwrap();
     assert_eq!(fs::read_to_string(extract_path).unwrap(), "Persist?");
 }

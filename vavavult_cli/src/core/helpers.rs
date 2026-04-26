@@ -2,11 +2,12 @@
 
 use crate::errors::CliError;
 use chrono::{DateTime, ParseError, Utc};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
 use vavavult::common::hash::VaultHash;
 use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::{QueryResult, Vault};
+use vavavult::vault::{QueryFileResult, QueryPathResult, Vault};
 
 // 本地辅助函数：解析 RFC 3339 字符串
 pub fn parse_rfc3339_string(s: &str) -> Result<DateTime<Utc>, ParseError> {
@@ -50,8 +51,16 @@ pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, CliErro
         Target::Path(p) => {
             // 如果是路径，查询数据库
             match vault.find_by_path(&p)? {
-                QueryResult::Found(entry) => Ok(entry),
-                QueryResult::NotFound => Err(CliError::EntryNotFound(format!(
+                QueryPathResult::Found(path_entry) => {
+                    match vault.find_by_hash(&path_entry.sha256sum)? {
+                        QueryFileResult::Found(entry) => Ok(entry),
+                        QueryFileResult::NotFound => Err(CliError::EntryNotFound(format!(
+                            "File not found at path '{}'.",
+                            p
+                        ))),
+                    }
+                }
+                QueryPathResult::NotFound => Err(CliError::EntryNotFound(format!(
                     "File not found at path '{}'.",
                     p
                 ))),
@@ -60,8 +69,8 @@ pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, CliErro
         Target::Hash(h) => {
             // 如果是哈希，查询数据库
             match vault.find_by_hash(&h)? {
-                QueryResult::Found(entry) => Ok(entry),
-                QueryResult::NotFound => Err(CliError::EntryNotFound(format!(
+                QueryFileResult::Found(entry) => Ok(entry),
+                QueryFileResult::NotFound => Err(CliError::EntryNotFound(format!(
                     "File not found with hash '{}'.",
                     h
                 ))),
@@ -70,15 +79,53 @@ pub fn find_file_entry(vault: &Vault, target: &str) -> Result<FileEntry, CliErro
     }
 }
 
+/// Returns the first vault path currently linked to a file entry.
+//
+// // 返回当前链接到某个文件条目的第一条保险库路径。
+pub fn first_path_for_entry(vault: &Vault, entry: &FileEntry) -> Result<VaultPath, CliError> {
+    vault
+        .list_paths_by_hash(&entry.sha256sum)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            CliError::EntryNotFound(format!(
+                "No path mapping found for file hash '{}'.",
+                entry.sha256sum
+            ))
+        })
+}
+
+/// Returns a display path for a file entry, falling back to its hash.
+//
+// // 返回文件条目的显示路径，如果没有路径映射则回退到哈希。
+pub fn display_path_for_entry(vault: &Vault, entry: &FileEntry) -> String {
+    first_path_for_entry(vault, entry)
+        .map(|path| path.to_string())
+        .unwrap_or_else(|_| entry.sha256sum.to_string())
+}
+
+/// Returns a display filename for a file entry, falling back to its hash.
+//
+// // 返回文件条目的显示文件名，如果没有路径映射则回退到哈希。
+pub fn display_name_for_entry(vault: &Vault, entry: &FileEntry) -> String {
+    first_path_for_entry(vault, entry)
+        .ok()
+        .and_then(|path| path.file_name().map(str::to_string))
+        .unwrap_or_else(|| entry.sha256sum.to_string())
+}
+
 /// 确定最终的输出路径
 pub fn determine_output_path(
+    vault: &Vault,
     entry: &FileEntry,
     dest_dir: PathBuf,
     output_name: Option<String>,
 ) -> PathBuf {
     let final_filename = output_name.unwrap_or_else(|| {
-        // [修改] 使用 VaultPath::file_name() 代替 Path::new()
-        entry.path.file_name().unwrap_or("unnamed_file").to_string()
+        first_path_for_entry(vault, entry)
+            .ok()
+            .and_then(|path| path.file_name().map(str::to_string))
+            .unwrap_or_else(|| "unnamed_file".to_string())
     });
     dest_dir.join(final_filename)
 }
@@ -93,20 +140,29 @@ pub fn get_all_files_recursively(
     if !dir_vault_path.is_dir() {
         // 如果用户传入了文件路径，则只返回该文件
         return match vault.find_by_path(&dir_vault_path)? {
-            QueryResult::Found(entry) => Ok(vec![entry]),
-            QueryResult::NotFound => Ok(Vec::new()),
+            QueryPathResult::Found(path_entry) => {
+                match vault.find_by_hash(&path_entry.sha256sum)? {
+                    QueryFileResult::Found(entry) => Ok(vec![entry]),
+                    QueryFileResult::NotFound => Ok(Vec::new()),
+                }
+            }
+            QueryPathResult::NotFound => Ok(Vec::new()),
         };
     }
 
-    // 2. [修改] 调用新的 `list_all_recursive` API 获取哈希列表
-    let hashes = vault.list_all_recursive(&dir_vault_path)?;
+    // 2. 调用路径化递归列表 API 获取文件路径映射。
+    let file_path_entries = vault.list_all_recursive(&dir_vault_path)?;
 
-    // 3. [修改] 遍历哈希，查找完整的 FileEntry
+    // 3. 按哈希去重后查找完整的 FileEntry。
     let mut all_files = Vec::new();
-    for hash in hashes {
-        match vault.find_by_hash(&hash)? {
-            QueryResult::Found(entry) => all_files.push(entry),
-            QueryResult::NotFound => {
+    let mut seen_hashes = HashSet::new();
+    for file_path_entry in file_path_entries {
+        if !seen_hashes.insert(file_path_entry.sha256sum) {
+            continue;
+        }
+        match vault.find_by_hash(&file_path_entry.sha256sum)? {
+            QueryFileResult::Found(entry) => all_files.push(entry),
+            QueryFileResult::NotFound => {
                 // 数据库不一致，但我们暂时忽略
             }
         }

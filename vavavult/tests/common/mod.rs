@@ -7,18 +7,18 @@ use tempfile::TempDir;
 use vavavult::file::VaultPath;
 use vavavult::vault::Vault;
 
-/// 辅助函数：创建一个带默认密码的 V2 加密保险库。
+/// 辅助函数：创建一个带默认密码的加密保险库。
 ///
 /// 这个函数封装了创建 TempDir、构建路径和调用 `Vault::create_vault_local` 的样板代码。
 /// 它返回 `(PathBuf, Vault)` 元组，让测试既能访问文件系统路径，又能获得 Vault 实例。
 pub fn setup_encrypted_vault(dir: &TempDir) -> (PathBuf, Vault) {
     let vault_path = dir.path().join("test-vault");
-    // 使用 "v2-password" 作为默认密码创建加密库
-    let vault = Vault::create_vault_local(&vault_path, "test-vault", Some("v2-password")).unwrap();
+    // 使用 "v3-password" 作为默认密码创建加密库
+    let vault = Vault::create_vault_local(&vault_path, "test-vault", Some("v3-password")).unwrap();
     (vault_path, vault)
 }
 
-/// 辅助函数：创建一个具有指定密码的 V2 加密保险库。
+/// 辅助函数：创建一个具有指定密码的加密保险库。
 pub fn setup_encrypted_vault_with_password(dir: &TempDir, password: &str) -> (PathBuf, Vault) {
     let vault_path = dir.path().join("test-vault");
     let vault = Vault::create_vault_local(&vault_path, "test-vault", Some(password)).unwrap();
@@ -79,27 +79,47 @@ pub fn setup_vault_with_search_data(
 
     // 2. 添加文件到保险库
     let hash_a = vault
-        .add_file(&file_a_path, &VaultPath::from("/file_A.txt"))
+        .add_file(&file_a_path, &VaultPath::from("/file_A.txt"), None)
         .unwrap();
     let hash_b = vault
-        .add_file(&file_b_path, &VaultPath::from("/docs/file_B.md"))
+        .add_file(&file_b_path, &VaultPath::from("/docs/file_B.md"), None)
         .unwrap();
     let hash_c = vault
-        .add_file(&file_c_path, &VaultPath::from("/docs/deep/file_C.jpg"))
+        .add_file(
+            &file_c_path,
+            &VaultPath::from("/docs/deep/file_C.jpg"),
+            None,
+        )
         .unwrap();
     let hash_d = vault
-        .add_file(&file_d_path, &VaultPath::from("/another_file.txt"))
+        .add_file(&file_d_path, &VaultPath::from("/another_file.txt"), None)
         .unwrap();
 
     // 3. 为文件打标签，构建丰富的搜索场景
-    vault.add_tag(&hash_a, "tag1").unwrap();
-    vault.add_tag(&hash_a, "common").unwrap();
-    vault.add_tag(&hash_b, "tag2").unwrap();
-    vault.add_tag(&hash_b, "common").unwrap();
-    vault.add_tag(&hash_c, "tag3").unwrap();
-    vault.add_tag(&hash_c, "image").unwrap();
-    vault.add_tag(&hash_d, "tag1").unwrap();
-    vault.add_tag(&hash_d, "unique").unwrap();
+    vault
+        .add_tag(&VaultPath::from("/file_A.txt"), "tag1")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/file_A.txt"), "common")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/docs/file_B.md"), "tag2")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/docs/file_B.md"), "common")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/docs/deep/file_C.jpg"), "tag3")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/docs/deep/file_C.jpg"), "image")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/another_file.txt"), "tag1")
+        .unwrap();
+    vault
+        .add_tag(&VaultPath::from("/another_file.txt"), "unique")
+        .unwrap();
 
     (vault, hash_a, hash_b, hash_c, hash_d)
 }

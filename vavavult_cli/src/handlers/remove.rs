@@ -1,79 +1,73 @@
-use crate::core::helpers::{Target, get_all_files_recursively, identify_target};
+use crate::core::helpers::{Target, display_path_for_entry, identify_target};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
 use indicatif::{ProgressBar, ProgressStyle};
-use vavavult::vault::{DirectoryEntry, QueryResult, Vault};
+use vavavult::common::hash::VaultHash;
+use vavavult::file::VaultPath;
+use vavavult::vault::{QueryFileResult, QueryPathResult, Vault};
+
+struct DeleteTarget {
+    action: DeleteAction,
+    display: String,
+}
+
+enum DeleteAction {
+    FileByHash(VaultHash),
+    FileByPath(VaultPath),
+    Directory(VaultPath),
+}
 
 /// 处理 'rm' (Remove) 命令
 pub fn handle_remove(
     vault: &mut Vault,
     target: &str,
     recursive: bool,
-    force: bool,
     yes: bool,
 ) -> Result<(), CliError> {
     let target_obj = identify_target(target)?;
 
-    let (files_to_delete, target_description) = match target_obj {
+    let (targets_to_delete, target_description) = match target_obj {
         Target::Hash(hash) => {
-            // --- 案例 1: 按哈希删除 ---
             if recursive {
                 println!("Warning: -r (recursive) has no effect when deleting by hash.");
             }
 
-            let file_entry = if force {
-                // 强制模式: 遍历所有文件以查找哈希，绕过验证
-                let all_files = vault.list_all()?;
-                all_files
-                    .into_iter()
-                    .find(|f| f.sha256sum == hash)
-                    .ok_or_else(|| CliError::EntryNotFound("File not found by hash.".to_string()))?
-            } else {
-                // 普通模式: 使用标准查找 (会验证文件存在性)
-                match vault.find_by_hash(&hash)? {
-                    QueryResult::Found(entry) => entry,
-                    QueryResult::NotFound => {
+            let file_entry = match vault.find_by_hash(&hash)? {
+                QueryFileResult::Found(entry) => entry,
+                QueryFileResult::NotFound => {
+                    return Err(CliError::EntryNotFound(
+                        "File not found by hash.".to_string(),
+                    ));
+                }
+            };
+            let display = display_path_for_entry(vault, &file_entry);
+            (
+                vec![DeleteTarget {
+                    action: DeleteAction::FileByHash(file_entry.sha256sum),
+                    display: display.clone(),
+                }],
+                format!("file '{}' (by hash)", display),
+            )
+        }
+        Target::Path(vault_path) => {
+            if vault_path.is_file() {
+                match vault.find_by_path(&vault_path)? {
+                    QueryPathResult::Found(_) => {}
+                    QueryPathResult::NotFound => {
                         return Err(CliError::EntryNotFound(
-                            "File not found by hash.".to_string(),
+                            "File not found by path.".to_string(),
                         ));
                     }
                 }
-            };
-            let description = format!("file '{}' (by hash)", file_entry.path);
-            (vec![file_entry], description)
-        }
-        Target::Path(vault_path) => {
-            // --- 案例 2: 按路径删除 ---
-            if vault_path.is_file() {
-                // 2a: 路径是文件
-                let file_entry = if force {
-                    // 强制模式: 列出父目录以查找文件，绕过验证
-                    let parent_path = vault_path.parent().unwrap();
-                    let entries = vault.list_by_path(&parent_path)?;
-                    entries
-                        .into_iter()
-                        .find_map(|entry| match entry {
-                            DirectoryEntry::File(f) if f.path == vault_path => Some(f),
-                            _ => None,
-                        })
-                        .ok_or_else(|| {
-                            CliError::EntryNotFound("File not found by path.".to_string())
-                        })?
-                } else {
-                    // 普通模式: 使用标准查找
-                    match vault.find_by_path(&vault_path)? {
-                        QueryResult::Found(entry) => entry,
-                        QueryResult::NotFound => {
-                            return Err(CliError::EntryNotFound(
-                                "File not found by path.".to_string(),
-                            ));
-                        }
-                    }
-                };
-                let description = format!("file '{}'", file_entry.path);
-                (vec![file_entry], description)
+                let description = format!("file '{}'", vault_path);
+                (
+                    vec![DeleteTarget {
+                        action: DeleteAction::FileByPath(vault_path.clone()),
+                        display: vault_path.to_string(),
+                    }],
+                    description,
+                )
             } else {
-                // 2b: 路径是目录
                 let description = format!("directory '{}'", vault_path);
                 if !recursive {
                     return Err(CliError::InvalidTarget(format!(
@@ -81,15 +75,18 @@ pub fn handle_remove(
                         vault_path
                     )));
                 }
-                println!("Recursively scanning directory '{}'...", vault_path);
-                let files = get_all_files_recursively(vault, vault_path.as_str())?;
-                (files, description)
+                (
+                    vec![DeleteTarget {
+                        action: DeleteAction::Directory(vault_path.clone()),
+                        display: vault_path.to_string(),
+                    }],
+                    description,
+                )
             }
         }
     };
 
-    // --- 确认阶段 ---
-    if files_to_delete.is_empty() {
+    if targets_to_delete.is_empty() {
         println!(
             "No files found matching {}. Nothing to delete.",
             target_description
@@ -98,15 +95,15 @@ pub fn handle_remove(
     }
 
     if !yes {
-        let prompt = if files_to_delete.len() == 1 {
+        let prompt = if targets_to_delete.len() == 1 {
             format!(
                 "Are you sure you want to PERMANENTLY DELETE {}?",
                 target_description
             )
         } else {
             format!(
-                "Are you sure you want to PERMANENTLY DELETE {} files from {}?",
-                files_to_delete.len(),
+                "Are you sure you want to PERMANENTLY DELETE {} targets from {}?",
+                targets_to_delete.len(),
                 target_description
             )
         };
@@ -117,8 +114,7 @@ pub fn handle_remove(
         }
     }
 
-    // --- 删除阶段 ---
-    let total_count = files_to_delete.len();
+    let total_count = targets_to_delete.len();
     let pb = ProgressBar::new(total_count as u64);
     if total_count > 1 {
         pb.set_style(
@@ -134,24 +130,22 @@ pub fn handle_remove(
     let mut success_count = 0;
     let mut fail_count = 0;
 
-    for entry in files_to_delete {
-        let result = if force {
-            vault
-                .force_remove_file(&entry.sha256sum)
-                .map_err(|e| e.to_string())
-        } else {
-            vault
-                .remove_file(&entry.sha256sum)
-                .map_err(|e| e.to_string())
+    for target in targets_to_delete {
+        let result = match &target.action {
+            DeleteAction::FileByHash(hash) => vault.remove_file(hash).map_err(|e| e.to_string()),
+            DeleteAction::FileByPath(path) => {
+                vault.remove_file_by_path(path).map_err(|e| e.to_string())
+            }
+            DeleteAction::Directory(path) => {
+                vault.remove_directory(path).map_err(|e| e.to_string())
+            }
         };
 
         match result {
-            Ok(_) => {
-                success_count += 1;
-            }
+            Ok(_) => success_count += 1,
             Err(e) => {
                 fail_count += 1;
-                pb.println(format!("Failed to delete {}: {}", entry.path, e));
+                pb.println(format!("Failed to delete {}: {}", target.display, e));
             }
         }
         if total_count > 1 {

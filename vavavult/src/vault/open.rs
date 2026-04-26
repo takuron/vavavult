@@ -1,12 +1,12 @@
+use crate::common::constants::CURRENT_VAULT_VERSION;
+use crate::crypto::encrypt::verify_v3_encrypt_check;
+use crate::storage::StorageBackend;
+use crate::vault::{Vault, VaultConfig};
+use rusqlite::Connection;
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use rusqlite::Connection;
-use serde_json::Value;
-use crate::common::constants::CURRENT_VAULT_VERSION;
-use crate::crypto::encrypt::verify_v2_encrypt_check;
-use crate::storage::StorageBackend;
-use crate::vault::{Vault, VaultConfig};
 
 /// Defines errors that can occur when opening an existing vault.
 //
@@ -64,18 +64,17 @@ pub enum OpenError {
     /// The vault's version in `master.json` is not supported by this library version.
     //
     // // `master.json` 中的保险库版本不受此库版本支持。
-    #[error("Unsupported vault version: found {found}, but this library supports version {supported}.")]
-    UnsupportedVersion {
-        supported: u32,
-        found: u32,
-    },
+    #[error(
+        "Unsupported vault version: found {found}, but this library supports version {supported}."
+    )]
+    UnsupportedVersion { supported: u32, found: u32 },
 }
 
 /// 打开一个已存在的保险库。
 pub(crate) fn open_vault(
     vault_path: &Path,
     password: Option<&str>,
-    backend: Arc<dyn StorageBackend>
+    backend: Arc<dyn StorageBackend>,
 ) -> Result<Vault, OpenError> {
     if !vault_path.is_dir() {
         return Err(OpenError::PathNotFound(vault_path.to_path_buf()));
@@ -110,7 +109,7 @@ pub(crate) fn open_vault(
     if config.encrypted {
         match password {
             Some(p) => {
-                if !verify_v2_encrypt_check(&config.encrypt_check, p) {
+                if !verify_v3_encrypt_check(&config.encrypt_check, p) {
                     return Err(OpenError::InvalidPassword);
                 }
 
@@ -130,6 +129,8 @@ pub(crate) fn open_vault(
             }
         }
     }
+
+    conn.pragma_update(None, "foreign_keys", "ON")?;
 
     Ok(Vault {
         root_path: vault_path.to_path_buf(),

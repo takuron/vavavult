@@ -19,14 +19,14 @@ pub fn handle_search(vault: &Vault, keyword: &str, long: bool) -> Result<(), Cli
 
         if long {
             for file in &found_files {
-                print_file_details(file, colors_enabled);
+                print_file_details(vault, file, colors_enabled);
             }
             if !found_files.is_empty() {
                 println!("----------------------------------------");
             }
         } else {
             for file in &found_files {
-                print_recursive_file_item(file, colors_enabled);
+                print_recursive_file_item(vault, file, colors_enabled);
             }
         }
     }

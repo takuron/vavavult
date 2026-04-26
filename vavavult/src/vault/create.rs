@@ -1,14 +1,16 @@
+use crate::common::constants::{
+    CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME,
+};
+use crate::crypto::encrypt::{EncryptError, create_v3_encrypt_check};
+use crate::storage::StorageBackend;
+use crate::utils::time::now_as_rfc3339_string;
+use crate::vault::Vault;
+use crate::vault::config::VaultConfig;
+use crate::vault::create::CreateError::VaultAlreadyExists;
+use rusqlite::{Connection, params};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use rusqlite::{Connection, params};
-use crate::common::constants::{CURRENT_VAULT_VERSION, META_VAULT_CREATE_TIME, META_VAULT_UPDATE_TIME};
-use crate::crypto::encrypt::{create_v2_encrypt_check,  EncryptError};
-use crate::storage::StorageBackend;
-use crate::utils::time::now_as_rfc3339_string;
-use crate::vault::config::VaultConfig;
-use crate::vault::create::CreateError::VaultAlreadyExists;
-use crate::vault::Vault;
 
 /// Defines errors that can occur during vault creation.
 //
@@ -51,17 +53,17 @@ pub(crate) fn create_vault(
     vault_path: &Path,
     vault_name: &str,
     password: Option<&str>,
-    backend: Arc<dyn StorageBackend>
+    backend: Arc<dyn StorageBackend>,
 ) -> Result<Vault, CreateError> {
-    if vault_path.exists() && fs::read_dir(vault_path)?.next().is_some(){
-        return  Err(VaultAlreadyExists(vault_path.to_path_buf()));
+    if vault_path.exists() && fs::read_dir(vault_path)?.next().is_some() {
+        return Err(VaultAlreadyExists(vault_path.to_path_buf()));
     } else {
         fs::create_dir_all(vault_path)?;
     }
 
     let encrypted = password.is_some();
     let encrypt_check = if let Some(p) = password {
-        create_v2_encrypt_check(p)?
+        create_v3_encrypt_check(p)?
     } else {
         "".to_string()
     };
@@ -96,18 +98,45 @@ pub(crate) fn create_vault(
 
          CREATE TABLE IF NOT EXISTS files (
             sha256sum           CHAR(43) PRIMARY KEY NOT NULL,
-            path                TEXT NOT NULL UNIQUE,
             original_sha256sum  CHAR(43) NOT NULL UNIQUE,
             encrypt_password    TEXT NOT NULL
          );
 
+         CREATE TABLE IF NOT EXISTS directories (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_id           INTEGER,
+            name                TEXT NOT NULL,
+            FOREIGN KEY (parent_id) REFERENCES directories(id) ON DELETE CASCADE,
+            CHECK ((parent_id IS NULL AND name = '') OR (parent_id IS NOT NULL AND name <> ''))
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_directories_root
+            ON directories(name)
+            WHERE parent_id IS NULL;
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_directories_parent_name
+            ON directories(parent_id, name)
+            WHERE parent_id IS NOT NULL;
+
+         CREATE TABLE IF NOT EXISTS file_entries (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            directory_id        INTEGER NOT NULL,
+            name                TEXT NOT NULL,
+            file_sha256sum      CHAR(43) NOT NULL,
+            FOREIGN KEY (directory_id) REFERENCES directories(id) ON DELETE CASCADE,
+            FOREIGN KEY (file_sha256sum) REFERENCES files(sha256sum) ON DELETE CASCADE,
+            CHECK (name <> '')
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_file_entries_directory_name
+            ON file_entries(directory_id, name);
+         CREATE INDEX IF NOT EXISTS idx_file_entries_file_sha256sum
+            ON file_entries(file_sha256sum);
+
          CREATE TABLE IF NOT EXISTS tags (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_sha256sum      CHAR(43) NOT NULL,
+            file_entry_id       INTEGER NOT NULL,
             tag                 TEXT NOT NULL,
-            FOREIGN KEY (file_sha256sum) REFERENCES files(sha256sum) ON DELETE CASCADE
+            FOREIGN KEY (file_entry_id) REFERENCES file_entries(id) ON DELETE CASCADE
          );
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_link ON tags(file_sha256sum, tag);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_link ON tags(file_entry_id, tag);
 
          CREATE TABLE IF NOT EXISTS metadata (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,19 +145,20 @@ pub(crate) fn create_vault(
             meta_value          TEXT NOT NULL,
             FOREIGN KEY (file_sha256sum) REFERENCES files(sha256sum) ON DELETE CASCADE
          );
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_link ON metadata(file_sha256sum, meta_key);"
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_link ON metadata(file_sha256sum, meta_key);",
+    )?;
+
+    // 插入固定的根目录记录，作为新目录树的挂载点。
+    conn.execute(
+        "INSERT INTO directories (id, parent_id, name) VALUES (1, NULL, '')",
+        [],
     )?;
 
     // 将保险库元数据插入到新表中
     let now = now_as_rfc3339_string();
     conn.execute(
         "INSERT INTO vault_metadata (meta_key, meta_value) VALUES (?1, ?2), (?3, ?4)",
-        params![
-            META_VAULT_CREATE_TIME,
-            &now,
-            META_VAULT_UPDATE_TIME,
-            &now
-        ],
+        params![META_VAULT_CREATE_TIME, &now, META_VAULT_UPDATE_TIME, &now],
     )?;
 
     let vault = Vault {
@@ -139,4 +169,3 @@ pub(crate) fn create_vault(
     };
     Ok(vault)
 }
-

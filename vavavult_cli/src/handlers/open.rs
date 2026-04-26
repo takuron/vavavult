@@ -1,4 +1,6 @@
-use crate::core::helpers::{Target, find_file_entry, identify_target};
+use crate::core::helpers::{
+    Target, display_name_for_entry, display_path_for_entry, find_file_entry, identify_target,
+};
 use crate::errors::CliError;
 use std::env;
 use vavavult::vault::Vault;
@@ -19,7 +21,7 @@ pub fn handle_open(vault: &Vault, target: &str) -> Result<(), CliError> {
 
     // 1. 创建一个临时文件路径
     let temp_dir = env::temp_dir();
-    let file_name = file_entry.path.file_name().unwrap_or_default();
+    let file_name = display_name_for_entry(vault, &file_entry);
     let temp_path = temp_dir.join(file_name);
 
     // 2. 提取文件到临时路径
@@ -29,7 +31,10 @@ pub fn handle_open(vault: &Vault, target: &str) -> Result<(), CliError> {
     // 3. 使用 opener 打开文件
     match opener::open(&temp_path) {
         Ok(_) => {
-            println!("Successfully opened '{}'.", file_entry.path);
+            println!(
+                "Successfully opened '{}'.",
+                display_path_for_entry(vault, &file_entry)
+            );
             println!(
                 "NOTE: You are viewing a temporary copy. Any changes will NOT be saved to the vault."
             );

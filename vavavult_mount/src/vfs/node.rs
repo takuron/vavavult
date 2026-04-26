@@ -110,9 +110,7 @@ pub(crate) enum ReadContent {
 pub enum VaultDavFileState {
     /// State for a file opened for reading (pipe-based streaming with seek fallback).
     // // 为读取而打开的文件状态（基于管道的流式传输，支持 seek 回退）。
-    Read {
-        content: ReadContent,
-    },
+    Read { content: ReadContent },
     /// State for a file opened for writing.
     // // 为写入而打开的文件状态。
     Write {
@@ -216,19 +214,21 @@ impl VaultDavFile {
             let mut v = vault.lock().unwrap();
 
             // WebDAV PUT 操作通常意味着覆盖现有文件。
-            if let Ok(vavavult::vault::QueryResult::Found(existing_entry)) =
-                v.find_by_path(&vault_path)
-            {
-                if let Err(e) = v.remove_file(&existing_entry.sha256sum) {
+            if matches!(
+                v.find_by_path(&vault_path),
+                Ok(vavavult::vault::QueryPathResult::Found(_))
+            ) {
+                if let Err(e) = v.remove_file_by_path(&vault_path) {
                     eprintln!("[vavavult_mount] 覆盖文件前移除旧文件失败: {:?}", e);
                     return Err(FsError::GeneralFailure);
                 }
             }
 
-            v.commit_addition_tasks(vec![addition_task]).map_err(|e| {
-                eprintln!("[vavavult_mount] 提交文件失败: {:?}", e);
-                FsError::GeneralFailure
-            })?;
+            v.commit_addition_tasks(vec![addition_task], None)
+                .map_err(|e| {
+                    eprintln!("[vavavult_mount] 提交文件失败: {:?}", e);
+                    FsError::GeneralFailure
+                })?;
 
             Ok(())
         });
@@ -252,28 +252,20 @@ impl VaultDavFile {
                 let (tx, rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(32);
                 let rt_handle = tokio::runtime::Handle::current();
 
-                let join_handle =
-                    tokio::task::spawn_blocking(move || -> Result<(), FsError> {
-                        let channel_writer = ChannelWriter {
-                            sender: tx,
-                            rt_handle,
-                        };
-                        // 缓冲大小对齐 stream_cipher 的 BUFFER_LEN (8192)，
-                        // 每个解密块写入刚好填满缓冲区，立即 flush 一次 channel send
-                        let writer = std::io::BufWriter::with_capacity(
-                            8192,
-                            channel_writer,
-                        );
-                        vavavult::vault::Vault::decrypt_extraction_task(
-                            storage.as_ref(),
-                            &task,
-                            writer,
-                        )
+                let join_handle = tokio::task::spawn_blocking(move || -> Result<(), FsError> {
+                    let channel_writer = ChannelWriter {
+                        sender: tx,
+                        rt_handle,
+                    };
+                    // 缓冲大小保持 8 KiB，便于向 WebDAV 客户端平滑发送数据，
+                    // 每个解密块写入刚好填满缓冲区，立即 flush 一次 channel send
+                    let writer = std::io::BufWriter::with_capacity(8192, channel_writer);
+                    vavavult::vault::Vault::decrypt_extraction_task(storage.as_ref(), &task, writer)
                         .map_err(|e| {
                             eprintln!("[vavavult_mount] 解密失败: {:?}", e);
                             FsError::GeneralFailure
                         })
-                    });
+                });
 
                 *content = ReadContent::Streaming {
                     receiver: rx,
@@ -291,7 +283,6 @@ impl VaultDavFile {
             Err(FsError::Forbidden)
         }
     }
-
 }
 
 impl Drop for VaultDavFile {
@@ -433,21 +424,26 @@ mod tests {
         std::fs::write(&src_path, content).expect("无法写入源文件");
         let dest_path = vavavult::file::VaultPath::new(vault_path);
         vault
-            .add_file(&src_path, &dest_path)
+            .add_file(&src_path, &dest_path, None)
             .unwrap_or_else(|_| panic!("无法添加测试文件 {} 到保险库", vault_path));
     }
 
     fn open_vault_file(vault: &Vault, vault_path: &str) -> Option<VaultDavFile> {
         use vavavult::file::VaultPath;
-        use vavavult::vault::QueryResult;
+        use vavavult::vault::QueryPathResult;
 
         let vp = VaultPath::new(vault_path);
-        let entry = match vault.find_by_path(&vp) {
-            Ok(QueryResult::Found(e)) => e,
+        let path_entry = match vault.find_by_path(&vp) {
+            Ok(QueryPathResult::Found(e)) => e,
             _ => return None,
         };
 
-        let task = vault.prepare_extraction_task(&entry.sha256sum).ok()?;
+        let entry = match vault.find_by_hash(&path_entry.sha256sum) {
+            Ok(vavavult::vault::QueryFileResult::Found(e)) => e,
+            _ => return None,
+        };
+
+        let task = vault.prepare_extraction_task(&path_entry.sha256sum).ok()?;
         let storage = vault.storage.clone();
 
         let size = entry

@@ -4,8 +4,8 @@ use thiserror::Error;
 use vavavult::{
     file::path::PathError,
     vault::{
-        AddFileError, CreateError, ExtractError, OpenError, QueryError, RekeyError, RemoveError,
-        TagError, UpdateError,
+        AddFileError, CreateError, ExtractError, OpenError, PathOperationError, QueryError,
+        RekeyError, RemoveError, TagError, UpdateError,
     },
 };
 
@@ -151,6 +151,12 @@ pub enum CliError {
     // // 更新保险库时发生错误。
     #[error("Failed to update vault: {0}")]
     Update(#[from] UpdateError),
+
+    /// An error occurred while operating on vault paths.
+    //
+    // // 操作保险库路径时发生错误。
+    #[error("Failed to operate on vault path: {0}")]
+    PathOperation(#[from] PathOperationError),
 
     /// An invalid command was entered in the REPL.
     //

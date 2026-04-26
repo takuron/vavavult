@@ -9,6 +9,7 @@ mod extract;
 mod fix;
 mod metadata;
 mod open;
+mod path_ops;
 mod query;
 mod rekey;
 mod remove;
@@ -17,14 +18,15 @@ mod update;
 
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
-pub use crate::file::FileEntry;
 use crate::file::VaultPath;
+pub use crate::file::{FileEntry, FilePathEntry};
 use crate::storage::StorageBackend;
 use crate::storage::local::LocalStorage;
+use std::io::{Read, Seek};
 
 //- Internal implementation imports
 use crate::vault::add::{
-    add_file, add_from_reader, commit_addition_tasks,
+    add_file, add_from_reader, commit_addition_tasks as _commit_addition_tasks,
     encrypt_addition_task as _encrypt_addition_task,
     prepare_addition_tasks as _prepare_addition_tasks,
     prepare_addition_tasks_from_files as _prepare_addition_tasks_from_files,
@@ -33,9 +35,8 @@ use crate::vault::add::{
 use crate::vault::create::create_vault;
 use crate::vault::extract::{
     decrypt_extraction_task as _decrypt_extraction_task,
-    decrypt_extraction_task_to_file as _decrypt_extraction_task_to_file,
-    extract_file,
-    prepare_extraction_task,
+    decrypt_extraction_task_to_file as _decrypt_extraction_task_to_file, extract_file,
+    open_extraction_task_reader as _open_extraction_task_reader, prepare_extraction_task,
     prepare_extraction_tasks as _prepare_extraction_tasks,
 };
 use crate::vault::fix::fix_file as _fix_file;
@@ -44,19 +45,23 @@ use crate::vault::metadata::{
     set_vault_metadata, touch_vault_update_time,
 };
 use crate::vault::open::open_vault;
+use crate::vault::path_ops::{
+    copy_file_path, create_empty_path, create_path_from_hash, move_path, rename_path_inplace,
+};
 #[allow(unused_imports)]
 use crate::vault::query::{
     check_by_hash, check_by_hash_no_validation, check_by_original_hash, check_by_path,
     check_by_path_no_validation, find_by_hashes, find_by_keyword, find_by_paths, find_by_tag,
-    get_enabled_vault_features, get_total_file_count, is_vault_feature_enabled, list_all_files,
-    list_all_recursive, list_by_path,
+    get_enabled_vault_features, get_storage_file_count, get_total_file_count,
+    is_vault_feature_enabled, list_all_files, list_all_recursive, list_by_path, list_paths_by_hash,
 };
-use crate::vault::remove::{force_remove_file, remove_file};
+use crate::vault::rekey::{
+    commit_rekey_tasks as _commit_rekey_tasks, prepare_rekey_tasks as _prepare_rekey_tasks,
+    rekey_task as _rekey_task,
+};
+use crate::vault::remove::remove_file;
 use crate::vault::tags::{add_tag, add_tags, clear_tags, remove_tag};
-use crate::vault::update::{
-    enable_vault_feature, move_file, rename_file_inplace, set_name,
-    update_password as _update_password,
-};
+use crate::vault::update::{enable_vault_feature, set_name, update_password as _update_password};
 
 //- Public API type re-exports
 pub use add::{AddFileError, AdditionTask, PendingAdditionTask, PrepareAdditionRequest};
@@ -66,9 +71,12 @@ pub use extract::{ExtractError, ExtractionTask};
 pub use fix::FixError;
 pub use metadata::MetadataError;
 pub use open::OpenError;
-pub use query::{DirectoryEntry, ListResult, QueryError, QueryResult};
-pub use rekey::{RekeyError, RekeyTask};
-pub use remove::{ForceRemoveError, RemoveError};
+pub use path_ops::PathOperationError;
+pub use query::{
+    DirectoryEntry, ListPathEntry, ListResult, QueryError, QueryFileResult, QueryPathResult,
+};
+pub use rekey::{PendingRekeyTask, RekeyError, RekeyTask};
+pub use remove::RemoveError;
 pub use tags::TagError;
 pub use update::UpdateError;
 pub use update::verify_encrypted_file_hash;
@@ -267,7 +275,7 @@ impl Vault {
     /// * `hash` - The SHA256 hash of the encrypted file content.
     ///
     /// # Returns
-    /// `QueryResult::Found(FileEntry)` if found, otherwise `QueryResult::NotFound`.
+    /// `QueryFileResult::Found(FileEntry)` if found, otherwise `QueryFileResult::NotFound`.
     ///
     /// # Errors
     /// Returns `QueryError` on database failures.
@@ -279,12 +287,43 @@ impl Vault {
     // // * `hash` - 加密文件内容的 SHA256 哈希。
     // //
     // // # 返回
-    // // 如果找到，返回 `QueryResult::Found(FileEntry)`，否则返回 `QueryResult::NotFound`。
+    // // 如果找到，返回 `QueryFileResult::Found(FileEntry)`，否则返回 `QueryFileResult::NotFound`。
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_hash(&self, hash: &VaultHash) -> Result<QueryResult, QueryError> {
+    pub fn find_by_hash(&self, hash: &VaultHash) -> Result<QueryFileResult, QueryError> {
         check_by_hash(self, hash)
+    }
+
+    /// Lists all vault paths that reference a file content hash.
+    ///
+    /// With the hardlink-style schema, a single file entity may be referenced by
+    /// multiple paths. This method returns all paths currently linked to `hash`.
+    ///
+    /// # Arguments
+    /// * `hash` - The SHA256 hash of the encrypted file content.
+    ///
+    /// # Returns
+    /// A vector of `VaultPath`s that point to the file entity.
+    ///
+    /// # Errors
+    /// Returns `QueryError` on database failures.
+    //
+    // // 列出引用某个文件内容哈希的所有保险库路径。
+    // //
+    // // 在硬链接风格 schema 中，一个文件实体可以被多个路径引用。
+    // // 此方法返回当前链接到 `hash` 的所有路径。
+    // //
+    // // # 参数
+    // // * `hash` - 加密文件内容的 SHA256 哈希。
+    // //
+    // // # 返回
+    // // 指向该文件实体的 `VaultPath` 向量。
+    // //
+    // // # 错误
+    // // 如果发生数据库故障，则返回 `QueryError`。
+    pub fn list_paths_by_hash(&self, hash: &VaultHash) -> Result<Vec<VaultPath>, QueryError> {
+        list_paths_by_hash(self, hash)
     }
 
     /// Finds multiple file entries by their `VaultHash`es in a single batch query.
@@ -324,7 +363,7 @@ impl Vault {
     /// * `path` - The normalized path within the vault (e.g., "/docs/file.txt").
     ///
     /// # Returns
-    /// `QueryResult::Found(FileEntry)` if found, otherwise `QueryResult::NotFound`.
+    /// `QueryFileResult::Found(FileEntry)` if found, otherwise `QueryFileResult::NotFound`.
     ///
     /// # Errors
     /// Returns `QueryError` on database failures.
@@ -335,11 +374,11 @@ impl Vault {
     // // * `path` - 保险库内的规范化路径 (例如 "/docs/file.txt")。
     // //
     // // # 返回
-    // // 如果找到，返回 `QueryResult::Found(FileEntry)`，否则返回 `QueryResult::NotFound`。
+    // // 如果找到，返回 `QueryFileResult::Found(FileEntry)`，否则返回 `QueryFileResult::NotFound`。
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_path(&self, path: &VaultPath) -> Result<QueryResult, QueryError> {
+    pub fn find_by_path(&self, path: &VaultPath) -> Result<QueryPathResult, QueryError> {
         check_by_path(self, path)
     }
 
@@ -368,7 +407,7 @@ impl Vault {
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_paths(&self, paths: &[VaultPath]) -> Result<Vec<FileEntry>, QueryError> {
+    pub fn find_by_paths(&self, paths: &[VaultPath]) -> Result<Vec<FilePathEntry>, QueryError> {
         find_by_paths(self, paths)
     }
 
@@ -379,7 +418,7 @@ impl Vault {
     /// * `original_hash` - The SHA256 hash of the original file content.
     ///
     /// # Returns
-    /// `QueryResult::Found(FileEntry)` if found, otherwise `QueryResult::NotFound`.
+    /// `QueryFileResult::Found(FileEntry)` if found, otherwise `QueryFileResult::NotFound`.
     ///
     /// # Errors
     /// Returns `QueryError` on database failures.
@@ -391,14 +430,14 @@ impl Vault {
     // // * `original_hash` - 原始文件内容的 SHA256 哈希。
     // //
     // // # 返回
-    // // 如果找到，返回 `QueryResult::Found(FileEntry)`，否则返回 `QueryResult::NotFound`。
+    // // 如果找到，返回 `QueryFileResult::Found(FileEntry)`，否则返回 `QueryFileResult::NotFound`。
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
     pub fn find_by_original_hash(
         &self,
         original_hash: &VaultHash,
-    ) -> Result<QueryResult, QueryError> {
+    ) -> Result<QueryFileResult, QueryError> {
         check_by_original_hash(self, original_hash)
     }
 
@@ -423,7 +462,7 @@ impl Vault {
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_tag(&self, tag: &str) -> Result<Vec<FileEntry>, QueryError> {
+    pub fn find_by_tag(&self, tag: &str) -> Result<Vec<FilePathEntry>, QueryError> {
         find_by_tag(self, tag)
     }
 
@@ -450,7 +489,7 @@ impl Vault {
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn find_by_keyword(&self, keyword: &str) -> Result<Vec<FileEntry>, QueryError> {
+    pub fn find_by_keyword(&self, keyword: &str) -> Result<Vec<FilePathEntry>, QueryError> {
         find_by_keyword(self, keyword)
     }
 
@@ -500,47 +539,48 @@ impl Vault {
     //     list_by_path(self, path)
     // }
 
-    /// Lists entries (files or subdirectories) directly under a given directory path.
+    /// Lists path entries directly under a given directory path.
     ///
-    /// Unlike `list_by_path` which might only return paths, this method returns:
-    /// - `DirectoryEntry::File(FileEntry)` for files, providing full metadata (tags, size, time, etc.).
-    /// - `DirectoryEntry::Directory(VaultPath)` for subdirectories.
+    /// This method returns lightweight path-oriented entries:
+    /// - `ListPathEntry::File(FilePathEntry)` for files, providing the path and encrypted hash.
+    /// - `ListPathEntry::Directory(DirectoryEntry)` for subdirectories, providing path, parent path,
+    ///   and direct child counts.
     ///
-    /// This enables UI/CLI applications to display detailed file information in a list view
-    /// without performing N+1 queries.
+    /// This enables UI/CLI applications to display directory contents without loading
+    /// full file metadata for every file.
     ///
     /// # Arguments
     /// * `path` - The directory path to list (e.g., "/docs/").
     ///
     /// # Returns
-    /// A vector of `DirectoryEntry` objects representing the immediate contents.
+    /// A vector of `ListPathEntry` objects representing the immediate contents.
     ///
     /// # Errors
     /// Returns `QueryError::NotADirectory` if `path` is a file path.
     /// Returns `QueryError` on database failures.
     //
-    // // 列出直接位于给定目录路径下的条目（文件或子目录）。
+    // // 列出直接位于给定目录路径下的路径条目。
     // //
-    // // 与仅返回路径的方法不同，此方法返回：
-    // // - 对于文件，返回 `DirectoryEntry::File(FileEntry)`，提供完整元数据（标签、大小、时间等）。
-    // // - 对于子目录，返回 `DirectoryEntry::Directory(VaultPath)`。
+    // // 此方法返回轻量级、面向路径的条目：
+    // // - 对于文件，返回 `ListPathEntry::File(FilePathEntry)`，提供路径和加密哈希。
+    // // - 对于子目录，返回 `ListPathEntry::Directory(DirectoryEntry)`，提供路径、父目录路径和直属子项数量。
     // //
-    // // 这使得 UI/CLI 应用程序能够在列表视图中显示详细的文件信息，而无需执行 N+1 次查询。
+    // // 这使得 UI/CLI 应用程序能够显示目录内容，而无需为每个文件加载完整文件元数据。
     // //
     // // # 参数
     // // * `path` - 要列出的目录路径 (例如 "/docs/")。
     // //
     // // # 返回
-    // // 代表直接内容的 `DirectoryEntry` 对象向量。
+    // // 代表直接内容的 `ListPathEntry` 对象向量。
     // //
     // // # 错误
     // // 如果 `path` 是一个文件路径，则返回 `QueryError::NotADirectory`。
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn list_by_path(&self, path: &VaultPath) -> Result<Vec<DirectoryEntry>, QueryError> {
+    pub fn list_by_path(&self, path: &VaultPath) -> Result<Vec<ListPathEntry>, QueryError> {
         list_by_path(self, path)
     }
 
-    /// Recursively lists all files under a given directory path and returns their `VaultHash`es.
+    /// Recursively lists all file path mappings under a given directory path.
     ///
     /// This is optimized for bulk operations (like mass extraction or deletion).
     ///
@@ -548,13 +588,13 @@ impl Vault {
     /// * `path` - The root directory path to start listing from.
     ///
     /// # Returns
-    /// A vector of `VaultHash`es for all files found recursively.
+    /// A vector of `FilePathEntry` objects for all files found recursively.
     ///
     /// # Errors
     /// Returns `QueryError::NotADirectory` if `path` is a file path.
     /// Returns `QueryError` on database failures.
     //
-    // // 递归列出一个目录下的所有文件，并返回它们的 `VaultHash`。
+    // // 递归列出一个目录下的所有文件路径映射。
     // //
     // // 这针对批量操作（如批量提取或删除）进行了优化。
     // //
@@ -562,36 +602,61 @@ impl Vault {
     // // * `path` - 开始列出的根目录路径。
     // //
     // // # 返回
-    // // 递归找到的所有文件的 `VaultHash` 向量。
+    // // 递归找到的所有文件的 `FilePathEntry` 对象向量。
     // //
     // // # 错误
     // // 如果 `path` 是一个文件路径，则返回 `QueryError::NotADirectory`。
     // // 如果发生数据库故障，则返回 `QueryError`。
-    pub fn list_all_recursive(&self, path: &VaultPath) -> Result<Vec<VaultHash>, QueryError> {
+    pub fn list_all_recursive(&self, path: &VaultPath) -> Result<Vec<FilePathEntry>, QueryError> {
         list_all_recursive(self, path)
     }
 
-    /// Gets the total number of files in the vault.
+    /// Gets the total number of file path entries in the vault.
     ///
-    /// This is a high-performance query that directly counts database rows.
+    /// This counts the current directory tree's file mappings (`file_entries`),
+    /// so hardlink-style duplicate paths are counted separately.
     ///
     /// # Returns
-    /// The count of files as an `i64`.
+    /// The count of file path entries as an `i64`.
     ///
     /// # Errors
     /// Returns `QueryError` on database failures.
     //
-    // // 获取保险库中的文件总数。
+    // // 获取保险库当前目录树中的文件路径条目总数。
     // //
-    // // 这是一个高性能查询，直接对数据库行进行计数。
+    // // 这会统计当前目录树的文件映射（`file_entries`），因此硬链接式重复路径会被分别计数。
     // //
     // // # 返回
-    // // 文件计数，类型为 `i64`。
+    // // 文件路径条目计数，类型为 `i64`。
     // //
     // // # 错误
     // // 如果发生数据库故障，则返回 `QueryError`。
     pub fn get_file_count(&self) -> Result<i64, QueryError> {
         get_total_file_count(self)
+    }
+
+    /// Gets the total number of actual stored file entities in the vault.
+    ///
+    /// This counts unique encrypted file records (`files`) and therefore does not
+    /// count multiple path mappings to the same stored content separately.
+    ///
+    /// # Returns
+    /// The count of actual stored file entities as an `i64`.
+    ///
+    /// # Errors
+    /// Returns `QueryError` on database failures.
+    //
+    // // 获取保险库中实际存储文件实体的总数。
+    // //
+    // // 这会统计唯一的加密文件记录（`files`），因此多个路径映射到同一存储内容时不会重复计数。
+    // //
+    // // # 返回
+    // // 实际存储文件实体计数，类型为 `i64`。
+    // //
+    // // # 错误
+    // // 如果发生数据库故障，则返回 `QueryError`。
+    pub fn get_storage_file_count(&self) -> Result<i64, QueryError> {
+        get_storage_file_count(self)
     }
 
     // --- Add APIs ---
@@ -632,8 +697,9 @@ impl Vault {
         &mut self,
         source_path: &Path,
         dest_path: &VaultPath,
+        allow_duplicate_files: Option<bool>,
     ) -> Result<VaultHash, AddFileError> {
-        let result = add_file(self, source_path, dest_path)?;
+        let result = add_file(self, source_path, dest_path, allow_duplicate_files)?;
 
         touch_vault_update_time(self)?;
         Ok(result)
@@ -783,11 +849,44 @@ impl Vault {
     // //
     // // # 错误
     // // 如果数据库事务失败或文件提交失败，则返回 `AddFileError`。
-    pub fn commit_addition_tasks(&mut self, files: Vec<AdditionTask>) -> Result<(), AddFileError> {
+    /// Stage 3 (Add): Commits encrypted files with optional duplicate-content control.
+    ///
+    /// `allow_duplicate_files` controls whether files with the same original hash may
+    /// coexist as multiple path mappings. `None` defaults to `true`, which reuses the
+    /// existing file entity and only inserts new path mappings. `Some(false)` returns
+    /// `AddFileError::DuplicateOriginalContent` when the same original hash already
+    /// exists in the vault or earlier in the same batch.
+    ///
+    /// # Arguments
+    /// * `files` - A `Vec` of `AdditionTask` objects from Stage 2.
+    /// * `allow_duplicate_files` - Optional duplicate-content policy; defaults to `true`.
+    ///
+    /// # Errors
+    /// Returns `AddFileError` if duplicate content is disallowed and detected, or if
+    /// database transaction or storage commit fails.
+    //
+    // // 阶段 3 (添加): 使用可选的重复内容控制提交已加密文件。
+    // //
+    // // `allow_duplicate_files` 控制具有相同原始哈希的文件是否可以作为多个路径映射共存。
+    // // `None` 默认等同于 `true`，即复用已有文件实体并只插入新的路径映射。
+    // // `Some(false)` 会在保险库中或同一批次前面已存在相同原始哈希时返回
+    // // `AddFileError::DuplicateOriginalContent`。
+    // //
+    // // # 参数
+    // // * `files` - 来自阶段 2 的 `AdditionTask` 对象列表。
+    // // * `allow_duplicate_files` - 可选的重复内容策略；默认值为 `true`。
+    // //
+    // // # 错误
+    // // 如果禁止重复内容且检测到重复，或数据库事务、存储提交失败，则返回 `AddFileError`。
+    pub fn commit_addition_tasks(
+        &mut self,
+        files: Vec<AdditionTask>,
+        allow_duplicate_files: Option<bool>,
+    ) -> Result<(), AddFileError> {
         if files.is_empty() {
             return Ok(());
         }
-        commit_addition_tasks(self, files)?;
+        _commit_addition_tasks(self, files, allow_duplicate_files)?;
         touch_vault_update_time(self)?;
         Ok(())
     }
@@ -831,8 +930,16 @@ impl Vault {
         dest_path: &VaultPath,
         source_size: u64,
         source_modified_time: chrono::DateTime<chrono::Utc>,
+        allow_duplicate_files: Option<bool>,
     ) -> Result<VaultHash, AddFileError> {
-        let result = add_from_reader(self, reader, dest_path, source_size, source_modified_time)?;
+        let result = add_from_reader(
+            self,
+            reader,
+            dest_path,
+            source_size,
+            source_modified_time,
+            allow_duplicate_files,
+        )?;
         touch_vault_update_time(self)?;
         Ok(result)
     }
@@ -1018,6 +1125,76 @@ impl Vault {
         _decrypt_extraction_task(storage, task, writer)
     }
 
+    /// Stage 2 (Extract): Opens a prepared extraction task as a random-access reader.
+    ///
+    /// This associated function returns a pull-based plaintext stream that decrypts
+    /// and authenticates only the chunk needed by each read or seek operation.
+    ///
+    /// # Arguments
+    /// * `storage` - The storage backend to read encrypted data from.
+    /// * `task` - The extraction ticket from Stage 1.
+    ///
+    /// # Returns
+    /// An opaque stream implementing `Read + Seek + Send` over plaintext bytes.
+    ///
+    /// # Errors
+    /// Returns `ExtractError` if the object cannot be opened or authenticated.
+    //
+    // // 阶段 2 (提取): 将已准备好的提取任务打开为随机访问读取器。
+    // //
+    // // 此关联函数返回拉取式明文流，每次 read 或 seek 只解密并认证所需块。
+    // //
+    // // # 参数
+    // // * `storage` - 用于读取加密数据的存储后端。
+    // // * `task` - 来自阶段 1 的提取票据。
+    // //
+    // // # 返回
+    // // 基于后端对象并实现 `Read + Seek + Send` 的不透明流。
+    // //
+    // // # 错误
+    // // 如果对象无法打开或认证失败，则返回 `ExtractError`。
+    pub fn open_extraction_task_reader(
+        storage: &dyn StorageBackend,
+        task: &ExtractionTask,
+    ) -> Result<impl Read + Seek + Send + 'static, ExtractError> {
+        _open_extraction_task_reader(storage, task)
+    }
+
+    /// Opens a vault file by hash as a random-access reader.
+    ///
+    /// This convenience method combines extraction preparation and pull-based
+    /// chunked reader construction.
+    ///
+    /// # Arguments
+    /// * `hash` - The `VaultHash` of the file to open.
+    ///
+    /// # Returns
+    /// An opaque stream implementing `Read + Seek + Send` over plaintext bytes.
+    ///
+    /// # Errors
+    /// Returns `ExtractError` if metadata lookup, storage access, or chunk
+    /// authentication fails.
+    //
+    // // 按哈希将保险库文件打开为随机访问读取器。
+    // //
+    // // 此便捷方法组合了提取准备和拉取式分块读取器构建。
+    // //
+    // // # 参数
+    // // * `hash` - 要打开的文件的 `VaultHash`。
+    // //
+    // // # 返回
+    // // 在明文字节上实现 `Read + Seek + Send` 的不透明流。
+    // //
+    // // # 错误
+    // // 如果元数据查询、存储访问或块认证失败，则返回 `ExtractError`。
+    pub fn open_file_for_read(
+        &self,
+        hash: &VaultHash,
+    ) -> Result<impl Read + Seek + Send + 'static, ExtractError> {
+        let task = prepare_extraction_task(self, hash)?;
+        _open_extraction_task_reader(self.storage.as_ref(), &task)
+    }
+
     /// Stage 2 shortcut: Decrypts a prepared extraction task to a local file.
     ///
     /// This is a **thread-safe** associated function that wraps `decrypt_extraction_task`
@@ -1053,65 +1230,105 @@ impl Vault {
 
     // --- Rekey APIs ---
 
-    /// Stage 1 (Rekey): Prepares a file for re-keying by re-encrypting it to a temporary location.
+    /// Stage 1 (Rekey): Validates encrypted file hashes against the vault database.
     ///
-    /// This is a thread-safe, memory-efficient method that performs the expensive crypto
-    /// work without locking the vault database. It returns a `RekeyTask` ticket that
-    /// contains all information needed for the atomic commit stage.
+    /// This stage requires database access and converts each `VaultHash` into a
+    /// `PendingRekeyTask`. It performs no cryptographic or storage work.
     ///
     /// # Arguments
-    /// * `file_entry` - The full `FileEntry` of the file to be re-keyed.
+    /// * `hashes` - The encrypted content hashes to rekey.
     ///
     /// # Returns
-    /// A `RekeyTask` object ready to be passed to `execute_rekey_tasks`.
+    /// A `Vec<PendingRekeyTask>` — one per hash, in the same order.
     ///
     /// # Errors
-    /// Returns `RekeyError` if I/O or encryption fails.
+    /// Returns `RekeyError` if a hash is not found or the database query fails.
     //
-    // // 阶段 1 (Rekey): 准备一个文件用于轮换密钥，将其重加密到临时位置。
+    // // 阶段 1 (Rekey): 根据保险库数据库验证加密文件哈希。
     // //
-    // // 这是一个线程安全的、内存高效的方法，它执行耗时的加密工作而无需锁定保险库数据库。
-    // // 它返回一个 `RekeyTask` 票据，其中包含原子化提交阶段所需的所有信息。
+    // // 此阶段需要数据库访问，并将每个 `VaultHash` 转换为 `PendingRekeyTask`。
+    // // 它不执行任何加密或存储操作。
     // //
     // // # 参数
-    // // * `file_entry` - 需要轮换密钥的文件的完整 `FileEntry`。
+    // // * `hashes` - 要轮换密钥的加密内容哈希。
     // //
     // // # 返回
-    // // 一个 `RekeyTask` 对象，准备好传递给 `execute_rekey_tasks`。
+    // // `Vec<PendingRekeyTask>` — 每个哈希一个，顺序相同。
     // //
     // // # 错误
-    // // 如果 I/O 或加密失败，则返回 `RekeyError`。
-    pub fn prepare_rekey_task(&self, file_entry: &FileEntry) -> Result<RekeyTask, RekeyError> {
-        rekey::prepare_rekey_task(self.storage.as_ref(), file_entry)
+    // // 如果哈希不存在或数据库查询失败，则返回 `RekeyError`。
+    pub fn prepare_rekey_tasks(
+        &self,
+        hashes: &[VaultHash],
+    ) -> Result<Vec<PendingRekeyTask>, RekeyError> {
+        _prepare_rekey_tasks(self, hashes)
     }
 
-    /// Stage 2 (Rekey): Atomically commits a batch of re-keyed files to the vault.
+    /// Stage 2 (Rekey): Re-encrypts a prepared file without database access.
+    ///
+    /// This is a **thread-safe** associated function that does NOT require a `&Vault`.
+    /// It performs the expensive CPU/IO re-encryption work using only the storage backend.
+    /// Callers can invoke this in parallel for bulk rekey operations.
+    ///
+    /// # Arguments
+    /// * `storage` - The storage backend to read and write encrypted data.
+    /// * `pending` - A validated `PendingRekeyTask` from Stage 1.
+    ///
+    /// # Returns
+    /// A `RekeyTask` containing the re-encrypted `FileEntry` and a `StagingToken`.
+    ///
+    /// # Errors
+    /// Returns `RekeyError` if I/O or re-encryption fails.
+    //
+    // // 阶段 2 (Rekey): 在不访问数据库的情况下重加密已准备的文件。
+    // //
+    // // 这是一个 **线程安全** 的关联函数，不需要 `&Vault`。
+    // // 它仅使用存储后端执行昂贵的 CPU/IO 重加密工作。
+    // // 调用方可以并行调用此函数进行批量密钥轮换。
+    // //
+    // // # 参数
+    // // * `storage` - 用于读取和写入加密数据的存储后端。
+    // // * `pending` - 来自阶段 1 的已验证 `PendingRekeyTask`。
+    // //
+    // // # 返回
+    // // 包含重加密 `FileEntry` 和 `StagingToken` 的 `RekeyTask`。
+    // //
+    // // # 错误
+    // // 如果 I/O 或重加密失败，则返回 `RekeyError`。
+    pub fn rekey_task(
+        storage: &dyn StorageBackend,
+        pending: PendingRekeyTask,
+    ) -> Result<RekeyTask, RekeyError> {
+        _rekey_task(storage, pending)
+    }
+
+    /// Stage 3 (Rekey): Atomically commits a batch of re-keyed files to the vault.
     ///
     /// This method requires exclusive `&mut self` access to perform a transaction.
-    /// It updates the database records, moves the re-encrypted files from temporary
+    /// It updates database records, moves the re-encrypted files from temporary
     /// storage to their final destination, and deletes the old files.
     ///
     /// # Arguments
-    /// * `tasks` - A `Vec` of `RekeyTask` objects from stage 1.
+    /// * `tasks` - A `Vec` of `RekeyTask` objects from Stage 2.
     ///
     /// # Errors
     /// Returns `RekeyError` if the database or filesystem commit fails.
     //
-    // // 阶段 2 (Rekey): 原子化地提交一批已轮换密钥的文件到保险库。
+    // // 阶段 3 (Rekey): 原子化地提交一批已轮换密钥的文件到保险库。
     // //
     // // 此方法需要对 `&mut self` 的独占访问权来执行事务。
     // // 它会更新数据库记录，将被重加密的文件从临时存储移动到最终位置，并删除旧文件。
     // //
     // // # 参数
-    // // * `tasks` - 一个包含来自阶段 1 的 `RekeyTask` 对象的 `Vec`。
+    // // * `tasks` - 一个包含来自阶段 2 的 `RekeyTask` 对象的 `Vec`。
     // //
     // // # 错误
     // // 如果数据库或文件系统提交失败，则返回 `RekeyError`。
-    pub fn execute_rekey_tasks(&mut self, tasks: Vec<RekeyTask>) -> Result<(), RekeyError> {
+    pub fn commit_rekey_tasks(&mut self, tasks: Vec<RekeyTask>) -> Result<(), RekeyError> {
         if tasks.is_empty() {
             return Ok(());
         }
-        rekey::execute_rekey_tasks(self, tasks)?;
+        _commit_rekey_tasks(self, tasks)?;
         touch_vault_update_time(self)?;
         Ok(())
     }
@@ -1119,69 +1336,188 @@ impl Vault {
     // --- Update APIs ---
     // // --- 更新 API ---
 
-    /// Moves a file within the vault to a new path.
+    /// Moves or renames a vault path to another vault path.
+    ///
+    /// File sources must target a file path. Directory sources must target a
+    /// directory path. This single API covers moving a file to a new path,
+    /// moving a directory subtree to a new path, renaming a file in place, and
+    /// renaming a directory in place. File moves update only `file_entries`;
+    /// directory moves update only the directory node, leaving encrypted payloads
+    /// untouched.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file to move.
-    /// * `target_path` - The new path.
-    ///   - If directory: Moves file into directory, keeps name.
-    ///   - If file: Moves and renames.
+    /// * `source_path` - The existing vault file or directory path.
+    /// * `target_path` - The final vault file or directory path.
     ///
     /// # Errors
-    /// Returns `UpdateError` on name collision or if file not found.
+    /// Returns `UpdateError` if the source is missing, the target exists, the
+    /// path types are incompatible, or the root directory is moved.
     //
-    // // 在保险库中将文件移动到新路径。
+    // // 将一个保险库路径移动或重命名到另一个保险库路径。
+    // //
+    // // 文件源必须指向文件路径，目录源必须指向目录路径。这个单一 API 同时覆盖
+    // // 文件移动到新路径、目录子树移动到新路径、文件原地重命名和目录原地重命名。
+    // // 文件移动只更新 `file_entries`；目录移动只更新目录节点，加密载荷保持不变。
     // //
     // // # 参数
-    // // * `hash` - 要移动的文件的哈希。
-    // // * `target_path` - 新路径。
-    // //   - 如果是目录: 将文件移动到目录中，保留名称。
-    // //   - 如果是文件: 移动并重命名。
+    // // * `source_path` - 现有的保险库文件或目录路径。
+    // // * `target_path` - 最终的保险库文件或目录路径。
     // //
     // // # 错误
-    // // 如果名称冲突或文件未找到，返回 `UpdateError`。
-    pub fn move_file(
+    // // 如果源不存在、目标已存在、路径类型不兼容或移动根目录，则返回 `PathOperationError`。
+    pub fn move_path(
+        &mut self,
+        source_path: &VaultPath,
+        target_path: &VaultPath,
+    ) -> Result<(), PathOperationError> {
+        move_path(self, source_path, target_path)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
+    /// Renames a vault file or directory path in its current parent directory.
+    ///
+    /// This is a convenience API over `move_path`: it accepts the existing
+    /// `VaultPath` and a new leaf name, preserves whether the source is a file or
+    /// directory, and moves only the path metadata without rewriting encrypted
+    /// payloads.
+    ///
+    /// # Arguments
+    /// * `source_path` - The existing vault file or directory path.
+    /// * `new_name` - The new file or directory name inside the same parent.
+    ///
+    /// # Errors
+    /// Returns `PathOperationError` if the source is missing, the target exists, the root
+    /// directory is renamed, or the generated target path is invalid.
+    //
+    // // 在当前父目录中重命名保险库文件或目录路径。
+    // //
+    // // 这是 `move_path` 的便捷 API：它接受现有 `VaultPath` 和新的末级名称，
+    // // 保留源路径是文件还是目录的类型，并且只移动路径元数据，不重写加密载荷。
+    // //
+    // // # 参数
+    // // * `source_path` - 现有的保险库文件或目录路径。
+    // // * `new_name` - 同一父目录中的新文件名或目录名。
+    // //
+    // // # 错误
+    // // 如果源不存在、目标已存在、重命名根目录或生成的目标路径无效，则返回 `PathOperationError`。
+    pub fn rename_path_inplace(
+        &mut self,
+        source_path: &VaultPath,
+        new_name: &str,
+    ) -> Result<(), PathOperationError> {
+        rename_path_inplace(self, source_path, new_name)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
+    /// Creates a new file path that references the same stored file as an existing path.
+    ///
+    /// This is a metadata-only copy: the new path points to the same encrypted file
+    /// entity, and the source path's path-local tags are copied to the new path.
+    /// The encrypted payload is not rewritten.
+    ///
+    /// # Arguments
+    /// * `source_path` - The existing vault file path to copy from.
+    /// * `target_path` - The new vault file path to create.
+    ///
+    /// # Errors
+    /// Returns `PathOperationError` if the source path is missing, either path is
+    /// not a file path, the target already exists, or the database update fails.
+    //
+    // // 创建一个引用现有路径同一存储文件的新文件路径。
+    // //
+    // // 这是仅元数据复制：新路径指向同一个加密文件实体，并且源路径的路径局部标签
+    // // 会复制到新路径。加密载荷不会被重写。
+    // //
+    // // # 参数
+    // // * `source_path` - 要复制的现有保险库文件路径。
+    // // * `target_path` - 要创建的新保险库文件路径。
+    // //
+    // // # 错误
+    // // 如果源路径缺失、任一路径不是文件路径、目标已存在或数据库更新失败，
+    // // 则返回 `PathOperationError`。
+    pub fn copy_file_path(
+        &mut self,
+        source_path: &VaultPath,
+        target_path: &VaultPath,
+    ) -> Result<(), PathOperationError> {
+        copy_file_path(self, source_path, target_path)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
+    /// Creates a new file path that references an existing stored file hash.
+    ///
+    /// This inserts a new `file_entries` mapping to the existing file entity. No
+    /// path-local tags are created by this API.
+    ///
+    /// # Arguments
+    /// * `hash` - The encrypted file hash to reference.
+    /// * `target_path` - The new vault file path to create.
+    ///
+    /// # Errors
+    /// Returns `PathOperationError` if the hash does not exist, the target path is
+    /// not a file path, the target already exists, or the database update fails.
+    //
+    // // 创建一个引用现有存储文件哈希的新文件路径。
+    // //
+    // // 这会向现有文件实体插入一条新的 `file_entries` 映射。此 API 不会创建
+    // // 路径局部标签。
+    // //
+    // // # 参数
+    // // * `hash` - 要引用的加密文件哈希。
+    // // * `target_path` - 要创建的新保险库文件路径。
+    // //
+    // // # 错误
+    // // 如果哈希不存在、目标路径不是文件路径、目标已存在或数据库更新失败，
+    // // 则返回 `PathOperationError`。
+    pub fn create_path_from_hash(
         &mut self,
         hash: &VaultHash,
         target_path: &VaultPath,
-    ) -> Result<(), UpdateError> {
-        move_file(self, hash, target_path)?;
-        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
+    ) -> Result<(), PathOperationError> {
+        create_path_from_hash(self, hash, target_path)?;
+        touch_vault_update_time(self)?;
+        Ok(())
     }
 
-    /// Renames a file in its current directory (In-place).
+    /// Creates an empty directory path in the vault tree.
+    ///
+    /// Missing parent directories are created automatically. The target path must
+    /// be a directory path ending with `/`; no file content is created.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file to rename.
-    /// * `new_filename` - The new filename (must NOT contain separators `/` or `\`).
+    /// * `path` - The empty directory path to create.
     ///
     /// # Errors
-    /// Returns `UpdateError` if filename is invalid, file not found, or name collision.
+    /// Returns `PathOperationError` if `path` is not a directory path, the target
+    /// already exists, conflicts with a file path, or the database update fails.
     //
-    // // 在当前目录中重命名文件 (就地)。
+    // // 在保险库目录树中创建一个空目录路径。
+    // //
+    // // 缺失的父目录会自动创建。目标路径必须是以 `/` 结尾的目录路径；
+    // // 不会创建任何文件内容。
     // //
     // // # 参数
-    // // * `hash` - 要重命名的文件的哈希。
-    // // * `new_filename` - 新文件名 (必须 **不** 包含分隔符 `/` 或 `\`)。
+    // // * `path` - 要创建的空目录路径。
     // //
     // // # 错误
-    // // 如果文件名无效、文件未找到或名称冲突，则返回 `UpdateError`。
-    pub fn rename_file_inplace(
-        &mut self,
-        hash: &VaultHash,
-        new_filename: &str,
-    ) -> Result<(), UpdateError> {
-        rename_file_inplace(self, hash, new_filename)?;
-        touch_vault_update_time(self).map_err(|e| UpdateError::MetadataError(e))
+    // // 如果 `path` 不是目录路径、目标已存在、与文件路径冲突或数据库更新失败，
+    // // 则返回 `PathOperationError`。
+    pub fn create_empty_path(&mut self, path: &VaultPath) -> Result<(), PathOperationError> {
+        create_empty_path(self, path)?;
+        touch_vault_update_time(self)?;
+        Ok(())
     }
 
     // --- Remove API ---
     // // --- 删除 API ---
 
-    /// Permanently removes a file from the vault.
+    /// Removes a file entity and all of its path mappings from the vault.
     ///
-    /// Deletes the database record (cascading to tags/metadata) and the
-    /// physical encrypted file from the storage backend.
+    /// The hash-based API deletes every path mapping that references this
+    /// entity, then removes the database record and encrypted payload.
     ///
     /// # Arguments
     /// * `hash` - The hash of the file to remove.
@@ -1189,9 +1525,10 @@ impl Vault {
     /// # Errors
     /// Returns `RemoveError` if file not found or deletion fails.
     //
-    // // 从保险库中永久移除文件。
+    // // 从保险库中移除一个文件实体及其所有路径映射。
     // //
-    // // 删除数据库记录 (级联删除标签/元数据) 以及存储后端中的物理加密文件。
+    // // 这个基于哈希的 API 会删除引用该实体的每一条路径映射，
+    // // 然后删除数据库记录和加密载荷。
     // //
     // // # 参数
     // // * `hash` - 要移除的文件的哈希。
@@ -1204,36 +1541,57 @@ impl Vault {
         Ok(())
     }
 
-    /// Forcefully and permanently removes a file record from the vault.
+    /// Removes one path mapping from the vault.
     ///
-    /// This operation is idempotent and will not fail if the file or its
-    /// database record is already missing. It will attempt to delete both the
-    /// physical file from the storage backend and the database entry.
-    ///
-    /// Use this for cleanup operations where the state might be inconsistent.
+    /// If this path is the final reference to the file entity, the database
+    /// record and encrypted payload are also removed.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file to remove.
+    /// * `path` - The vault path mapping to remove.
     ///
     /// # Errors
-    /// Returns `ForceRemoveError` only on unexpected database or filesystem errors
-    /// (e.g., permission denied), but not for "not found" errors.
+    /// Returns `RemoveError` if the path is not found or deletion fails.
     //
-    // // 从保险库中强制并永久地移除一个文件记录。
+    // // 从保险库中移除一条路径映射。
     // //
-    // // 此操作是幂等的，如果文件或其数据库记录已经丢失，操作不会失败。
-    // // 它会尝试删除存储后端中的物理文件和数据库条目。
-    // //
-    // // 用于清理可能存在状态不一致的情况。
+    // // 如果该路径是文件实体的最后一个引用，则同时删除数据库记录和加密载荷。
     // //
     // // # 参数
-    // // * `hash` - 要移除的文件的哈希。
+    // // * `path` - 要移除的保险库路径映射。
     // //
     // // # 错误
-    // // 仅在发生意外的数据库或文件系统错误 (例如权限被拒绝) 时返回 `ForceRemoveError`，
-    // // 不会因“未找到”错误而返回错误。
-    pub fn force_remove_file(&mut self, hash: &VaultHash) -> Result<(), ForceRemoveError> {
-        force_remove_file(self, hash)?;
+    // // 如果路径未找到或删除失败，则返回 `RemoveError`。
+    pub fn remove_file_by_path(&mut self, path: &VaultPath) -> Result<(), RemoveError> {
+        remove::remove_file_by_path(self, path)?;
+        touch_vault_update_time(self)?;
+        Ok(())
+    }
+
+    /// Recursively removes a directory and all its contents from the vault.
+    ///
+    /// This operation will first remove all files within the directory (and subdirectories),
+    /// which will evaluate whether their physical storage should be deleted.
+    /// Finally, the directory tree itself will be removed.
+    ///
+    /// # Arguments
+    /// * `path` - The vault path of the directory to remove.
+    ///
+    /// # Errors
+    /// Returns `RemoveError` if the path is not a directory, is the root directory,
+    /// cannot be found, or if deletion fails.
+    //
+    // // 递归地从保险库中删除一个目录及其所有内容。
+    // //
+    // // 此操作将首先删除目录（及其子目录）内的所有文件，
+    // // 这将评估是否应删除其物理存储。最后，目录树本身将被删除。
+    // //
+    // // # 参数
+    // // * `path` - 要删除的目录的保险库路径。
+    // //
+    // // # 错误
+    // // 如果路径不是目录、是根目录、无法找到或删除失败，则返回 `RemoveError`。
+    pub fn remove_directory(&mut self, path: &VaultPath) -> Result<(), RemoveError> {
+        remove::remove_directory(self, path)?;
         touch_vault_update_time(self)?;
         Ok(())
     }
@@ -1241,89 +1599,89 @@ impl Vault {
     // --- Tag/MetaData API ---
     // // --- 元数据 API ---
 
-    /// Adds a single tag to a file. Idempotent.
+    /// Adds a single tag to a file path. Idempotent.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file to tag.
+    /// * `path` - The vault path of the file entry to tag.
     /// * `tag` - The tag string to add.
     ///
     /// # Errors
     /// Returns `TagError` if the file is not found.
     //
-    // // 为文件添加单个标签。幂等操作。
+    // // 为文件路径添加单个标签。幂等操作。
     // //
     // // # 参数
-    // // * `hash` - 要标记的文件的哈希。
+    // // * `path` - 要标记的文件条目的保险库路径。
     // // * `tag` - 要添加的标签字符串。
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `TagError`。
-    pub fn add_tag(&mut self, hash: &VaultHash, tag: &str) -> Result<(), TagError> {
-        add_tag(self, hash, tag)?;
+    pub fn add_tag(&mut self, path: &VaultPath, tag: &str) -> Result<(), TagError> {
+        add_tag(self, path, tag)?;
         touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
-    /// Adds multiple tags to a file in a transaction.
+    /// Adds multiple tags to a file path in a transaction.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file to tag.
+    /// * `path` - The vault path of the file entry to tag.
     /// * `tags` - A slice of tag strings to add.
     ///
     /// # Errors
     /// Returns `TagError` if the file is not found.
     //
-    // // 在事务中为文件添加多个标签。
+    // // 在事务中为文件路径添加多个标签。
     // //
     // // # 参数
-    // // * `hash` - 要标记的文件的哈希。
+    // // * `path` - 要标记的文件条目的保险库路径。
     // // * `tags` - 要添加的标签字符串切片。
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `TagError`。
-    pub fn add_tags(&mut self, hash: &VaultHash, tags: &[&str]) -> Result<(), TagError> {
-        add_tags(self, hash, tags)?;
+    pub fn add_tags(&mut self, path: &VaultPath, tags: &[&str]) -> Result<(), TagError> {
+        add_tags(self, path, tags)?;
         touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
-    /// Removes a single tag from a file.
+    /// Removes a single tag from a file path.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file.
+    /// * `path` - The vault path of the file entry.
     /// * `tag` - The tag string to remove.
     ///
     /// # Errors
     /// Returns `TagError` if the file is not found.
     //
-    // // 从文件中移除单个标签。
+    // // 从文件路径中移除单个标签。
     // //
     // // # 参数
-    // // * `hash` - 文件的哈希。
+    // // * `path` - 文件条目的保险库路径。
     // // * `tag` - 要移除的标签字符串。
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `TagError`。
-    pub fn remove_tag(&mut self, hash: &VaultHash, tag: &str) -> Result<(), TagError> {
-        remove_tag(self, hash, tag)?;
+    pub fn remove_tag(&mut self, path: &VaultPath, tag: &str) -> Result<(), TagError> {
+        remove_tag(self, path, tag)?;
         touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
-    /// Removes all tags from a file.
+    /// Removes all tags from a file path.
     ///
     /// # Arguments
-    /// * `hash` - The hash of the file.
+    /// * `path` - The vault path of the file entry.
     ///
     /// # Errors
     /// Returns `TagError` if the file is not found.
     //
-    // // 移除文件的所有标签。
+    // // 移除文件路径的所有标签。
     // //
     // // # 参数
-    // // * `hash` - 文件的哈希。
+    // // * `path` - 文件条目的保险库路径。
     // //
     // // # 错误
     // // 如果文件未找到，则返回 `TagError`。
-    pub fn clear_tags(&mut self, hash: &VaultHash) -> Result<(), TagError> {
-        clear_tags(self, hash)?;
+    pub fn clear_tags(&mut self, path: &VaultPath) -> Result<(), TagError> {
+        clear_tags(self, path)?;
         touch_vault_update_time(self).map_err(|e| TagError::TimestampError(e))
     }
 
@@ -1567,8 +1925,8 @@ impl Vault {
         // 1. First, ensure the file exists in the database. This is a fast check.
         // // 1. 首先，确保文件存在于数据库中。这是一个快速检查。
         match self.find_by_hash(hash)? {
-            QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
-            QueryResult::Found(_) => {
+            QueryFileResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
+            QueryFileResult::Found(_) => {
                 // File exists, proceed to hash verification.
                 // // 文件存在，继续进行哈希验证。
             }
@@ -1618,41 +1976,4 @@ pub fn resolve_file_metadata(
     dest_path: &VaultPath,
 ) -> Result<(VaultPath, u64, chrono::DateTime<chrono::Utc>), AddFileError> {
     _resolve_file_metadata(source_path, dest_path)
-}
-
-/// Prepares a file for re-keying (Standalone).
-///
-/// This is a thread-safe, memory-efficient method that performs the expensive crypto
-/// work without locking the vault database. It returns a `RekeyTask` ticket that
-/// contains all information needed for the atomic commit stage.
-///
-/// # Arguments
-/// * `storage` - The storage backend to use.
-/// * `file_entry` - The full `FileEntry` of the file to be re-keyed.
-///
-/// # Returns
-/// A `RekeyTask` object ready to be passed to `execute_rekey_tasks`.
-///
-/// # Errors
-/// Returns `RekeyError` if I/O or encryption fails.
-//
-// // 准备一个文件用于轮换密钥 (独立函数)。
-// //
-// // 这是一个线程安全的、内存高效的方法，它执行耗时的加密工作而无需锁定保险库数据库。
-// // 它返回一个 `RekeyTask` 票据，其中包含原子化提交阶段所需的所有信息。
-// //
-// // # Arguments
-// // * `storage` - 要使用的存储后端。
-// // * `file_entry` - 需要轮换密钥的文件的完整 `FileEntry`。
-// //
-// // # Returns
-// // 一个 `RekeyTask` 对象，准备好传递给 `execute_rekey_tasks`。
-// //
-// // # Errors
-// // 如果 I/O 或加密失败，则返回 `RekeyError`。
-pub fn prepare_rekey_task_standalone(
-    storage: &dyn StorageBackend,
-    file_entry: &FileEntry,
-) -> Result<RekeyTask, RekeyError> {
-    rekey::prepare_rekey_task(storage, file_entry)
 }

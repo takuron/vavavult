@@ -1,11 +1,11 @@
-use std::any::Any;
-use std::fs::{self, File};
-use std::io::{self, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
+use super::{StagingToken, StorageBackend, StorageReader, StorageWriter};
 use crate::common::constants::DATA_SUBDIR;
 use crate::common::hash::VaultHash;
-use super::{ StagingToken, StorageBackend};
+use std::any::Any;
+use std::fs::{self, File};
+use std::io::{self, BufReader};
+use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 /// 本地文件系统的暂存令牌
 /// 它持有 NamedTempFile 的所有权。如果 Token 被 Drop (且未 commit)，
@@ -51,13 +51,13 @@ impl StorageBackend for LocalStorage {
         Ok(self.file_path(hash).exists())
     }
 
-    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn Read + Send>> {
+    fn reader(&self, hash: &VaultHash) -> io::Result<Box<dyn StorageReader>> {
         let path = self.file_path(hash);
         let file = File::open(path)?;
         Ok(Box::new(BufReader::new(file)))
     }
 
-    fn prepare_write(&self) -> io::Result<(Box<dyn Write + Send>, Box<dyn StagingToken>)> {
+    fn prepare_write(&self) -> io::Result<(Box<dyn StorageWriter>, Box<dyn StagingToken>)> {
         let data_dir = self.data_dir();
         // 1. 确保存储目录存在
         fs::create_dir_all(&data_dir)?;
@@ -78,11 +78,18 @@ impl StorageBackend for LocalStorage {
         Ok((Box::new(write_handle), Box::new(token)))
     }
 
-    fn commit_write(&self, mut token: Box<dyn StagingToken>, final_hash: &VaultHash) -> io::Result<()> {
+    fn commit_write(
+        &self,
+        mut token: Box<dyn StagingToken>,
+        final_hash: &VaultHash,
+    ) -> io::Result<()> {
         // 1. 向下转型，取回 LocalStagingToken
-        let local_token = token.as_any_mut()
+        let local_token = token
+            .as_any_mut()
             .downcast_mut::<LocalStagingToken>()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid staging token type"))?;
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Invalid staging token type")
+            })?;
 
         // 2. 取出 temp_file (所有权转移)
         if let Some(temp_file) = local_token.temp_file.take() {

@@ -7,7 +7,7 @@
 
 A secure, robust, and concurrent local file vault library for Rust. Designed to manage, encrypt, and query collections of files with rich metadata and content deduplication.
 
-> **Note:** This project is currently in active development (V2). It has not yet been published to crates.io.
+> **Note:** This project is currently in active development. It has not yet been published to crates.io.
 
 ## ✨ Features
 

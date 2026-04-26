@@ -3,9 +3,8 @@ use crate::common::constants::{
 };
 use crate::common::hash::VaultHash;
 use crate::common::metadata::MetadataEntry;
+use crate::crypto::chunked::{ChunkedCryptoError, chunked_encrypt_and_hash};
 use crate::crypto::encrypt::EncryptError;
-use crate::crypto::stream_cipher;
-use crate::crypto::stream_cipher::StreamCipherError;
 use crate::file::PathError;
 use crate::file::path::VaultPath;
 use crate::storage::{StagingToken, StorageBackend};
@@ -13,7 +12,7 @@ use crate::utils::random::generate_random_password;
 use crate::utils::time::now_as_rfc3339_string;
 pub(crate) use crate::vault::Vault;
 use crate::vault::metadata::MetadataError;
-use crate::vault::query::QueryResult;
+use crate::vault::query::{QueryFileResult, QueryPathResult};
 use crate::vault::{FileEntry, query};
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
@@ -40,7 +39,9 @@ pub enum AddFileError {
     DatabaseError(#[from] rusqlite::Error),
     /// The target `VaultPath` was a directory path, but a file path was required.
     // // 目标 `VaultPath` 是一个目录路径，但需要的是文件路径。
-    #[error("The provided vault path is invalid: '{0}' (must be a file path, not a directory path)")]
+    #[error(
+        "The provided vault path is invalid: '{0}' (must be a file path, not a directory path)"
+    )]
     InvalidFilePath(String),
     /// A database query failed during pre-checks.
     // // 在预检查期间数据库查询失败。
@@ -56,7 +57,9 @@ pub enum AddFileError {
     DuplicateContent(String),
     /// A file with the same *original* content hash already exists.
     // // 具有相同 *原始* 内容哈希的文件已存在。
-    #[error("A file with the same original content (Original SHA256: {0}) already exists at path '{1}' or in this batch.")]
+    #[error(
+        "A file with the same original content (Original SHA256: {0}) already exists at path '{1}' or in this batch."
+    )]
     DuplicateOriginalContent(String, String),
     /// The source file path has no filename (e.g., ".") and cannot be added to a directory.
     // // 源文件路径没有文件名 (例如 ".") 并且无法添加到目录中。
@@ -66,10 +69,10 @@ pub enum AddFileError {
     // // 文件加密期间发生错误。
     #[error("File encryption failed: {0}")]
     EncryptionError(#[from] EncryptError),
-    /// An error occurred in the underlying stream cipher.
-    // // 底层流加密器发生错误。
-    #[error("Stream cipher error: {0}")]
-    StreamCipherError(#[from] StreamCipherError),
+    /// An error occurred in the underlying chunked cipher.
+    // // 底层分块加密器发生错误。
+    #[error("Chunked cipher error: {0}")]
+    ChunkedCryptoError(#[from] ChunkedCryptoError),
     /// Failed to update the vault's last-modified timestamp.
     // // 更新保险库的最后修改时间戳失败。
     #[error("Failed to update vault timestamp: {0}")]
@@ -78,6 +81,21 @@ pub enum AddFileError {
     // // 构建最终 `VaultPath` 时发生错误。
     #[error("Failed to construct final path: {0}")]
     PathConstructionError(#[from] PathError),
+}
+
+#[derive(Debug, Clone)]
+enum AdditionCommitAction {
+    InsertNew,
+    ReuseExisting(VaultHash),
+}
+
+fn committed_hash_for_path(vault: &Vault, path: &VaultPath) -> Result<VaultHash, AddFileError> {
+    match query::check_by_path(vault, path)? {
+        QueryPathResult::Found(entry) => Ok(entry.sha256sum),
+        QueryPathResult::NotFound => Err(AddFileError::DatabaseError(
+            rusqlite::Error::QueryReturnedNoRows,
+        )),
+    }
 }
 
 /// A request to prepare a file addition — input for Stage 1.
@@ -148,6 +166,9 @@ pub struct AdditionTask {
     /// The `FileEntry` struct to be inserted into the database.
     // // 将要插入数据库的 `FileEntry` 结构体。
     pub file_entry: FileEntry,
+    /// The target path mapping to insert for this file entity.
+    // // 要为此文件实体插入的目标路径映射。
+    pub dest_path: VaultPath,
     /// The token representing the staged data in the storage backend.
     // // 代表存储后端中暂存数据的令牌。
     pub staging_token: Box<dyn StagingToken>,
@@ -200,7 +221,7 @@ pub(crate) fn prepare_addition_tasks(
             ));
         }
         // 2. 检查数据库中路径是否重复
-        if let QueryResult::Found(_) = query::check_by_path(vault, req.dest_path)? {
+        if let QueryPathResult::Found(_) = query::check_by_path(vault, req.dest_path)? {
             return Err(AddFileError::DuplicateFileName(req.dest_path.to_string()));
         }
         // 3. 检查批内路径是否重复
@@ -279,11 +300,14 @@ pub(crate) fn encrypt_addition_task(
             Ok(n)
         }
     }
-    let mut counting_reader = CountingReader { inner: reader, count: 0 };
+    let mut counting_reader = CountingReader {
+        inner: reader,
+        count: 0,
+    };
 
-    // 3. 执行流式加密
+    // 3. 执行分块流式加密
     let per_file_password = generate_random_password(16);
-    let (encrypted_sha256sum, original_sha256sum) = stream_cipher::stream_encrypt_and_hash(
+    let (encrypted_sha256sum, original_sha256sum) = chunked_encrypt_and_hash(
         &mut counting_reader,
         &mut staging_writer,
         &per_file_password,
@@ -293,12 +317,25 @@ pub(crate) fn encrypt_addition_task(
 
     // 4. 构建 FileEntry
     let now = now_as_rfc3339_string();
-    let file_size = if pending.source_size > 0 { pending.source_size } else { actual_size };
+    let file_size = if pending.source_size > 0 {
+        pending.source_size
+    } else {
+        actual_size
+    };
 
     let metadata = vec![
-        MetadataEntry { key: META_FILE_ADD_TIME.to_string(), value: now.clone() },
-        MetadataEntry { key: META_FILE_UPDATE_TIME.to_string(), value: now },
-        MetadataEntry { key: META_FILE_SIZE.to_string(), value: file_size.to_string() },
+        MetadataEntry {
+            key: META_FILE_ADD_TIME.to_string(),
+            value: now.clone(),
+        },
+        MetadataEntry {
+            key: META_FILE_UPDATE_TIME.to_string(),
+            value: now,
+        },
+        MetadataEntry {
+            key: META_FILE_SIZE.to_string(),
+            value: file_size.to_string(),
+        },
         MetadataEntry {
             key: META_SOURCE_MODIFIED_TIME.to_string(),
             value: pending.source_modified_time.to_rfc3339(),
@@ -306,15 +343,17 @@ pub(crate) fn encrypt_addition_task(
     ];
 
     let file_entry = FileEntry {
-        path: pending.dest_path,
         sha256sum: encrypted_sha256sum,
         original_sha256sum,
         encrypt_password: per_file_password,
-        tags: Vec::new(),
         metadata,
     };
 
-    Ok(AdditionTask { file_entry, staging_token })
+    Ok(AdditionTask {
+        file_entry,
+        dest_path: pending.dest_path,
+        staging_token,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -348,47 +387,48 @@ pub(crate) fn encrypt_addition_task(
 pub(crate) fn commit_addition_tasks(
     vault: &mut Vault,
     files: Vec<AdditionTask>,
+    allow_duplicate_files: Option<bool>,
 ) -> Result<(), AddFileError> {
     if files.is_empty() {
         return Ok(());
     }
 
+    let allow_duplicate_files = allow_duplicate_files.unwrap_or(true);
+
     // --- 1. 最终重复检查 ---
     let mut paths_in_batch = HashSet::new();
-    let mut originals_in_batch = HashMap::new();
+    let mut originals_in_batch: HashMap<&VaultHash, VaultHash> = HashMap::new();
+    let mut commit_actions = Vec::with_capacity(files.len());
 
     for file_to_add in &files {
         let entry = &file_to_add.file_entry;
+        let dest_path = &file_to_add.dest_path;
 
         // 路径重复检查（防御性：阶段1已检查，但提交时可能有并发变更）
-        if let QueryResult::Found(_) = query::check_by_path(vault, &entry.path)? {
-            return Err(AddFileError::DuplicateFileName(entry.path.to_string()));
+        if let QueryPathResult::Found(_) = query::check_by_path(vault, dest_path)? {
+            return Err(AddFileError::DuplicateFileName(dest_path.to_string()));
         }
-        if !paths_in_batch.insert(&entry.path) {
-            return Err(AddFileError::DuplicateFileName(entry.path.to_string()));
-        }
-
-        // 原始哈希重复检查
-        if let QueryResult::Found(existing) =
-            query::check_by_original_hash(vault, &entry.original_sha256sum)?
-        {
-            return Err(AddFileError::DuplicateOriginalContent(
-                entry.original_sha256sum.to_string(),
-                existing.path.to_string(),
-            ));
-        }
-        if let Some(existing_path) =
-            originals_in_batch.insert(&entry.original_sha256sum, &entry.path)
-        {
-            return Err(AddFileError::DuplicateOriginalContent(
-                entry.original_sha256sum.to_string(),
-                existing_path.to_string(),
-            ));
+        if !paths_in_batch.insert(dest_path) {
+            return Err(AddFileError::DuplicateFileName(dest_path.to_string()));
         }
 
-        // 加密哈希重复检查
-        if let QueryResult::Found(_) = query::check_by_hash(vault, &entry.sha256sum)? {
-            return Err(AddFileError::DuplicateContent(entry.sha256sum.to_string()));
+        // 相同原始内容按策略处理：默认复用已有文件实体，严格模式则报错。
+        let existing_hash = match query::check_by_original_hash(vault, &entry.original_sha256sum)? {
+            QueryFileResult::Found(existing) => Some(existing.sha256sum),
+            QueryFileResult::NotFound => originals_in_batch.get(&entry.original_sha256sum).cloned(),
+        };
+
+        if let Some(existing_hash) = existing_hash {
+            if !allow_duplicate_files {
+                return Err(AddFileError::DuplicateOriginalContent(
+                    entry.original_sha256sum.to_string(),
+                    dest_path.to_string(),
+                ));
+            }
+            commit_actions.push(AdditionCommitAction::ReuseExisting(existing_hash));
+        } else {
+            originals_in_batch.insert(&entry.original_sha256sum, entry.sha256sum.clone());
+            commit_actions.push(AdditionCommitAction::InsertNew);
         }
     }
 
@@ -396,23 +436,37 @@ pub(crate) fn commit_addition_tasks(
     let tx = vault.database_connection.transaction()?;
     {
         let mut file_stmt = tx.prepare(
-            "INSERT INTO files (sha256sum, path, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3, ?4)"
+            "INSERT INTO files (sha256sum, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3)",
         )?;
         let mut meta_stmt = tx.prepare(
             "INSERT INTO metadata (file_sha256sum, meta_key, meta_value) VALUES (?1, ?2, ?3)",
         )?;
 
-        for file_to_add in &files {
+        for (file_to_add, action) in files.iter().zip(commit_actions.iter()) {
             let entry = &file_to_add.file_entry;
-            file_stmt.execute((
-                &entry.sha256sum, &entry.path, &entry.original_sha256sum, &entry.encrypt_password,
-            ))?;
-            for meta in &entry.metadata {
-                meta_stmt.execute((&entry.sha256sum, &meta.key, &meta.value))?;
+            match action {
+                AdditionCommitAction::InsertNew => {
+                    file_stmt.execute((
+                        &entry.sha256sum,
+                        &entry.original_sha256sum,
+                        &entry.encrypt_password,
+                    ))?;
+                    query::insert_file_entry_in_conn(
+                        &tx,
+                        &file_to_add.dest_path,
+                        &entry.sha256sum,
+                    )?;
+                    for meta in &entry.metadata {
+                        meta_stmt.execute((&entry.sha256sum, &meta.key, &meta.value))?;
+                    }
+                }
+                AdditionCommitAction::ReuseExisting(existing_hash) => {
+                    query::insert_file_entry_in_conn(&tx, &file_to_add.dest_path, existing_hash)?;
+                }
             }
         }
 
-        commit_storage_files(files, vault.storage.as_ref())?;
+        commit_storage_files(files, commit_actions, vault.storage.as_ref())?;
     }
     tx.commit()?;
 
@@ -483,6 +537,7 @@ pub(crate) fn add_file(
     vault: &mut Vault,
     source_path: &Path,
     dest_path: &VaultPath,
+    allow_duplicate_files: Option<bool>,
 ) -> Result<VaultHash, AddFileError> {
     if !source_path.is_file() {
         return Err(AddFileError::SourceNotFound(source_path.to_path_buf()));
@@ -490,8 +545,10 @@ pub(crate) fn add_file(
     let final_dest_path = resolve_final_path(source_path, dest_path)?;
     let source_metadata = fs::metadata(source_path).map_err(AddFileError::IoError)?;
     let file_size = source_metadata.len();
-    let source_modified_time: DateTime<Utc> =
-        source_metadata.modified().map_err(AddFileError::IoError)?.into();
+    let source_modified_time: DateTime<Utc> = source_metadata
+        .modified()
+        .map_err(AddFileError::IoError)?
+        .into();
 
     // 阶段 1
     let requests = [PrepareAdditionRequest {
@@ -505,11 +562,10 @@ pub(crate) fn add_file(
     // 阶段 2
     let source_file = File::open(source_path).map_err(AddFileError::IoError)?;
     let addition_task = encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
-    let hash = addition_task.file_entry.sha256sum.clone();
 
     // 阶段 3
-    commit_addition_tasks(vault, vec![addition_task])?;
-    Ok(hash)
+    commit_addition_tasks(vault, vec![addition_task], allow_duplicate_files)?;
+    committed_hash_for_path(vault, &final_dest_path)
 }
 
 /// 快捷函数：从 Reader 添加（三阶段合一）
@@ -519,6 +575,7 @@ pub(crate) fn add_from_reader(
     dest_path: &VaultPath,
     source_size: u64,
     source_modified_time: DateTime<Utc>,
+    allow_duplicate_files: Option<bool>,
 ) -> Result<VaultHash, AddFileError> {
     // 阶段 1
     let requests = [PrepareAdditionRequest {
@@ -531,11 +588,10 @@ pub(crate) fn add_from_reader(
 
     // 阶段 2
     let addition_task = encrypt_addition_task(vault.storage.as_ref(), pending, reader)?;
-    let hash = addition_task.file_entry.sha256sum.clone();
 
     // 阶段 3
-    commit_addition_tasks(vault, vec![addition_task])?;
-    Ok(hash)
+    commit_addition_tasks(vault, vec![addition_task], allow_duplicate_files)?;
+    committed_hash_for_path(vault, dest_path)
 }
 
 // ---------------------------------------------------------------------------
@@ -545,12 +601,22 @@ pub(crate) fn add_from_reader(
 /// 辅助函数：提交文件到存储后端
 fn commit_storage_files(
     files: Vec<AdditionTask>,
+    commit_actions: Vec<AdditionCommitAction>,
     storage: &dyn StorageBackend,
 ) -> Result<(), AddFileError> {
-    for file_to_add in files {
-        storage
-            .commit_write(file_to_add.staging_token, &file_to_add.file_entry.sha256sum)
-            .map_err(AddFileError::IoError)?;
+    for (file_to_add, action) in files.into_iter().zip(commit_actions.into_iter()) {
+        match action {
+            AdditionCommitAction::InsertNew => {
+                storage
+                    .commit_write(file_to_add.staging_token, &file_to_add.file_entry.sha256sum)
+                    .map_err(AddFileError::IoError)?;
+            }
+            AdditionCommitAction::ReuseExisting(_) => {
+                storage
+                    .rollback_write(file_to_add.staging_token)
+                    .map_err(AddFileError::IoError)?;
+            }
+        }
     }
     Ok(())
 }
@@ -603,11 +669,15 @@ pub(crate) fn resolve_file_metadata(
     }
     let final_dest_path = resolve_final_path(source_path, dest_path)?;
     if !final_dest_path.is_file() {
-        return Err(AddFileError::InvalidFilePath(final_dest_path.as_str().to_string()));
+        return Err(AddFileError::InvalidFilePath(
+            final_dest_path.as_str().to_string(),
+        ));
     }
     let source_metadata = fs::metadata(source_path).map_err(AddFileError::IoError)?;
     let file_size = source_metadata.len();
-    let source_modified_time: DateTime<Utc> =
-        source_metadata.modified().map_err(AddFileError::IoError)?.into();
+    let source_modified_time: DateTime<Utc> = source_metadata
+        .modified()
+        .map_err(AddFileError::IoError)?
+        .into();
     Ok((final_dest_path, file_size, source_modified_time))
 }

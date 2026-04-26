@@ -1,14 +1,14 @@
 use crate::common::constants::META_VAULT_FEATURES;
 use crate::common::hash::{HashParseError, VaultHash};
 use crate::common::metadata::MetadataEntry;
-use crate::crypto::encrypt::{EncryptError, create_v2_encrypt_check, verify_v2_encrypt_check};
-use crate::file::{PathError, VaultPath};
+use crate::crypto::encrypt::{EncryptError, create_v3_encrypt_check, verify_v3_encrypt_check};
+use crate::file::PathError;
 use crate::storage::StorageBackend;
 use crate::vault::config::VaultConfig;
 use crate::vault::metadata::{self, MetadataError};
 use crate::vault::open::OpenError;
-use crate::vault::{QueryResult, Vault, query};
-use rusqlite::{Connection, params};
+use crate::vault::{Vault, query};
+use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io;
@@ -51,11 +51,20 @@ pub enum UpdateError {
     #[error("Target path '{0}' is already taken.")]
     DuplicateTargetPath(String),
 
-    /// The new filename is invalid (e.g., contains path separators).
+    /// The source and target path types are incompatible for a move operation.
     //
-    // // 新文件名无效 (例如包含路径分隔符)。
-    #[error("Invalid new filename '{0}': contains path separators.")]
-    InvalidFilename(String),
+    // // 源路径和目标路径类型不兼容，无法执行移动操作。
+    #[error("Cannot move '{source_path}' to '{target_path}': incompatible path types.")]
+    IncompatiblePathTypes {
+        source_path: String,
+        target_path: String,
+    },
+
+    /// The root directory cannot be moved or renamed.
+    //
+    // // 根目录不能被移动或重命名。
+    #[error("Cannot move or rename the root directory.")]
+    CannotMoveRoot,
 
     /// An I/O error occurred.
     //
@@ -110,96 +119,6 @@ pub enum UpdateError {
     // // 创建加密检查字符串时发生错误。
     #[error("Encryption check creation error: {0}")]
     EncryptCheck(#[from] EncryptError),
-}
-
-/// Moves a file within the vault to a new path.
-pub(crate) fn move_file(
-    vault: &Vault,
-    hash: &VaultHash,
-    target_path: &VaultPath,
-) -> Result<(), UpdateError> {
-    // 1. Find original entry
-    let original_entry = match query::check_by_hash(vault, hash)? {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
-    };
-    let original_vault_path = original_entry.path.clone();
-
-    // 2. Resolve final path
-    let final_path = if target_path.is_dir() {
-        let original_filename = original_vault_path
-            .file_name()
-            .ok_or_else(|| UpdateError::VaultPathError(PathError::JoinToFile))?;
-        target_path.join(original_filename)?
-    } else {
-        target_path.clone()
-    };
-
-    // 3. Check for duplicates
-    if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
-        return if existing.sha256sum != *hash {
-            Err(UpdateError::DuplicateTargetPath(
-                final_path.as_str().to_string(),
-            ))
-        } else {
-            Ok(())
-        };
-    }
-
-    // 4. Execute update
-    let rows_affected = vault.database_connection.execute(
-        "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
-        params![final_path.as_str(), hash],
-    )?;
-
-    if rows_affected == 0 {
-        return Err(UpdateError::FileNotFound(hash.to_string()));
-    }
-
-    // 5. Update timestamp (using metadata module)
-    metadata::touch_file_update_time(vault, hash)?;
-    Ok(())
-}
-
-/// Renames a file in-place (keeping the same parent directory).
-pub(crate) fn rename_file_inplace(
-    vault: &Vault,
-    hash: &VaultHash,
-    new_filename: &str,
-) -> Result<(), UpdateError> {
-    if new_filename.contains('/') || new_filename.contains('\\') {
-        return Err(UpdateError::InvalidFilename(new_filename.to_string()));
-    }
-
-    let original_entry = match query::check_by_hash(vault, hash)? {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => return Err(UpdateError::FileNotFound(hash.to_string())),
-    };
-
-    let parent_dir = original_entry.path.parent()?;
-    let final_path = parent_dir.join(new_filename)?;
-
-    if let QueryResult::Found(existing) = query::check_by_path(vault, &final_path)? {
-        if existing.sha256sum != *hash {
-            return Err(UpdateError::DuplicateTargetPath(
-                final_path.as_str().to_string(),
-            ));
-        } else {
-            return Ok(());
-        }
-    }
-
-    let rows_affected = vault.database_connection.execute(
-        "UPDATE files SET path = ?1 WHERE sha256sum = ?2",
-        params![final_path.as_str(), hash],
-    )?;
-
-    if rows_affected == 0 {
-        return Err(UpdateError::FileNotFound(hash.to_string()));
-    }
-
-    metadata::touch_file_update_time(vault, hash)?;
-    Ok(())
 }
 
 // --- Vault Config Operations ---
@@ -332,7 +251,7 @@ pub(crate) fn update_password(
         return Ok(());
     }
 
-    if !verify_v2_encrypt_check(&config.encrypt_check, old_password) {
+    if !verify_v3_encrypt_check(&config.encrypt_check, old_password) {
         return Err(UpdateError::InvalidOldPassword);
     }
 
@@ -357,7 +276,7 @@ pub(crate) fn update_password(
     conn.execute_batch(&rekey_sql)?;
 
     // 5. Generate the new encrypt_check and update the config
-    let new_encrypt_check = create_v2_encrypt_check(new_password)?;
+    let new_encrypt_check = create_v3_encrypt_check(new_password)?;
     config.encrypt_check = new_encrypt_check;
 
     // 6. Write the updated config back to master.json

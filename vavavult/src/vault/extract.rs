@@ -1,12 +1,12 @@
-use std::path::Path;
+use crate::common::hash::{HashParseError, VaultHash};
+use crate::crypto::chunked::{ChunkedCryptoError, ChunkedReader, chunked_decrypt};
+use crate::crypto::encrypt::EncryptError;
+use crate::storage::{StorageBackend, StorageReader};
+use crate::vault::{QueryFileResult, Vault, query};
 use std::fs;
 use std::io::Write;
+use std::path::Path;
 use tempfile::NamedTempFile;
-use crate::common::hash::{HashParseError, VaultHash};
-use crate::crypto::encrypt::EncryptError;
-use crate::crypto::stream_cipher;
-use crate::storage::StorageBackend;
-use crate::vault::{query, QueryResult, Vault};
 
 /// Defines errors that can occur during the file extraction process.
 //
@@ -48,18 +48,20 @@ pub enum ExtractError {
     //
     // // 解密后文件的哈希与预期的原始哈希不匹配。
     // // 这表明保险库 `data/` 目录中的文件已损坏。
-    #[error("Integrity check failed for file '{path}': Expected original hash {expected}, but calculated {calculated}. The file in the vault might be corrupted.")]
+    #[error(
+        "Integrity check failed for file '{path}': Expected original hash {expected}, but calculated {calculated}. The file in the vault might be corrupted."
+    )]
     IntegrityCheckFailed {
         path: String,
         expected: String,
         calculated: String,
     },
 
-    /// An error occurred during the stream decryption process.
+    /// An error occurred during the chunked decryption process.
     //
-    // // 流解密过程中发生错误。
-    #[error("Stream cipher error: {0}")]
-    StreamCipherError(#[from] stream_cipher::StreamCipherError)
+    // // 分块解密过程中发生错误。
+    #[error("Chunked cipher error: {0}")]
+    ChunkedCryptoError(#[from] ChunkedCryptoError),
 }
 
 /// A "ticket" containing all necessary information to perform a file extraction.
@@ -83,8 +85,8 @@ pub(crate) fn prepare_extraction_task(
 ) -> Result<ExtractionTask, ExtractError> {
     // 1. 在数据库中查找文件的完整信息
     let file_entry = match query::check_by_hash(vault, sha256sum)? {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => {
+        QueryFileResult::Found(entry) => entry,
+        QueryFileResult::NotFound => {
             return Err(ExtractError::FileNotFound(sha256sum.to_string()));
         }
     };
@@ -94,12 +96,19 @@ pub(crate) fn prepare_extraction_task(
         return Err(ExtractError::FileNotFound(sha256sum.to_string()));
     }
 
-    // 3. 打包为 "工作票据"
+    // 3. 查询第一条路径用于兼容旧的错误信息字段。
+    let original_vault_path = query::list_paths_by_hash(vault, sha256sum)?
+        .into_iter()
+        .next()
+        .map(|path| path.to_string())
+        .unwrap_or_else(|| sha256sum.to_string());
+
+    // 4. 打包为 "工作票据"
     Ok(ExtractionTask {
         file_hash: sha256sum.clone(),
         password: file_entry.encrypt_password,
         expected_original_hash: file_entry.original_sha256sum,
-        original_vault_path: file_entry.path.to_string(),
+        original_vault_path,
     })
 }
 
@@ -178,12 +187,9 @@ pub(crate) fn decrypt_extraction_task(
     // 1. 从存储后端获取读取器
     let mut encrypted_reader = storage.reader(&task.file_hash)?;
 
-    // 2. 执行解密，写入到调用方提供的 writer
-    let calculated_original_hash = stream_cipher::stream_decrypt(
-        &mut encrypted_reader,
-        &mut writer,
-        &task.password,
-    )?;
+    // 2. 执行分块解密，写入到调用方提供的 writer
+    let calculated_original_hash =
+        chunked_decrypt(&mut encrypted_reader, &mut writer, &task.password)?;
 
     // 3. 完整性检查
     if calculated_original_hash != task.expected_original_hash {
@@ -195,6 +201,46 @@ pub(crate) fn decrypt_extraction_task(
     }
 
     Ok(())
+}
+
+/// Opens a prepared extraction task as a random-access chunked reader.
+///
+/// This is a pull-based read API that avoids decrypting the whole file when the
+/// caller only needs selected ranges.
+///
+/// # Arguments
+/// * `storage` - The storage backend to read encrypted data from.
+/// * `task` - The extraction ticket from Stage 1.
+///
+/// # Returns
+/// An opaque plaintext stream over the encrypted backend object.
+///
+/// # Errors
+/// Returns `ExtractError` if the backend object cannot be opened or its chunked
+/// encrypted format is invalid.
+//
+// // 将已准备好的提取任务打开为随机访问分块读取器。
+// //
+// // 这是拉取式读取 API，可避免调用方只读取部分范围时解密整个文件。
+// //
+// // # 参数
+// // * `storage` - 用于读取加密数据的存储后端。
+// // * `task` - 来自阶段 1 的提取票据。
+// //
+// // # 返回
+// // 基于后端加密对象的不透明明文流。
+// //
+// // # 错误
+// // 如果后端对象无法打开，或其分块加密格式无效，则返回 `ExtractError`。
+pub(crate) fn open_extraction_task_reader(
+    storage: &dyn StorageBackend,
+    task: &ExtractionTask,
+) -> Result<ChunkedReader<Box<dyn StorageReader>>, ExtractError> {
+    // 1. 从后端打开可寻址物理读取器。
+    let encrypted_reader = storage.reader(&task.file_hash)?;
+
+    // 2. 包装为按需解密的分块读取器。
+    Ok(ChunkedReader::new(encrypted_reader, &task.password)?)
 }
 
 /// Stage 2 shortcut: Decrypts a prepared extraction task to a local file.
@@ -241,7 +287,9 @@ pub(crate) fn decrypt_extraction_task_to_file(
     decrypt_extraction_task(storage, task, &temp_file)?;
 
     // 4. 原子持久化
-    temp_file.persist(destination_path).map_err(EncryptError::TempFilePersist)?;
+    temp_file
+        .persist(destination_path)
+        .map_err(EncryptError::TempFilePersist)?;
 
     Ok(())
 }

@@ -6,8 +6,10 @@ use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use vavavult::common::constants::DATA_SUBDIR;
 use vavavult::file::VaultPath;
-use vavavult::vault::{AddFileError, ExtractionTask, PrepareAdditionRequest, QueryResult, Vault};
-use vavavult::vault::resolve_file_metadata;
+use vavavult::vault::{
+    AddFileError, ExtractionTask, PrepareAdditionRequest, QueryFileResult, QueryPathResult, Vault,
+};
+use vavavult::vault::{ListPathEntry, resolve_file_metadata};
 
 mod common;
 use common::{
@@ -24,11 +26,11 @@ fn test_add_file_and_extract_file_cycle() {
 
     // 1. 添加文件
     let dest_path = VaultPath::from("/docs/hello.txt");
-    let encrypted_hash = vault.add_file(&dummy_file_path, &dest_path).unwrap();
+    let encrypted_hash = vault.add_file(&dummy_file_path, &dest_path, None).unwrap();
 
     // 2. 验证文件已存在于数据库，且路径正确
     let entry = match vault.find_by_path(&dest_path).unwrap() {
-        QueryResult::Found(e) => e,
+        QueryPathResult::Found(e) => e,
         _ => panic!("File not found"),
     };
     assert_eq!(entry.sha256sum, encrypted_hash);
@@ -42,10 +44,8 @@ fn test_add_file_and_extract_file_cycle() {
     );
 }
 
-/// 测试：添加文件时的各种错误情况。
-/// 验证：
-/// 1. 相同路径不能添加两次 (DuplicateFileName)。
-/// 2. 相同内容不能添加两次 (去重机制, DuplicateOriginalContent)。
+/// 测试：添加文件时的路径重复错误。
+/// 验证：相同路径不能添加两次 (DuplicateFileName)。
 #[test]
 fn test_add_file_paths_and_errors() {
     let dir = tempdir().unwrap();
@@ -54,49 +54,165 @@ fn test_add_file_paths_and_errors() {
     let file2_path = create_dummy_file(&dir, "file2.txt", "content2");
 
     let path1 = VaultPath::from("/file1.txt");
-    vault.add_file(&file1_path, &path1).unwrap();
+    vault.add_file(&file1_path, &path1, None).unwrap();
 
     // 错误 1: 尝试向已存在的路径添加不同文件
     assert!(matches!(
-        vault.add_file(&file2_path, &path1).unwrap_err(),
+        vault.add_file(&file2_path, &path1, None).unwrap_err(),
         AddFileError::DuplicateFileName(_)
-    ));
-
-    // 错误 2: 尝试添加内容完全相同的文件 (即使路径不同)
-    let path2 = VaultPath::from("/file1_copy.txt");
-    assert!(matches!(
-        vault.add_file(&file1_path, &path2).unwrap_err(),
-        AddFileError::DuplicateOriginalContent(_, _)
     ));
 }
 
-/// 测试：文件的移动和重命名。
-/// 验证 `move_file` 和 `rename_file_inplace` 能正确更新数据库路径。
+/// 测试：相同内容添加到不同路径时复用同一个文件实体。
 #[test]
-fn test_move_and_rename_file() {
+fn test_duplicate_content_creates_hardlink_mapping() {
     let dir = tempdir().unwrap();
     let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
-    let file_path = create_dummy_file(&dir, "move.txt", "content");
-    let hash = vault
-        .add_file(&file_path, &VaultPath::from("/dir1/move.txt"))
-        .unwrap();
+    let file_path = create_dummy_file(&dir, "shared.txt", "same content");
 
-    // 测试重命名 (保持父目录不变)
-    vault.rename_file_inplace(&hash, "renamed.txt").unwrap();
+    let path1 = VaultPath::from("/a/shared.txt");
+    let path2 = VaultPath::from("/b/shared-copy.txt");
+
+    let hash1 = vault.add_file(&file_path, &path1, None).unwrap();
+    let hash2 = vault.add_file(&file_path, &path2, None).unwrap();
+
+    assert_eq!(hash1, hash2);
+    assert_eq!(vault.get_file_count().unwrap(), 2);
+    assert_eq!(vault.get_storage_file_count().unwrap(), 1);
+    assert_eq!(
+        vault.list_paths_by_hash(&hash1).unwrap(),
+        vec![path1.clone(), path2.clone()]
+    );
+
+    assert!(matches!(
+        vault.find_by_path(&path1).unwrap(),
+        QueryPathResult::Found(_)
+    ));
+    assert!(matches!(
+        vault.find_by_path(&path2).unwrap(),
+        QueryPathResult::Found(_)
+    ));
+}
+
+/// 测试：阶段 3 可禁止相同原始哈希的文件自动归并。
+#[test]
+fn test_commit_duplicate_content_can_be_disallowed() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "strict-shared.txt", "same strict content");
+
+    let path1 = VaultPath::from("/a/strict.txt");
+    let path2 = VaultPath::from("/b/strict-copy.txt");
+    vault.add_file(&file_path, &path1, None).unwrap();
+
+    let (resolved_path, source_size, source_modified_time) =
+        resolve_file_metadata(&file_path, &path2).unwrap();
+    let requests = [PrepareAdditionRequest {
+        dest_path: &resolved_path,
+        source_size,
+        source_modified_time,
+    }];
+    let pending = vault
+        .prepare_addition_tasks(&requests)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let source_file = fs::File::open(&file_path).unwrap();
+    let addition_task =
+        Vault::encrypt_addition_task(vault.storage.as_ref(), pending, source_file).unwrap();
+
     assert!(matches!(
         vault
-            .find_by_path(&VaultPath::from("/dir1/renamed.txt"))
-            .unwrap(),
-        QueryResult::Found(_)
+            .commit_addition_tasks(vec![addition_task], Some(false))
+            .unwrap_err(),
+        AddFileError::DuplicateOriginalContent(_, _)
+    ));
+    assert_eq!(vault.get_file_count().unwrap(), 1);
+    assert_eq!(vault.get_storage_file_count().unwrap(), 1);
+    assert!(matches!(
+        vault.find_by_path(&path2).unwrap(),
+        QueryPathResult::NotFound
+    ));
+}
+
+/// 测试：同一批次中相同原始哈希会自动归并，只提交一个存储实体并创建多个路径映射。
+#[test]
+fn test_batch_duplicate_content_merges_single_storage_entity() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file1_path = create_dummy_file(&dir, "batch-a.txt", "same batch content");
+    let file2_path = create_dummy_file(&dir, "batch-b.txt", "same batch content");
+    let path1 = VaultPath::from("/batch/a.txt");
+    let path2 = VaultPath::from("/batch/b.txt");
+    let pairs = [
+        (file1_path.as_path(), &path1),
+        (file2_path.as_path(), &path2),
+    ];
+
+    let pending_tasks = vault.prepare_addition_tasks_from_files(&pairs).unwrap();
+    let storage = vault.storage.clone();
+    let encrypted_files: Vec<_> = pending_tasks
+        .into_iter()
+        .zip([file1_path.as_path(), file2_path.as_path()])
+        .map(|(pending, source_path)| {
+            let source_file = fs::File::open(source_path).unwrap();
+            Vault::encrypt_addition_task(storage.as_ref(), pending, source_file).unwrap()
+        })
+        .collect();
+
+    vault.commit_addition_tasks(encrypted_files, None).unwrap();
+
+    let hash1 = match vault.find_by_path(&path1).unwrap() {
+        QueryPathResult::Found(entry) => entry.sha256sum,
+        QueryPathResult::NotFound => panic!("first batch path not found"),
+    };
+    let hash2 = match vault.find_by_path(&path2).unwrap() {
+        QueryPathResult::Found(entry) => entry.sha256sum,
+        QueryPathResult::NotFound => panic!("second batch path not found"),
+    };
+
+    assert_eq!(hash1, hash2);
+    assert_eq!(vault.get_file_count().unwrap(), 2);
+    assert_eq!(vault.get_storage_file_count().unwrap(), 1);
+    assert_eq!(
+        vault.list_paths_by_hash(&hash1).unwrap(),
+        vec![path1.clone(), path2.clone()]
+    );
+}
+
+/// 测试：移除一个硬链接路径不会删除仍被其他路径引用的文件实体。
+#[test]
+fn test_hardlink_remove_keeps_storage_until_last_reference() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "shared-remove.txt", "shared remove content");
+
+    let path1 = VaultPath::from("/a/shared.txt");
+    let path2 = VaultPath::from("/b/shared.txt");
+    let hash = vault.add_file(&file_path, &path1, None).unwrap();
+    let second_hash = vault.add_file(&file_path, &path2, None).unwrap();
+    assert_eq!(hash, second_hash);
+
+    let internal_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
+    assert!(internal_path.exists());
+
+    vault.remove_file_by_path(&path1).unwrap();
+    assert!(internal_path.exists());
+    assert!(matches!(
+        vault.find_by_path(&path1).unwrap(),
+        QueryPathResult::NotFound
+    ));
+    assert!(matches!(
+        vault.find_by_path(&path2).unwrap(),
+        QueryPathResult::Found(_)
     ));
 
-    // 测试移动 (改变目录)
-    vault.move_file(&hash, &VaultPath::from("/dir2/")).unwrap();
+    vault.remove_file_by_path(&path2).unwrap();
+    assert!(!internal_path.exists());
     assert!(matches!(
-        vault
-            .find_by_path(&VaultPath::from("/dir2/renamed.txt"))
-            .unwrap(),
-        QueryResult::Found(_)
+        vault.find_by_hash(&hash).unwrap(),
+        QueryFileResult::NotFound
     ));
 }
 
@@ -110,7 +226,7 @@ fn test_remove_file() {
     let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
     let file_path = create_dummy_file(&dir, "del.txt", "content");
     let hash = vault
-        .add_file(&file_path, &VaultPath::from("/del.txt"))
+        .add_file(&file_path, &VaultPath::from("/del.txt"), None)
         .unwrap();
 
     let internal_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
@@ -121,13 +237,46 @@ fn test_remove_file() {
     assert!(!internal_path.exists());
     assert!(matches!(
         vault.find_by_hash(&hash).unwrap(),
-        QueryResult::NotFound
+        QueryFileResult::NotFound
+    ));
+}
+
+/// 测试：按哈希删除会删除同一文件实体的所有路径引用。
+#[test]
+fn test_remove_file_removes_all_hardlink_paths() {
+    let dir = tempdir().unwrap();
+    let (_vault_path, mut vault) = setup_encrypted_vault(&dir);
+    let file_path = create_dummy_file(&dir, "del-all.txt", "shared content");
+
+    let path1 = VaultPath::from("/a/del-all.txt");
+    let path2 = VaultPath::from("/b/del-all.txt");
+    let hash = vault.add_file(&file_path, &path1, None).unwrap();
+    let second_hash = vault.add_file(&file_path, &path2, None).unwrap();
+    assert_eq!(hash, second_hash);
+
+    let internal_path = vault.root_path.join(DATA_SUBDIR).join(hash.to_string());
+    assert!(internal_path.exists());
+
+    vault.remove_file(&hash).unwrap();
+
+    assert!(!internal_path.exists());
+    assert!(matches!(
+        vault.find_by_hash(&hash).unwrap(),
+        QueryFileResult::NotFound
+    ));
+    assert!(matches!(
+        vault.find_by_path(&path1).unwrap(),
+        QueryPathResult::NotFound
+    ));
+    assert!(matches!(
+        vault.find_by_path(&path2).unwrap(),
+        QueryPathResult::NotFound
     ));
 }
 
 /// 测试：大文件完整性。
 /// 验证流式加密/解密逻辑在处理超出缓冲区大小的文件时是否正确。
-/// 这是一个关键的测试，用于验证 `stream_cipher` 的逻辑。
+/// 这是一个关键的测试，用于验证分块加密的逻辑。
 #[test]
 fn test_large_file_integrity() {
     let dir = tempdir().unwrap();
@@ -153,7 +302,7 @@ fn test_large_file_integrity() {
 
     // 添加到 Vault 并重新提取
     let hash = vault
-        .add_file(&source_path, &VaultPath::from("/large.bin"))
+        .add_file(&source_path, &VaultPath::from("/large.bin"), None)
         .unwrap();
     let extract_path = dir.path().join("extracted.bin");
     vault.extract_file(&hash, &extract_path).unwrap();
@@ -195,6 +344,39 @@ fn test_batch_queries_and_search() {
     // 4. 目录层级列表
     let entries = vault.list_by_path(&VaultPath::from("/docs/")).unwrap();
     assert_eq!(entries.len(), 2); // deep/, file_B.md
+
+    let mut has_deep_directory = false;
+    let mut has_file_b = false;
+    for entry in entries {
+        match entry {
+            ListPathEntry::Directory(directory_entry) => {
+                assert_eq!(directory_entry.path, VaultPath::from("/docs/deep/"));
+                assert_eq!(directory_entry.parent_path, VaultPath::from("/docs/"));
+                assert_eq!(directory_entry.child_file_count, 1);
+                assert_eq!(directory_entry.child_directory_count, 0);
+                has_deep_directory = true;
+            }
+            ListPathEntry::File(file_path_entry) => {
+                assert_eq!(file_path_entry.path, VaultPath::from("/docs/file_B.md"));
+                has_file_b = true;
+            }
+        }
+    }
+    assert!(has_deep_directory);
+    assert!(has_file_b);
+
+    let recursive_entries = vault
+        .list_all_recursive(&VaultPath::from("/docs/"))
+        .unwrap();
+    assert_eq!(recursive_entries.len(), 2);
+    assert!(
+        recursive_entries
+            .iter()
+            .any(|entry| entry.path == VaultPath::from("/docs/file_B.md"))
+    );
+    assert!(recursive_entries.iter().any(|entry| {
+        entry.path == VaultPath::from("/docs/deep/file_C.jpg") && entry.sha256sum == hash_c
+    }));
 }
 
 /// 测试：并行 API。
@@ -252,7 +434,7 @@ fn test_parallel_add_and_extract() {
     // --- 阶段 3: 批量提交 ---
     {
         let mut v = vault_arc.lock().unwrap();
-        v.commit_addition_tasks(encrypted_files).unwrap();
+        v.commit_addition_tasks(encrypted_files, None).unwrap();
     }
 
     // --- 阶段 2: 并行提取 ---
@@ -294,7 +476,7 @@ fn test_file_integrity_check() {
 
     // 1. Add file
     let dest_path = VaultPath::from("/docs/integrity.txt");
-    let encrypted_hash = vault.add_file(&dummy_file_path, &dest_path).unwrap();
+    let encrypted_hash = vault.add_file(&dummy_file_path, &dest_path, None).unwrap();
 
     // 2. Verify integrity of the good file and assert it's OK
     assert!(vault.verify_file_integrity(&encrypted_hash).is_ok());

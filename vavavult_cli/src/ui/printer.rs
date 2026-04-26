@@ -5,12 +5,14 @@ use crate::handlers::list::ListResult;
 use crate::handlers::vault::VaultStatus;
 use crate::ui::formatter::{colorize_string, get_file_color};
 use chrono::{DateTime, Local, Utc};
-use vavavult::file::{FileEntry, VaultPath};
-use vavavult::vault::DirectoryEntry;
+use std::collections::HashSet;
+use vavavult::file::VaultPath;
+use vavavult::vault::{DirectoryEntry, FilePathEntry, ListPathEntry, QueryFileResult, Vault};
 
 /// 打印递归文件列表中的单个条目 (风格 1)
-pub fn print_recursive_file_item(entry: &FileEntry, colors_enabled: bool) {
-    let short_hash = &entry.sha256sum.to_string()[..12];
+pub fn print_recursive_file_item(_vault: &Vault, entry: &FilePathEntry, colors_enabled: bool) {
+    let hash_string = entry.sha256sum.to_string();
+    let short_hash = &hash_string[..12];
 
     // 如果启用了颜色且文件有颜色标签，则对整个路径进行着色
     let mut display_path = entry.path.to_string();
@@ -24,26 +26,39 @@ pub fn print_recursive_file_item(entry: &FileEntry, colors_enabled: bool) {
     println!("{:<14} {}", short_hash, display_path);
 }
 
+/// 打印路径化文件列表中的单个条目。
+pub fn print_file_path_item(_vault: &Vault, entry: &FilePathEntry, colors_enabled: bool) {
+    let hash_string = entry.sha256sum.to_string();
+    let short_hash = &hash_string[..12];
+
+    // 如果启用了颜色且文件有颜色标签，则加载标签并对路径着色。
+    let mut display_path = entry.path.to_string();
+    if colors_enabled && let Some(color) = get_file_color(&entry.tags) {
+        display_path = colorize_string(&display_path, color);
+    }
+
+    println!("{:<14} {}", short_hash, display_path);
+}
+
 /// 打印目录条目 (用于 ls)
 /// 替代旧的 print_shallow_list_item，不再需要查询数据库
-pub fn print_directory_entry(entry: &DirectoryEntry, colors_enabled: bool) {
+pub fn print_directory_entry(_vault: &Vault, entry: &ListPathEntry, colors_enabled: bool) {
     match entry {
-        DirectoryEntry::Directory(path) => {
+        ListPathEntry::Directory(directory_entry) => {
             // 风格 2: 目录
             // 格式: {占位符} {完整路径}
-            println!("--[folder]--   {}", path);
+            println!("--[folder]--   {}", directory_entry.path);
         }
-        DirectoryEntry::File(file_entry) => {
+        ListPathEntry::File(file_path_entry) => {
             // 风格 1: 文件
-            // 直接从 file_entry 获取信息，无需再次查询
-            let hash_prefix = &file_entry.sha256sum.to_string()[..12];
+            // 直接使用路径列表返回的路径和哈希。
+            let hash_string = file_path_entry.sha256sum.to_string();
+            let hash_prefix = &hash_string[..12];
 
             // 处理颜色
-            let mut display_path = file_entry.path.to_string();
-            if colors_enabled {
-                if let Some(color) = get_file_color(&file_entry.tags) {
-                    display_path = colorize_string(&display_path, color);
-                }
+            let mut display_path = file_path_entry.path.to_string();
+            if colors_enabled && let Some(color) = get_file_color(&file_path_entry.tags) {
+                display_path = colorize_string(&display_path, color);
             }
 
             println!("{:<14} {}", hash_prefix, display_path);
@@ -52,60 +67,93 @@ pub fn print_directory_entry(entry: &DirectoryEntry, colors_enabled: bool) {
 }
 
 /// 打印单个文件的详细信息 (风格 3)
-pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
+pub fn print_file_details(vault: &Vault, path_entry: &FilePathEntry, colors_enabled: bool) {
+    print_file_details_with_paths(vault, path_entry, &[path_entry], colors_enabled);
+}
+
+/// 打印单个文件实体及其路径映射的详细信息 (风格 3)。
+fn print_file_details_with_paths(
+    vault: &Vault,
+    path_entry: &FilePathEntry,
+    path_entries: &[&FilePathEntry],
+    colors_enabled: bool,
+) {
     println!("----------------------------------------");
 
-    // 1. 获取颜色 (如果功能开启)
-    let color_tag = if colors_enabled {
-        get_file_color(&entry.tags)
-    } else {
-        None
+    let file_entry = match vault.find_by_hash(&path_entry.sha256sum) {
+        Ok(QueryFileResult::Found(file_entry)) => Some(file_entry),
+        _ => None,
     };
 
-    // 2. 处理文件名显示 (仅对文件名变色)
-    let filename = entry.path.file_name().unwrap_or("?");
-    let display_name = if let Some(c) = color_tag {
-        colorize_string(filename, c)
+    // 1. 使用第一个路径映射作为文件名展示来源。
+    let filename = path_entry
+        .path
+        .file_name()
+        .map(str::to_string)
+        .unwrap_or_else(|| path_entry.sha256sum.to_string());
+
+    // 2. 如果启用颜色，则用第一个路径映射的颜色标签渲染文件名。
+    let display_name = if colors_enabled && let Some(c) = get_file_color(&path_entry.tags) {
+        colorize_string(&filename, c)
     } else {
-        filename.to_string()
+        filename
     };
 
     println!("  Name:            {}", display_name);
     println!("  Type:            File");
-    println!("  Path:            {}", entry.path);
-    println!("  SHA256 (ID):     {}", entry.sha256sum);
-    println!("  Original SHA256: {}", entry.original_sha256sum);
+    println!("  Paths:");
+    for entry in path_entries {
+        let mut display_path = entry.path.to_string();
+        if colors_enabled && let Some(color) = get_file_color(&entry.tags) {
+            display_path = colorize_string(&display_path, color);
+        }
+        println!("    - {}", display_path);
 
-    // [新增] 显示当前颜色名称
-    if let Some(c) = color_tag {
-        println!("  Color:           {}", c);
+        // 3. 每条路径下面紧跟自己的可见标签，避免多路径文件的标签被误合并。
+        let mut visible_tags: Vec<String> = entry
+            .tags
+            .iter()
+            .filter(|tag| !tag.starts_with('_'))
+            .map(|tag| tag.to_string())
+            .collect();
+        if colors_enabled && let Some(color) = get_file_color(&entry.tags) {
+            visible_tags.push(format!("color:{}", color));
+        }
+        let display_tags = if visible_tags.is_empty() {
+            "(none)".to_string()
+        } else {
+            visible_tags.join(", ")
+        };
+        println!("      Tag: {}", display_tags);
     }
-
-    // 过滤掉以 '_' 开头的标签
-    let visible_tags: Vec<&str> = entry
-        .tags
-        .iter()
-        .filter(|t| !t.starts_with('_'))
-        .map(|t| t.as_str())
-        .collect();
-
-    if !visible_tags.is_empty() {
-        println!("  Tags:            {}", visible_tags.join(", "));
+    println!("  SHA256 (ID):     {}", path_entry.sha256sum);
+    if let Some(file_entry) = &file_entry {
+        println!("  Original SHA256: {}", file_entry.original_sha256sum);
     }
 
     // 系统元数据：保留以 _vavavult_ 开头的
-    let system_meta: Vec<_> = entry
-        .metadata
-        .iter()
-        .filter(|m| m.key.starts_with("_vavavult_"))
-        .collect();
+    let system_meta: Vec<_> = file_entry
+        .as_ref()
+        .map(|entry| {
+            entry
+                .metadata
+                .iter()
+                .filter(|m| m.key.starts_with("_vavavult_"))
+                .collect()
+        })
+        .unwrap_or_default();
 
     // 用户元数据：过滤掉所有以 '_' 开头的键
-    let user_meta: Vec<_> = entry
-        .metadata
-        .iter()
-        .filter(|m| !m.key.starts_with('_'))
-        .collect();
+    let user_meta: Vec<_> = file_entry
+        .as_ref()
+        .map(|entry| {
+            entry
+                .metadata
+                .iter()
+                .filter(|m| !m.key.starts_with('_'))
+                .collect()
+        })
+        .unwrap_or_default();
 
     if !user_meta.is_empty() {
         println!("  Metadata:");
@@ -135,18 +183,68 @@ pub fn print_file_details(entry: &FileEntry, colors_enabled: bool) {
 
 // --- 风格 4: "详细 目录" (用于 ls -l) ---
 /// 打印单个目录的详细信息 (风格 4)
-pub fn print_dir_details(path: &VaultPath) {
-    if !path.is_dir() {
+pub fn print_dir_details(directory_entry: &DirectoryEntry) {
+    if !directory_entry.path.is_dir() {
         return;
     } // 安全检查
     println!("----------------------------------------");
-    println!("  Name:    {}", path.dir_name().unwrap_or("/"));
+    println!(
+        "  Name:    {}",
+        directory_entry.path.dir_name().unwrap_or("/")
+    );
     println!("  Type:    Folder");
-    println!("  Path:    {}", path);
+    println!("  Path:    {}", directory_entry.path);
+    println!("  Parent:  {}", directory_entry.parent_path);
+    println!(
+        "  Items:   {} file(s), {} folder(s)",
+        directory_entry.child_file_count, directory_entry.child_directory_count
+    );
+}
+
+/// 读取某个文件实体的全部路径映射，失败时退回当前列表中的路径。
+fn collect_display_path_entries<'a>(
+    vault: &Vault,
+    fallback_entries: Vec<&'a FilePathEntry>,
+) -> Vec<FilePathEntry> {
+    let Some(first_entry) = fallback_entries.first() else {
+        return Vec::new();
+    };
+
+    vault
+        .list_paths_by_hash(&first_entry.sha256sum)
+        .and_then(|paths| vault.find_by_paths(&paths))
+        .unwrap_or_else(|_| fallback_entries.into_iter().cloned().collect())
+}
+
+/// 按文件实体哈希归并并打印详细文件信息。
+fn print_merged_file_details<'a, I>(vault: &Vault, file_entries: I, colors_enabled: bool)
+where
+    I: IntoIterator<Item = &'a FilePathEntry>,
+{
+    let entries: Vec<&FilePathEntry> = file_entries.into_iter().collect();
+    let mut printed_hashes = HashSet::new();
+
+    for entry in &entries {
+        let hash_key = entry.sha256sum.to_string();
+        if !printed_hashes.insert(hash_key) {
+            continue;
+        }
+
+        // 当前列表中相同文件实体只打印一次，路径详情再扩展为全量路径映射。
+        let same_file_entries: Vec<&FilePathEntry> = entries
+            .iter()
+            .copied()
+            .filter(|candidate| candidate.sha256sum == entry.sha256sum)
+            .collect();
+        let display_path_entries = collect_display_path_entries(vault, same_file_entries);
+        let display_path_refs: Vec<&FilePathEntry> = display_path_entries.iter().collect();
+        print_file_details_with_paths(vault, entry, &display_path_refs, colors_enabled);
+    }
 }
 
 /// Takes the result from the list handler and prints it to the console.
 pub fn print_list_result(
+    vault: &Vault,
     result: &ListResult,
     long: bool,
     colors_enabled: bool,
@@ -164,14 +262,24 @@ pub fn print_list_result(
             for entry in entries {
                 if long {
                     match entry {
-                        DirectoryEntry::Directory(path) => print_dir_details(path),
-                        DirectoryEntry::File(file_entry) => {
-                            print_file_details(file_entry, colors_enabled)
+                        ListPathEntry::Directory(directory_entry) => {
+                            print_dir_details(directory_entry)
                         }
+                        ListPathEntry::File(_) => {}
                     }
                 } else {
-                    print_directory_entry(entry, colors_enabled);
+                    print_directory_entry(vault, entry, colors_enabled);
                 }
+            }
+            if long {
+                print_merged_file_details(
+                    vault,
+                    entries.iter().filter_map(|entry| match entry {
+                        ListPathEntry::Directory(_) => None,
+                        ListPathEntry::File(file_path_entry) => Some(file_path_entry),
+                    }),
+                    colors_enabled,
+                );
             }
             if long && !entries.is_empty() {
                 println!("----------------------------------------");
@@ -189,12 +297,15 @@ pub fn print_list_result(
                 return;
             }
 
-            for file in all_files {
+            for file_path_entry in all_files {
                 if long {
-                    print_file_details(file, colors_enabled);
+                    continue;
                 } else {
-                    print_recursive_file_item(file, colors_enabled);
+                    print_file_path_item(vault, file_path_entry, colors_enabled);
                 }
+            }
+            if long {
+                print_merged_file_details(vault, all_files.iter(), colors_enabled);
             }
             if long && !all_files.is_empty() {
                 println!("----------------------------------------");
@@ -234,7 +345,10 @@ pub fn print_status(status: &VaultStatus) {
     println!("  Version:        {}", status.version);
     println!("  Features:       {}", features_display);
     println!("  Encryption:     {}", encryption_status);
-    println!("  Total Files:    {}", status.file_count);
+    println!(
+        "  Total Files:    {}({})",
+        status.file_count, status.storage_file_count
+    );
     println!("  Created At:     {}", create_time_local);
     println!("  Last Updated:   {}", update_time_local);
     println!("--------------------");

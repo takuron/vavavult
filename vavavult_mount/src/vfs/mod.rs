@@ -213,14 +213,19 @@ impl DavFileSystem for VaultDavFs {
                 let vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
 
                 match vault.find_by_path(&vault_path) {
-                    Ok(vavavult::vault::QueryResult::Found(entry)) => {
+                    Ok(vavavult::vault::QueryPathResult::Found(path_entry)) => {
                         // 文件找到，提取元数据
-                        let size = extract_file_size(&entry);
-                        let modified = extract_modified_time(&entry);
+                        let (size, modified) = match vault.find_by_hash(&path_entry.sha256sum) {
+                            Ok(vavavult::vault::QueryFileResult::Found(file_entry)) => (
+                                extract_file_size(&file_entry),
+                                extract_modified_time(&file_entry),
+                            ),
+                            _ => (0, std::time::SystemTime::UNIX_EPOCH),
+                        };
                         Ok(Box::new(VaultDavMetaData::file(size, modified))
                             as Box<dyn DavMetaData>)
                     }
-                    Ok(vavavult::vault::QueryResult::NotFound) => {
+                    Ok(vavavult::vault::QueryPathResult::NotFound) => {
                         // 文件未找到，尝试作为目录查找
                         // 处理客户端省略目录路径尾部斜杠的情况
                         let dir_path_str = format!("{}/", vault_path.as_str());
@@ -276,21 +281,31 @@ impl DavFileSystem for VaultDavFs {
                 _ => FsError::GeneralFailure,
             })?;
 
-            // 将 DirectoryEntry 转换为 DavDirEntry
+            // 将 ListPathEntry 转换为 DavDirEntry
             let mut items: Vec<Box<dyn DavDirEntry>> = entries
                 .into_iter()
                 .map(|entry| -> Box<dyn DavDirEntry> {
                     match entry {
-                        vavavult::vault::DirectoryEntry::Directory(dir_path) => {
+                        vavavult::vault::ListPathEntry::Directory(directory_entry) => {
                             // 目录条目：仅提取目录名（非完整路径）
-                            let name = dir_path.dir_name().unwrap_or("").to_string();
+                            let name = directory_entry.path.dir_name().unwrap_or("").to_string();
                             Box::new(VaultDavDirEntry::dir(name))
                         }
-                        vavavult::vault::DirectoryEntry::File(file_entry) => {
+                        vavavult::vault::ListPathEntry::File(file_path_entry) => {
                             // 文件条目：仅提取文件名及元数据
-                            let name = file_entry.path.file_name().unwrap_or("").to_string();
-                            let size = extract_file_size(&file_entry);
-                            let modified = extract_modified_time(&file_entry);
+                            let name = file_path_entry
+                                .path
+                                .file_name()
+                                .map(str::to_string)
+                                .unwrap_or_default();
+                            let (size, modified) =
+                                match vault.find_by_hash(&file_path_entry.sha256sum) {
+                                    Ok(vavavult::vault::QueryFileResult::Found(file_entry)) => (
+                                        extract_file_size(&file_entry),
+                                        extract_modified_time(&file_entry),
+                                    ),
+                                    _ => (0, std::time::SystemTime::UNIX_EPOCH),
+                                };
                             Box::new(VaultDavDirEntry::file(name, size, modified))
                         }
                     }
@@ -365,23 +380,28 @@ impl DavFileSystem for VaultDavFs {
             let vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
 
             // 1. 查找文件条目
-            let file_entry = match vault.find_by_path(&vault_path) {
-                Ok(vavavult::vault::QueryResult::Found(entry)) => entry,
-                Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),
+            let path_entry = match vault.find_by_path(&vault_path) {
+                Ok(vavavult::vault::QueryPathResult::Found(entry)) => entry,
+                Ok(vavavult::vault::QueryPathResult::NotFound) => return Err(FsError::NotFound),
                 Err(_) => return Err(FsError::GeneralFailure),
             };
 
             // 2. 准备解密任务（阶段 1：快速数据库查询）
             let task = vault
-                .prepare_extraction_task(&file_entry.sha256sum)
+                .prepare_extraction_task(&path_entry.sha256sum)
                 .map_err(|_| FsError::GeneralFailure)?;
 
             // 3. 克隆存储后端引用（用于阶段 2 解密，无需持有 vault 锁）
             let storage = vault.storage.clone();
 
             // 4. 提取文件元数据（在释放锁之前）
-            let file_size = extract_file_size(&file_entry);
-            let modified = extract_modified_time(&file_entry);
+            let (file_size, modified) = match vault.find_by_hash(&path_entry.sha256sum) {
+                Ok(vavavult::vault::QueryFileResult::Found(file_entry)) => (
+                    extract_file_size(&file_entry),
+                    extract_modified_time(&file_entry),
+                ),
+                _ => (0, std::time::SystemTime::UNIX_EPOCH),
+            };
 
             // 5. 释放锁
             drop(vault);
@@ -423,14 +443,8 @@ impl DavFileSystem for VaultDavFs {
 
             let mut vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
 
-            let file_entry = match vault.find_by_path(&vault_path) {
-                Ok(vavavult::vault::QueryResult::Found(entry)) => entry,
-                Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),
-                Err(_) => return Err(FsError::GeneralFailure),
-            };
-
             let _ = vault
-                .remove_file(&file_entry.sha256sum)
+                .remove_file_by_path(&vault_path)
                 .map_err(|_| FsError::GeneralFailure)?;
             Ok(())
         })
@@ -448,12 +462,17 @@ impl DavFileSystem for VaultDavFs {
             }
             let vault_path = VaultPath::new(&path_str);
 
+            let mut vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
+
+            let _ = vault
+                .remove_directory(&vault_path)
+                .map_err(|_| FsError::GeneralFailure)?;
+
+            // Also clean up virtual_dirs just in case
             let mut virtual_dirs = self.virtual_dirs.lock().unwrap();
-            if virtual_dirs.remove(&vault_path) {
-                Ok(())
-            } else {
-                Ok(())
-            }
+            virtual_dirs.remove(&vault_path);
+
+            Ok(())
         })
     }
 
@@ -464,36 +483,16 @@ impl DavFileSystem for VaultDavFs {
             }
 
             let from_path = dav_path_to_vault_path(from);
-            let mut to_path = dav_path_to_vault_path(to);
+            let to_path = dav_path_to_vault_path(to);
 
             let mut vault = self.vault.lock().map_err(|_| FsError::GeneralFailure)?;
 
+            let _ = vault
+                .move_path(&from_path, &to_path)
+                .map_err(|_| FsError::GeneralFailure)?;
+
             if from_path.is_dir() {
-                // 如果是目录，我们要递归移动里面的所有文件，并更新 virtual_dirs
-                let mut to_path_str = to_path.as_str().to_string();
-                if !to_path_str.ends_with('/') {
-                    to_path_str.push('/');
-                }
-                to_path = vavavult::file::VaultPath::new(&to_path_str);
-
-                // 递归获取所有文件
-                let files_to_move = vault.list_all_recursive(&from_path).unwrap_or_default();
-                for hash in files_to_move {
-                    if let Ok(vavavult::vault::QueryResult::Found(entry)) =
-                        vault.find_by_hash(&hash)
-                    {
-                        if let Some(relative) = entry.path.as_str().strip_prefix(from_path.as_str())
-                        {
-                            let new_path_str = format!("{}{}", to_path.as_str(), relative);
-                            let new_path = vavavult::file::VaultPath::new(&new_path_str);
-                            let _ = vault
-                                .move_file(&hash, &new_path)
-                                .map_err(|_| FsError::GeneralFailure)?;
-                        }
-                    }
-                }
-
-                // 更新 virtual_dirs（处理那些没有实体文件但是被记录为空目录的记录）
+                // 同步 WebDAV 虚拟空目录记录，实体目录移动由核心库完成。
                 let mut virtual_dirs = self.virtual_dirs.lock().unwrap();
                 let mut new_virtual_dirs = std::collections::HashSet::new();
                 for vd in virtual_dirs.drain() {
@@ -508,20 +507,8 @@ impl DavFileSystem for VaultDavFs {
                     }
                 }
                 *virtual_dirs = new_virtual_dirs;
-
-                return Ok(());
             }
 
-            // 单个文件重命名
-            let file_entry = match vault.find_by_path(&from_path) {
-                Ok(vavavult::vault::QueryResult::Found(entry)) => entry,
-                Ok(vavavult::vault::QueryResult::NotFound) => return Err(FsError::NotFound),
-                Err(_) => return Err(FsError::GeneralFailure),
-            };
-
-            let _ = vault
-                .move_file(&file_entry.sha256sum, &to_path)
-                .map_err(|_| FsError::GeneralFailure)?;
             Ok(())
         })
     }
@@ -751,7 +738,7 @@ mod tests {
 
         let dest_path = VaultPath::new(vault_path);
         vault
-            .add_file(&src_path, &dest_path)
+            .add_file(&src_path, &dest_path, None)
             .unwrap_or_else(|_| panic!("无法添加测试文件 {} 到保险库", vault_path));
     }
 

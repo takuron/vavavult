@@ -13,10 +13,11 @@ use thiserror::Error;
 use crate::common::hash::VaultHash;
 use crate::file::VaultPath;
 use crate::vault::Vault;
-use crate::vault::add::{AddFileError, encrypt_addition_task, resolve_file_metadata, PendingAdditionTask};
+use crate::vault::add::{
+    AddFileError, PendingAdditionTask, encrypt_addition_task, resolve_file_metadata,
+};
 use crate::vault::metadata::MetadataError;
-use crate::vault::query::{QueryError, QueryResult};
-use crate::vault::remove::ForceRemoveError;
+use crate::vault::query::{QueryError, QueryFileResult, QueryPathResult};
 use crate::vault::tags::TagError;
 
 /// Defines errors that can occur during the file fixing process.
@@ -70,12 +71,6 @@ pub enum FixError {
     #[error("Error during storage operation: {0}")]
     StorageError(#[from] std::io::Error),
 
-    /// An error occurred while trying to remove the old file entry.
-    //
-    // // 尝试移除旧文件条目时发生错误。
-    #[error("Error removing old file entry: {0}")]
-    Remove(#[from] ForceRemoveError),
-
     /// An error occurred while re-applying tags to the new file.
     //
     // // 将标签重新应用到新文件时发生错误。
@@ -99,10 +94,20 @@ pub(crate) fn fix_file(
     }
 
     // 2. 查找现有的文件元数据记录，但不检查物理文件是否存在
-    let old_entry = match crate::vault::query::check_by_path_no_validation(vault, vault_path)? {
-        QueryResult::Found(entry) => entry,
-        QueryResult::NotFound => return Err(FixError::NotFound(vault_path.as_str().to_string())),
+    let old_path_entry = match crate::vault::query::check_by_path_no_validation(vault, vault_path)?
+    {
+        QueryPathResult::Found(entry) => entry,
+        QueryPathResult::NotFound => {
+            return Err(FixError::NotFound(vault_path.as_str().to_string()));
+        }
     };
+    let old_entry =
+        match crate::vault::query::check_by_hash_no_validation(vault, &old_path_entry.sha256sum)? {
+            QueryFileResult::Found(entry) => entry,
+            QueryFileResult::NotFound => {
+                return Err(FixError::NotFound(vault_path.as_str().to_string()));
+            }
+        };
 
     // 3. 对新文件流式加密暂存
     let (resolved_path, file_size, source_modified_time) =
@@ -113,8 +118,7 @@ pub(crate) fn fix_file(
         source_modified_time,
     };
     let source_file = std::fs::File::open(source_path).map_err(AddFileError::IoError)?;
-    let addition_task =
-        encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
+    let addition_task = encrypt_addition_task(vault.storage.as_ref(), pending, source_file)?;
 
     // 4. 校验替换是否合法
     if addition_task.file_entry.original_sha256sum != old_entry.original_sha256sum {
@@ -122,7 +126,7 @@ pub(crate) fn fix_file(
     }
 
     // 5. 保存旧文件的tag和metadata
-    let old_tags = old_entry.tags;
+    let old_tags = old_path_entry.tags;
     let old_add_time = old_entry
         .metadata
         .iter()
@@ -159,16 +163,19 @@ pub(crate) fn fix_file(
             params![&old_entry.sha256sum],
         )?;
 
-        // 6b. 插入新的文件记录
+        // 6b. 插入新的文件实体与原路径映射
         tx.execute(
-            "INSERT INTO files (sha256sum, path, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO files (sha256sum, original_sha256sum, encrypt_password) VALUES (?1, ?2, ?3)",
             params![
                 &new_entry.sha256sum,
-                &new_entry.path,
                 &new_entry.original_sha256sum,
                 &new_entry.encrypt_password,
             ],
         )?;
+        crate::vault::query::insert_file_entry_in_conn(&tx, vault_path, &new_entry.sha256sum)?;
+        let new_file_entry_id = crate::vault::query::resolve_file_entry_in_conn(&tx, vault_path)?
+            .ok_or_else(|| FixError::NotFound(vault_path.as_str().to_string()))?
+            .0;
 
         // 6c. 重新添加tag和metadata
         let mut meta_stmt = tx.prepare(
@@ -190,9 +197,9 @@ pub(crate) fn fix_file(
         let now = crate::utils::time::now_as_rfc3339_string();
         meta_stmt.execute(params![&new_entry.sha256sum, META_FILE_UPDATE_TIME, now])?;
 
-        let mut tag_stmt = tx.prepare("INSERT INTO tags (file_sha256sum, tag) VALUES (?1, ?2)")?;
+        let mut tag_stmt = tx.prepare("INSERT INTO tags (file_entry_id, tag) VALUES (?1, ?2)")?;
         for tag in &old_tags {
-            tag_stmt.execute(params![&new_entry.sha256sum, tag])?;
+            tag_stmt.execute(params![new_file_entry_id, tag])?;
         }
 
         // 7. 安全删除旧文件（如有）

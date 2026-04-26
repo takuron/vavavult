@@ -17,6 +17,7 @@ mod common;
 use crate::common::TestContext;
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::fs;
 
 /// Tests the complete lifecycle of creating a vault and checking its status.
 ///
@@ -59,16 +60,16 @@ fn test_vault_creation_and_status() -> anyhow::Result<()> {
             // 断言标准输出包含预期的内容
             predicate::str::contains("Vault 'test-vault' is now open.")
                 .and(predicate::str::contains("Name:           test-vault"))
-                .and(predicate::str::contains("Total Files:    0")),
+                .and(predicate::str::contains("Total Files:    0(0)")),
         );
 
     Ok(())
 }
 
 #[test]
-fn test_remove_force_option() -> anyhow::Result<()> {
+fn test_remove_missing_storage_file() -> anyhow::Result<()> {
     // 1. Setup: Create vault and add a file
-    let context = TestContext::new("force-rm-vault", "")?;
+    let context = TestContext::new("missing-storage-rm-vault", "")?;
     context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
 
     // 2. Get file hash and manually delete physical file to create inconsistency
@@ -84,30 +85,253 @@ fn test_remove_force_option() -> anyhow::Result<()> {
         "Physical file should be deleted."
     );
 
-    // 3. Attempt normal `rm` - it should fail with a data inconsistency error
+    // 3. Attempt normal `rm` without confirmation - it should reach the prompt and cancel.
     let mut cmd_fail = Command::new(env!("CARGO_BIN_EXE_vavavult"));
     cmd_fail.arg("open").arg(&context.vault_path);
-    // The 'y' is not needed as the command fails before the prompt
     let repl_input_fail = "rm /test_file.txt\nexit\n".to_string();
 
     cmd_fail
         .write_stdin(repl_input_fail)
         .assert()
-        .success() // The CLI process itself exits cleanly
-        .stderr(predicate::str::contains("Data inconsistency")); // Check for the specific error
+        .success()
+        .stdout(predicate::str::contains(
+            "Are you sure you want to PERMANENTLY DELETE file '/test_file.txt'?",
+        ))
+        .stdout(predicate::str::contains("Operation cancelled."));
 
-    // 4. Attempt `rm -f -y` - it should succeed without confirmation
-    let mut cmd_force = Command::new(env!("CARGO_BIN_EXE_vavavult"));
-    cmd_force.arg("open").arg(&context.vault_path);
-    // Use -f to force the non-validating lookup, and -y to skip the prompt
-    let repl_input_force = "rm -f -y /test_file.txt\nls /\nexit\n".to_string();
+    // 4. Attempt normal `rm -y` - DB-first removal should succeed even when storage is missing.
+    let mut cmd_remove = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_remove.arg("open").arg(&context.vault_path);
+    let repl_input_remove = "rm -y /test_file.txt\nls /\nexit\n".to_string();
 
-    cmd_force
-        .write_stdin(repl_input_force)
+    cmd_remove
+        .write_stdin(repl_input_remove)
         .assert()
         .success()
         .stdout(predicate::str::contains("1 file(s) successfully deleted"))
         .stdout(predicate::str::contains("(empty)")); // Verify the file is gone
+
+    Ok(())
+}
+
+#[test]
+fn test_move_accepts_only_vault_path_source() -> anyhow::Result<()> {
+    let context = TestContext::new("move-path-only-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let (hash, _) = context.get_file_hash_and_path("/test_file.txt")?;
+
+    // 1. 哈希源必须被拒绝，避免 mv 继续接受非路径目标。
+    let mut cmd_hash = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_hash.arg("open").arg(&context.vault_path);
+    let repl_input_hash = format!("mv {} /hash_moved.txt\nexit\n", hash);
+
+    cmd_hash
+        .write_stdin(repl_input_hash)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "The mv command only accepts source paths starting with '/'",
+        ));
+
+    // 2. 保险库路径源仍然可以正常移动。
+    let mut cmd_path = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_path.arg("open").arg(&context.vault_path);
+    let repl_input_path = "mv /test_file.txt /path_moved.txt\nls /\nexit\n".to_string();
+
+    cmd_path
+        .write_stdin(repl_input_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("File successfully moved."))
+        .stdout(predicate::str::contains("/path_moved.txt"));
+
+    Ok(())
+}
+
+#[test]
+fn test_move_file_to_directory_keeps_original_name() -> anyhow::Result<()> {
+    let context = TestContext::new("move-file-to-directory-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd.arg("open").arg(&context.vault_path);
+    let repl_input = "mv /test_file.txt /docs/\nls /docs/\nls /\nexit\n".to_string();
+
+    cmd.write_stdin(repl_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Moving file '/test_file.txt' to '/docs/test_file.txt'",
+        ))
+        .stdout(predicate::str::contains("/docs/test_file.txt"))
+        .stdout(predicate::str::contains("/docs/"));
+
+    Ok(())
+}
+
+#[test]
+fn test_rename_accepts_only_vault_path_source() -> anyhow::Result<()> {
+    let context = TestContext::new("rename-path-only-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let (hash, _) = context.get_file_hash_and_path("/test_file.txt")?;
+
+    // 1. 哈希源必须被拒绝，避免 rename 继续接受非路径目标。
+    let mut cmd_hash = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_hash.arg("open").arg(&context.vault_path);
+    let repl_input_hash = format!("rename {} renamed.txt\nexit\n", hash);
+
+    cmd_hash
+        .write_stdin(repl_input_hash)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "The rename command only accepts source paths starting with '/'",
+        ));
+
+    // 2. 保险库路径源仍然可以正常重命名。
+    let mut cmd_path = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_path.arg("open").arg(&context.vault_path);
+    let repl_input_path = "rename /test_file.txt renamed.txt\nls /\nexit\n".to_string();
+
+    cmd_path
+        .write_stdin(repl_input_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Path successfully renamed."))
+        .stdout(predicate::str::contains("/renamed.txt"));
+
+    Ok(())
+}
+
+#[test]
+fn test_copy_file_to_directory_keeps_original_name() -> anyhow::Result<()> {
+    let context = TestContext::new("copy-file-to-directory-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd.arg("open").arg(&context.vault_path);
+    let repl_input = "copy /test_file.txt /copies/\nls /copies/\nls /\nexit\n".to_string();
+
+    cmd.write_stdin(repl_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Copying file '/test_file.txt' to '/copies/test_file.txt'",
+        ))
+        .stdout(predicate::str::contains("/copies/test_file.txt"))
+        .stdout(predicate::str::contains("/test_file.txt"));
+
+    Ok(())
+}
+
+#[test]
+fn test_copy_accepts_only_vault_path_source() -> anyhow::Result<()> {
+    let context = TestContext::new("copy-path-only-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let (hash, _) = context.get_file_hash_and_path("/test_file.txt")?;
+
+    // 1. 哈希源必须被拒绝，copy/cp 只通过路径复制文件映射。
+    let mut cmd_hash = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_hash.arg("open").arg(&context.vault_path);
+    let repl_input_hash = format!("copy {} /hash_copy.txt\nexit\n", hash);
+
+    cmd_hash
+        .write_stdin(repl_input_hash)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "The copy command only accepts source paths starting with '/'",
+        ));
+
+    // 2. 主命令、cp 别名和兼容拼写 cpoy 都能通过路径复制。
+    let mut cmd_path = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_path.arg("open").arg(&context.vault_path);
+    let repl_input_path = concat!(
+        "copy /test_file.txt /copy_a.txt\n",
+        "cp /test_file.txt /copy_b.txt\n",
+        "cpoy /test_file.txt /copy_c.txt\n",
+        "ls /\n",
+        "exit\n"
+    )
+    .to_string();
+
+    cmd_path
+        .write_stdin(repl_input_path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("File successfully copied."))
+        .stdout(predicate::str::contains("/copy_a.txt"))
+        .stdout(predicate::str::contains("/copy_b.txt"))
+        .stdout(predicate::str::contains("/copy_c.txt"));
+
+    Ok(())
+}
+
+#[test]
+fn test_remove_all_paths_by_hash() -> anyhow::Result<()> {
+    let context = TestContext::new("remove-hash-all-paths-vault", "")?;
+    context.add_file("test_file.txt", "some content", Some("/test_file.txt"))?;
+
+    let (hash, _) = context.get_file_hash_and_path("/test_file.txt")?;
+
+    // 1. 先通过 copy 产生同一哈希的多个路径映射。
+    let mut cmd_copy = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_copy.arg("open").arg(&context.vault_path);
+    cmd_copy
+        .write_stdin("copy /test_file.txt /copy.txt\nexit\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("File successfully copied."));
+
+    // 2. 按哈希删除必须移除该哈希对应的所有文件路径。
+    let mut cmd_remove = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_remove.arg("open").arg(&context.vault_path);
+    let repl_input = format!("rm -y {}\nls /\nexit\n", hash);
+
+    cmd_remove
+        .write_stdin(repl_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 file(s) successfully deleted"))
+        .stdout(predicate::str::contains("(empty)"));
+
+    Ok(())
+}
+
+#[test]
+fn test_remove_empty_directory_path() -> anyhow::Result<()> {
+    let context = TestContext::new("remove-empty-directory-vault", "")?;
+    let local_empty_dir = context.path().join("empty_dir");
+    fs::create_dir(&local_empty_dir)?;
+
+    // 1. 添加空本地目录会在保险库中创建空路径。
+    let mut cmd_add = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_add.arg("open").arg(&context.vault_path);
+    let add_input = format!(
+        "add \"{}\" -p /empty/\nls /\nexit\n",
+        local_empty_dir.display()
+    );
+
+    cmd_add
+        .write_stdin(add_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("/empty/"));
+
+    // 2. rm -r 应删除空目录本身，而不是因没有文件而跳过。
+    let mut cmd_remove = Command::new(env!("CARGO_BIN_EXE_vavavult"));
+    cmd_remove.arg("open").arg(&context.vault_path);
+    let remove_input = "rm -r -y /empty/\nls /\nexit\n".to_string();
+
+    cmd_remove
+        .write_stdin(remove_input)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 file(s) successfully deleted"))
+        .stdout(predicate::str::contains("(empty)"));
 
     Ok(())
 }

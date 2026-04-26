@@ -20,7 +20,7 @@ use tempfile::tempdir;
 use vavavult::common::constants::{META_FILE_ADD_TIME, META_FILE_UPDATE_TIME};
 use vavavult::common::metadata::MetadataEntry;
 use vavavult::file::VaultPath;
-use vavavult::vault::{FixError, QueryResult};
+use vavavult::vault::{FixError, QueryFileResult, QueryPathResult};
 
 mod common;
 
@@ -36,8 +36,8 @@ fn test_fix_lost_file_success() {
     let source_path = source_file.path();
 
     let dest_path = VaultPath::from("/test/original.txt");
-    let old_hash = vault.add_file(source_path, &dest_path).unwrap();
-    vault.add_tag(&old_hash, "test-tag").unwrap();
+    let old_hash = vault.add_file(source_path, &dest_path, None).unwrap();
+    vault.add_tag(&dest_path, "test-tag").unwrap();
     vault
         .set_file_metadata(
             &old_hash,
@@ -49,10 +49,14 @@ fn test_fix_lost_file_success() {
         .unwrap();
 
     let old_entry = match vault.find_by_hash(&old_hash).unwrap() {
-        QueryResult::Found(entry) => entry,
+        QueryFileResult::Found(entry) => entry,
         _ => panic!("File should exist"),
     };
-    assert_eq!(old_entry.tags, vec!["test-tag"]);
+    let old_path_entry = match vault.find_by_path(&dest_path).unwrap() {
+        QueryPathResult::Found(entry) => entry,
+        _ => panic!("Path should exist"),
+    };
+    assert_eq!(old_path_entry.tags, vec!["test-tag"]);
     let old_add_time = old_entry
         .metadata
         .iter()
@@ -102,15 +106,19 @@ fn test_fix_lost_file_success() {
     assert!(new_data_file_path.exists());
 
     // c. The file should be accessible at the same path with the new hash.
-    let new_entry = match vault.find_by_path(&dest_path).unwrap() {
-        QueryResult::Found(entry) => entry,
+    let new_path_entry = match vault.find_by_path(&dest_path).unwrap() {
+        QueryPathResult::Found(entry) => entry,
         _ => panic!("File should be found at original path"),
     };
-    assert_eq!(new_entry.sha256sum, new_hash);
+    assert_eq!(new_path_entry.sha256sum, new_hash);
+    let new_entry = match vault.find_by_hash(&new_hash).unwrap() {
+        QueryFileResult::Found(entry) => entry,
+        _ => panic!("File should be found by new hash"),
+    };
     assert_eq!(new_entry.original_sha256sum, old_entry.original_sha256sum);
 
     // d. Tags should have been preserved.
-    assert_eq!(new_entry.tags, vec!["test-tag"]);
+    assert_eq!(new_path_entry.tags, vec!["test-tag"]);
 
     // e. Custom metadata should have been preserved.
     assert_eq!(
@@ -157,7 +165,9 @@ fn test_fix_file_hash_mismatch() {
     let mut original_file = tempfile::NamedTempFile::new().unwrap();
     original_file.write_all(b"original content").unwrap();
     let vault_path = VaultPath::from("/file.txt");
-    vault.add_file(original_file.path(), &vault_path).unwrap();
+    vault
+        .add_file(original_file.path(), &vault_path, None)
+        .unwrap();
 
     // Create an "imposter" file with different content.
     let mut imposter_file = tempfile::NamedTempFile::new().unwrap();

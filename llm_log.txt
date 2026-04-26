@@ -1,20 +1,41 @@
-[2026-03-19T10:32:10+08:00] Created vavavult_mount development plan: Updated docs/TODO.md with detailed 8-phase task breakdown for WebDAV mount extension. Created docs/mount_architecture.md with comprehensive architecture document covering module structure, dependency graph, VaultDavFs/VaultDavFile design, concurrency model (two-phase API with Mutex), metadata mapping, auth middleware, server lifecycle, CLI integration, Vault public API usage checklist, and testing strategy.
-[2026-03-19T20:09:13+08:00] Completed Phase 0 of Vavavult Mount coding plan: Added WebDAV dependencies (dav-server, tokio, hyper, etc.) to workspace Cargo.toml and vavavult_mount/Cargo.toml.
-[2026-03-20T11:36:47+08:00] Implemented Phase 1 of Vavavult Mount: Defined MountError, MountConfig, AuthConfig, and exported them in lib.rs for vavavult_mount.
-[2026-03-25T10:50:46+08:00] 阶段2：实现了VaultDavFs虚拟文件系统层，包括metadata、read_dir、open方法；实现了VaultDavFile用于文件读取；添加了bytes和futures依赖
-[2026-03-25T12:18:33+08:00] 修复了vavavult_mount模块的编译错误：修正dav_server导入路径使用fs模块，添加DavPath导入，为元数据结构添加Debug和Clone derive，实现missing的modified/write_buf/seek方法，修正read_dir返回DavDirEntry类型，添加uuid依赖，修复文件解密逻辑和字段名称
-[2026-04-18T11:48:52+08:00] 完成阶段2：虚拟文件系统层只读实现。重写 vfs/mod.rs（VaultDavFs、VaultDavMetaData、VaultDavDirEntry）和 vfs/node.rs（VaultDavFile），实现 DavFileSystem 的 metadata/read_dir/open 方法，支持惰性解密、Cursor seek、两阶段提取 API。添加 28 个单元测试全部通过。更新 llm_readme.txt 添加 vavavult_mount 文档。
-[2026-04-18T12:43:15+08:00] 改进 VaultDavFile 为流式读取架构：将 Cursor<Vec<u8>> 全量内存缓存替换为基于临时文件句柄的按需流式读取。解密到临时文件后保持 File 句柄，read_bytes 仅分配请求大小的缓冲区（O(1) 内存），seek 委托给 File 原生 Seek（OS lseek），添加 Drop impl 自动清理临时文件。新增 2 个测试（Drop 清理、反复 seek+read），全部 30 个测试通过。
-[2026-04-18T15:26:07+08:00] [Phase 3] 实现 WebDAV 服务器启动与生命周期管理：新增 vavavult_mount/src/server.rs（ServerHandle、start_webdav_server）和 vavavult_mount/src/auth.rs（check_basic_auth），为 VaultDavFs 添加 Clone derive，更新 lib.rs 导出，更新 llm_readme.txt。
-[2026-04-19T18:27:50+08:00] Implemented Phase 5: WebDAV write support. Added streaming file upload without local temp files using prepare_addition_task_from_reader. Implemented virtual directories in memory for empty directories created via WebDAV. Handled create_dir, remove_file, remove_dir, and rename in DavFileSystem with read_only config check.
-[2026-04-20T09:38:24+08:00] Implemented SystemMounter in vavavult_mount/src/sys_mount.rs to mount WebDAV as a local network drive before CLI integration. Documented in llm_readme.txt.
-[2026-04-20T09:40:02+08:00] Added rclone fallback for macOS in SystemMounter to match Windows and Linux behavior.
-[2026-04-20T09:48:13+08:00] Implemented CLI integration for mount feature: added Mount/Unmount REPL commands, handler, and state management, providing auto-mounting by default on port 21980.
-[2026-04-20T10:04:18+08:00] Fixed DuplicateFileName error during WebDAV file modification by properly removing the old file before adding the overwritten one in VaultDavFile::new_write.
-[2026-04-20T10:14:07+08:00] Fixed issue where temporarily empty directories could not be renamed in WebDAV by adding recursive move logic and updating virtual_dirs in DavFileSystem::rename.
-[2026-04-22T11:17:31+08:00] Refactored file addition API to a three-stage design (prepare/encrypt/commit). Default interface now uses Read streams instead of file paths. Added PrepareAdditionRequest, PendingAdditionTask types. Renamed execute_addition_tasks to commit_addition_tasks. Added Vault::encrypt_addition_task as associated function for lock-free parallel encryption. Added add_from_reader convenience method. Removed prepare_addition_task_standalone and prepare_addition_task_from_reader standalone functions. Updated CLI, mount, fix, and tests.
-[2026-04-22T16:13:18+08:00] Refactored extraction API: Stage 2 now decrypts to a Write stream (Vault::decrypt_extraction_task) instead of directly to a file. Added Vault::decrypt_extraction_task_to_file as file shortcut. Added batch Vault::prepare_extraction_tasks. Removed execute_extraction_task_standalone and execute_extraction_task instance method. Updated CLI, mount, and tests.
-[2026-04-22T16:54:14+08:00] [llm]Refactored mount read path to pipe-based streaming (spawn_blocking + mpsc channel) and added rclone cache/performance parameters[Claude Opus 4.6]
-[2026-04-22T20:43:01+08:00] Removed Seek support from VaultDavFile (always returns FsError::NotImplemented). Changed rclone to --vfs-cache-mode=full to delegate random access and concurrency to rclone VFS layer. Removed RandomAccess variant, drain_to_random_access(), temp file cleanup, and uuid dependency. Updated tests and llm_readme.txt.
-[2026-04-23T20:43:13+08:00] 屏蔽了 vavavult_cli 中的 mount/unmount 功能，并将所有 crate 的版本号回退至 0.4.3。
-[2026-04-23T20:46:19+08:00] 修复了屏蔽 mount 功能后 AppState 中 unused fields 导致的编译错误。
+[2026-04-24T11:05:43+08:00] Updated software version to 0.5.0, bumped vault version to 3 (destructive), and blocked opening of non-v3 vaults.
+[2026-04-24T12:46:56+08:00] Complete phase 1 storage abstraction for chunked encryption.
+[2026-04-24T13:17:07+08:00] Complete phase 2 chunked encryption core and add ChunkedStorage wrapper.
+[2026-04-24T13:44:54+08:00] Hide ChunkedReader behind opaque Read+Seek APIs.
+[2026-04-24T14:45:33+08:00] Designed database schema and development plan for removing path from files table and introducing many-to-one hardlink architecture via directories and file_entries tables. Wrote plan to docs/TODO.md.
+[2026-04-24T14:57:30+08:00] Implemented Phase 1 hardlink schema: removed path from files, added directories and file_entries tables with root directory initialization, added schema regression test, and updated TODO/readme docs.
+[2026-04-24T15:51:37+08:00] Implemented Phase 2 hardlink query adaptation: removed FileEntry.path, rewrote path/hash/list queries over directories and file_entries, added list_paths_by_hash, and adapted CLI/VFS display paths to query the first linked path.
+[2026-04-24T16:41:43+08:00] Implemented and tested hardlink phase 3: commit now creates directory/file_entries mappings with content-entity reuse, remove unlinks mappings with ref-count cleanup, move/rename update mappings only, and regression/specialized tests pass.
+[2026-04-24T16:46:13+08:00] Synced hardlink phase 3 TODO/readme status and clarified remove_file public documentation for mapping-based removal semantics.
+[2026-04-24T19:14:55+08:00] Updated path listing APIs to return DirectoryEntry/FilePathEntry/ListPathEntry and changed recursive listing to FilePathEntry, adapting CLI, VFS, tests, and docs.
+[2026-04-24T19:26:38+08:00] Changed get_file_count to count path mappings, added get_storage_file_count for stored file entities, and updated CLI status to show total(storage).
+[2026-04-25T09:57:16+08:00] 为添加阶段3增加重复原始哈希控制参数，默认自动归并，严格模式报错，并同步CLI与测试。
+[2026-04-25T10:08:23+08:00] 破坏性调整添加快捷API和阶段3提交API，直接接收重复原始哈希策略参数，并验证批内重复哈希自动归并。
+[2026-04-25T10:25:12+08:00] Refactored rekey API into prepare/re-encrypt/commit stages.
+[2026-04-25T11:09:15+08:00] Refactored tags to be vault-path scoped via file_entries, moved FilePathEntry to file module with tags, split query result enums into QueryFileResult and QueryPathResult, and updated API/tests.
+[2026-04-25T11:21:13+08:00] Changed hash-based remove APIs to delete all path references while path-based remove only unlinks one path until no references remain.
+[2026-04-25T11:41:02+08:00] Unified move and rename APIs around Vault::move_path with VaultPath-only sources/targets, added directory subtree move support, updated CLI/WebDAV callers, docs, and regression tests.
+[2026-04-25T11:53:21+08:00] Restored Vault::rename_path_inplace as a VaultPath-based in-place rename API for both files and directories, and switched CLI rename back to the dedicated rename API.
+[2026-04-25T12:10:43+08:00] Added path creation APIs: copy_file_path for tag-preserving hardlink-style file path copies, create_path_from_hash for hash-backed path creation, and create_empty_path for empty directory creation with conflict tests.
+[2026-04-25T12:23:16+08:00] Moved move_path and rename_path_inplace implementations from update.rs into path_ops.rs, changed their public error type to PathOperationError, and relocated move/rename tests into path_operations.rs.
+[2026-04-25T12:31:04+08:00] Fixed CLI move/rename compilation after path operation refactor by adding PathOperationError conversion to CliError.
+[2026-04-25T12:43:20+08:00] 将 DB-first 元数据逻辑与修复边界计划写入 docs/TODO.md。
+[2026-04-25T12:50:44+08:00] Implement DB-first metadata behavior and missing-storage removal boundaries.
+[2026-04-25T12:55:58+08:00] Update CLI remove force-option test for DB-first missing-storage semantics.
+[2026-04-25T13:04:28+08:00] Remove force remove API and CLI --force option after DB-first deletion semantics.
+[2026-04-25T13:14:56+08:00] Implemented recursive directory removal API (remove_directory) in vavavult core library to safely delete directory trees and their file contents with proper reference counting and physical storage cleanup, and integrated it into the vavavult_mount WebDAV layer.
+[2026-04-25T13:35:10+08:00] Refactored and reorganized llm_readme.txt into modular markdown documents (llm_readme.md and docs/*.md) and comprehensively restructured vavavult_core_architecture.md to improve readability and architecture documentation.
+[2026-04-25T13:54:44+08:00] Refactored docs/TODO.md by splitting it into TODO.md, RoadMap.md, and TODO_finished.md to better track active tasks, long-term plans, and completed items.
+[2026-04-25T13:59:16+08:00] Simplified RoadMap.md to a checklist format and moved vague core feature descriptions from TODO.md to RoadMap.md, leaving only actionable tasks with complete plans in TODO.md.
+[2026-04-26T09:40:40+08:00] Improve CLI long list output for multi-path file details.
+[2026-04-26T09:48:15+08:00] Restrict CLI tag commands to path targets and show color fallback tags.
+[2026-04-26T09:57:44+08:00] Add Vault colorful tag extension methods and route CLI color operations through them.
+[2026-04-26T10:00:30+08:00] Add Vault method to read path color from colorful tag extension.
+[2026-04-26T10:04:29+08:00] Adjust CLI detail output to print path-local tag lines under each path.
+[2026-04-26T10:08:07+08:00] Fix CLI test helper for new multi-path detail output.
+[2026-04-26T10:22:10+08:00] Updated CLI move command to accept only vault path sources and reject hash sources.
+[2026-04-26T10:30:32+08:00] Updated CLI rename to accept only vault path sources and added path-based copy/cp/cpoy command.
+[2026-04-26T10:39:14+08:00] Allowed CLI move and copy file sources to target directories while preserving original filenames.
+[2026-04-26T11:12:08+08:00] 完善 CLI remove：支持按路径删除文件/目录、按哈希删除所有路径映射，并允许删除空目录路径。
+[2026-04-26T11:34:11+08:00] 将 CLI 多文件 add/extract/verify 改为默认并行，并新增 --single-thread 使用旧单线程模式。
+[2026-04-26T12:05:40+08:00] 为 rekey 添加多路径引用测试，覆盖目录引用和路径标签在重加密后的保留。

@@ -1,2 +1,2 @@
+pub mod chunked;
 pub mod encrypt;
-pub(crate) mod stream_cipher;

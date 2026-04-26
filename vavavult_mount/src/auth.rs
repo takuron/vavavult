@@ -8,7 +8,6 @@
 // //
 // // 提供一个无状态函数，用于根据预期的 `AuthConfig` 验证 HTTP Basic Auth 凭据。
 // // 当配置了认证时，WebDAV 服务器使用此函数来控制访问。
-
 use crate::config::AuthConfig;
 
 /// Validates an HTTP Basic Auth header value against the expected credentials.
