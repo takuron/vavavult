@@ -1,7 +1,6 @@
 use crate::core::helpers::{Target, display_path_for_entry, identify_target};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
-use indicatif::{ProgressBar, ProgressStyle};
 use vavavult::common::hash::VaultHash;
 use vavavult::file::VaultPath;
 use vavavult::vault::{QueryFileResult, QueryPathResult, Vault};
@@ -114,47 +113,76 @@ pub fn handle_remove(
         }
     }
 
-    let total_count = targets_to_delete.len();
-    let pb = ProgressBar::new(total_count as u64);
-    if total_count > 1 {
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(
-                    "{spinner:.green} [Deleting] [{elapsed_precise}] [{bar:40.red/yellow}] {pos}/{len}",
-                )
-                .map_err(|e| CliError::Unexpected(e.to_string()))?
-                .progress_chars("#>-"),
-        );
-    }
-
     let mut success_count = 0;
     let mut fail_count = 0;
 
     for target in targets_to_delete {
-        let result = match &target.action {
-            DeleteAction::FileByHash(hash) => vault.remove_file(hash).map_err(|e| e.to_string()),
+        match &target.action {
+            DeleteAction::FileByHash(hash) => {
+                match vault.remove_file(hash) {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        fail_count += 1;
+                        eprintln!("Failed to delete {}: {}", target.display, e);
+                    }
+                }
+            }
             DeleteAction::FileByPath(path) => {
-                vault.remove_file_by_path(path).map_err(|e| e.to_string())
+                match vault.remove_file_by_path(path) {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        fail_count += 1;
+                        eprintln!("Failed to delete {}: {}", target.display, e);
+                    }
+                }
             }
             DeleteAction::Directory(path) => {
-                vault.remove_directory(path).map_err(|e| e.to_string())
-            }
-        };
+                // 1. 先遍历目录获取所有文件
+                let files_in_dir = match vault.list_all_recursive(path) {
+                    Ok(files) => files,
+                    Err(e) => {
+                        fail_count += 1;
+                        eprintln!("Failed to list files in directory '{}': {}", path, e);
+                        continue;
+                    }
+                };
 
-        match result {
-            Ok(_) => success_count += 1,
-            Err(e) => {
-                fail_count += 1;
-                pb.println(format!("Failed to delete {}: {}", target.display, e));
+                // 2. 逐一删除文件
+                let mut files_deleted = 0;
+                let mut dir_delete_failed = false;
+
+                for file_entry in &files_in_dir {
+                    match vault.remove_file_by_path(&file_entry.path) {
+                        Ok(_) => {
+                            files_deleted += 1;
+                        }
+                        Err(e) => {
+                            dir_delete_failed = true;
+                            eprintln!("Failed to delete file '{}': {}", file_entry.path, e);
+                        }
+                    }
+                }
+
+                if files_deleted > 0 {
+                    println!("Deleted {} files from directory '{}'", files_deleted, path);
+                }
+
+                if dir_delete_failed {
+                    fail_count += 1;
+                    eprintln!("Failed to delete directory '{}': some files could not be deleted", path);
+                    continue;
+                }
+
+                // 3. 最后删除目录本身
+                match vault.remove_directory(path) {
+                    Ok(_) => success_count += 1,
+                    Err(e) => {
+                        fail_count += 1;
+                        eprintln!("Failed to delete directory '{}': {}", path, e);
+                    }
+                }
             }
         }
-        if total_count > 1 {
-            pb.inc(1);
-        }
-    }
-
-    if total_count > 1 {
-        pb.finish_with_message("Deletion complete.");
     }
 
     if fail_count > 0 {
