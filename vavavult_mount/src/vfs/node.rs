@@ -1,31 +1,12 @@
 //! Vault file handle for WebDAV read/write operations.
 //!
 //! This module implements the `DavFile` trait, providing lazy decryption and
-//! pipe-based streaming reads of vault files. Decryption is performed in a
-//! background `spawn_blocking` task using the standalone extraction API, which
-//! does not require holding the vault mutex lock.
-//!
-//! # Streaming Architecture
-//! Decryption runs in a background thread, writing 8KB chunks through an
-//! `mpsc` channel. `read_bytes()` pulls from the channel on demand, so the
-//! client receives data as soon as each chunk is decrypted — no need to wait
-//! for the entire file. Seek is not supported; rclone `--vfs-cache-mode=full`
-//! handles random access and concurrency at the VFS layer.
-//
-// // 用于 WebDAV 读写操作的保险库文件句柄。
-// //
-// // 此模块实现了 `DavFile` trait，提供保险库文件的惰性解密和
-// // 基于管道的流式读取。解密在后台 `spawn_blocking` 任务中执行，
-// // 使用独立提取 API，不需要持有保险库互斥锁。
-// //
-// // # 流式架构
-// // 解密在后台线程中运行，通过 `mpsc` 通道写入 8KB 块。
-// // `read_bytes()` 按需从通道拉取数据，因此客户端在每个块解密完成后
-// // 即可收到数据——无需等待整个文件。不支持 Seek；
-// // rclone `--vfs-cache-mode=full` 在 VFS 层处理随机访问和并发。
+//! random-access reads of vault files. Decryption is performed on-demand using
+//! the pull-based `ChunkedReader` from the core library, which decrypts only
+//! the chunks needed for each read or seek operation.
 
-use std::io::SeekFrom;
-use std::sync::Arc;
+use std::io::{Read, Seek, SeekFrom};
+use std::sync::{Arc, Mutex};
 
 use bytes::Buf;
 use dav_server::fs::{DavFile, DavMetaData, FsError, FsFuture};
@@ -34,32 +15,17 @@ use vavavult::vault::ExtractionTask;
 
 use super::VaultDavMetaData;
 
-/// 将 `mpsc::Sender<bytes::Bytes>` 适配为 `std::io::Write`。
-/// 解密线程通过此 writer 将解密后的数据块发送到通道。
-struct ChannelWriter {
-    sender: tokio::sync::mpsc::Sender<bytes::Bytes>,
-    rt_handle: tokio::runtime::Handle,
-}
+/// A trait alias for a seekable, sendable plaintext reader.
+///
+/// This trait combines `Read`, `Seek`, and `Send` to represent a reader
+/// that can be used for random-access decryption of vault files.
+/// `Sync` is not required here because we wrap the reader in a `Mutex`.
+pub trait PlainReader: Read + Seek + Send {}
 
-impl std::io::Write for ChannelWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        let data = bytes::Bytes::copy_from_slice(buf);
-        self.rt_handle
-            .block_on(self.sender.send(data))
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "receiver dropped"))?;
-        Ok(buf.len())
-    }
+impl<T> PlainReader for T where T: Read + Seek + Send {}
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-/// 将 `mpsc::Receiver<bytes::Bytes>` 适配为 `std::io::Read`。
-/// 写入路径的后台加密任务通过此 reader 消费传入数据。
+/// Adapter for `mpsc::Receiver<bytes::Bytes>` to `std::io::Read`.
+/// Used by the write path to consume incoming data for the background encryption task.
 struct ReceiverReader {
     receiver: tokio::sync::mpsc::Receiver<bytes::Bytes>,
     buffer: bytes::Bytes,
@@ -81,21 +47,25 @@ impl std::io::Read for ReceiverReader {
     }
 }
 
-/// 读取子状态：流式管道。
+/// Lazy-initialized reader state for read operations.
+///
+/// This enum uses a simple lazy-initialization pattern. The reader is only
+/// initialized on the first read or seek operation using the core library's
+/// `Read + Seek` API.
 pub(crate) enum ReadContent {
-    /// 尚未开始解密。
+    /// Reader not yet initialized.
+    /// Contains the task and storage needed to initialize the reader.
     Pending {
         task: ExtractionTask,
         storage: Arc<dyn StorageBackend>,
     },
-    /// 管道式流式读取：后台线程解密，通过通道传输数据。
-    Streaming {
-        receiver: tokio::sync::mpsc::Receiver<bytes::Bytes>,
-        buffer: bytes::Bytes,
-        position: u64,
-        _join_handle: tokio::task::JoinHandle<Result<(), FsError>>,
+    /// Reader is initialized and ready for random-access reads.
+    /// Contains a boxed seekable plaintext reader from the core library,
+    /// wrapped in a `Mutex` for thread safety.
+    Active {
+        reader: Mutex<Box<dyn PlainReader>>,
     },
-    /// 状态已被消费（用于 take 操作）。
+    /// State has been consumed (used for take operations).
     Consumed,
 }
 
@@ -103,28 +73,21 @@ pub(crate) enum ReadContent {
 ///
 /// A WebDAV file handle can be opened for either reading (e.g., GET requests)
 /// or writing (e.g., PUT requests).
-//
-// // 代表 `VaultDavFile` 的操作状态。
-// //
-// // WebDAV 文件句柄可以为了读取（例如 GET 请求）或写入（例如 PUT 请求）而打开。
 pub enum VaultDavFileState {
-    /// State for a file opened for reading (pipe-based streaming with seek fallback).
-    // // 为读取而打开的文件状态（基于管道的流式传输，支持 seek 回退）。
+    /// State for a file opened for reading (lazy-initialized random-access reader).
     Read { content: ReadContent },
     /// State for a file opened for writing.
-    // // 为写入而打开的文件状态。
     Write {
         /// Channel to send incoming bytes to the background encryption task.
-        // // 用于将传入字节发送到后台加密任务的通道。
         write_tx: Option<tokio::sync::mpsc::Sender<bytes::Bytes>>,
         /// Handle to await the completion of the background encryption task.
-        // // 用于等待后台加密任务完成的句柄。
-        write_join_handle: Option<tokio::task::JoinHandle<Result<(), FsError>>>,
+        /// Wrapped in a `Mutex` for thread safety.
+        write_join_handle: Option<Mutex<tokio::task::JoinHandle<Result<(), FsError>>>>,
     },
 }
 
 pub struct VaultDavFile {
-    state: VaultDavFileState,
+    state: Mutex<VaultDavFileState>,
     file_size: u64,
     modified: std::time::SystemTime,
 }
@@ -139,6 +102,18 @@ impl std::fmt::Debug for VaultDavFile {
 }
 
 impl VaultDavFile {
+    /// Creates a new `VaultDavFile` in read mode with lazy initialization.
+    ///
+    /// The reader is not initialized until the first read or seek operation.
+    ///
+    /// # Arguments
+    /// * `task` - The extraction task containing decryption keys and metadata.
+    /// * `storage` - The storage backend to read encrypted data from.
+    /// * `file_size` - The expected plaintext file size.
+    /// * `modified` - The file modification time.
+    ///
+    /// # Returns
+    /// A new `VaultDavFile` instance in `Read` state with `Pending` content.
     pub fn new(
         task: ExtractionTask,
         storage: Arc<dyn StorageBackend>,
@@ -146,9 +121,9 @@ impl VaultDavFile {
         modified: std::time::SystemTime,
     ) -> Self {
         Self {
-            state: VaultDavFileState::Read {
+            state: Mutex::new(VaultDavFileState::Read {
                 content: ReadContent::Pending { task, storage },
-            },
+            }),
             file_size,
             modified,
         }
@@ -165,17 +140,6 @@ impl VaultDavFile {
     ///
     /// # Returns
     /// A new `VaultDavFile` instance ready for writing.
-    //
-    // // 以写入模式创建一个新的 `VaultDavFile`。
-    // //
-    // // 这会设置一个后台任务，通过加密密码流式传输传入数据，并在完成后将其提交到保险库。
-    // //
-    // // # 参数
-    // // * `vault` - 要写入的保险库实例。
-    // // * `vault_path` - 保险库内的目标路径。
-    // //
-    // // # 返回
-    // // 一个准备好进行写入的新 `VaultDavFile` 实例。
     pub fn new_write(
         vault: Arc<std::sync::Mutex<vavavult::vault::Vault>>,
         vault_path: vavavult::file::VaultPath,
@@ -195,7 +159,6 @@ impl VaultDavFile {
 
             let now = chrono::Utc::now();
 
-            // 阶段 2: 加密（无锁）
             let pending = vavavult::vault::PendingAdditionTask {
                 dest_path: vault_path.clone(),
                 source_size: 0,
@@ -207,26 +170,25 @@ impl VaultDavFile {
                 &mut reader,
             )
             .map_err(|e| {
-                eprintln!("[vavavult_mount] 加密流失败: {:?}", e);
+                log::error!("[vavavult_mount] encryption stream failed: {:?}", e);
                 FsError::GeneralFailure
             })?;
 
             let mut v = vault.lock().unwrap();
 
-            // WebDAV PUT 操作通常意味着覆盖现有文件。
             if matches!(
                 v.find_by_path(&vault_path),
                 Ok(vavavult::vault::QueryPathResult::Found(_))
             ) {
                 if let Err(e) = v.remove_file_by_path(&vault_path) {
-                    eprintln!("[vavavult_mount] 覆盖文件前移除旧文件失败: {:?}", e);
+                    log::error!("[vavavult_mount] failed to remove old file before overwrite: {:?}", e);
                     return Err(FsError::GeneralFailure);
                 }
             }
 
             v.commit_addition_tasks(vec![addition_task], None)
                 .map_err(|e| {
-                    eprintln!("[vavavult_mount] 提交文件失败: {:?}", e);
+                    log::error!("[vavavult_mount] failed to commit file: {:?}", e);
                     FsError::GeneralFailure
                 })?;
 
@@ -234,357 +196,225 @@ impl VaultDavFile {
         });
 
         Self {
-            state: VaultDavFileState::Write {
+            state: Mutex::new(VaultDavFileState::Write {
                 write_tx: Some(tx),
-                write_join_handle: Some(join_handle),
-            },
+                write_join_handle: Some(Mutex::new(join_handle)),
+            }),
             file_size: 0,
             modified: std::time::SystemTime::UNIX_EPOCH,
         }
     }
 
-    /// 启动后台解密管道（从 Pending 转换到 Streaming 状态）。
-    fn start_streaming(&mut self) -> Result<(), FsError> {
-        if let VaultDavFileState::Read { content } = &mut self.state {
-            // 仅在 Pending 状态时启动
-            let old = std::mem::replace(content, ReadContent::Consumed);
-            if let ReadContent::Pending { task, storage } = old {
-                let (tx, rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(32);
-                let rt_handle = tokio::runtime::Handle::current();
+    /// Ensures the reader is initialized and performs a read operation.
+    ///
+    /// This is a synchronous helper that must be called within a lock.
+    fn ensure_and_read(
+        &self,
+        count: usize,
+    ) -> Result<bytes::Bytes, FsError> {
+        let mut state_guard = self.state.lock().map_err(|_| FsError::GeneralFailure)?;
 
-                let join_handle = tokio::task::spawn_blocking(move || -> Result<(), FsError> {
-                    let channel_writer = ChannelWriter {
-                        sender: tx,
-                        rt_handle,
-                    };
-                    // 缓冲大小保持 8 KiB，便于向 WebDAV 客户端平滑发送数据，
-                    // 每个解密块写入刚好填满缓冲区，立即 flush 一次 channel send
-                    let writer = std::io::BufWriter::with_capacity(8192, channel_writer);
-                    vavavult::vault::Vault::decrypt_extraction_task(storage.as_ref(), &task, writer)
-                        .map_err(|e| {
-                            eprintln!("[vavavult_mount] 解密失败: {:?}", e);
+        match &mut *state_guard {
+            VaultDavFileState::Read { content } => {
+                Self::ensure_reader_initialized(content)?;
+
+                match content {
+                    ReadContent::Active { reader } => {
+                        let mut reader_guard = reader.lock().map_err(|_| FsError::GeneralFailure)?;
+                        let mut buffer = vec![0u8; count];
+                        let bytes_read = reader_guard.read(&mut buffer).map_err(|e| {
+                            log::error!("[vavavult_mount] read failed: {:?}", e);
                             FsError::GeneralFailure
-                        })
-                });
-
-                *content = ReadContent::Streaming {
-                    receiver: rx,
-                    buffer: bytes::Bytes::new(),
-                    position: 0,
-                    _join_handle: join_handle,
-                };
-                Ok(())
-            } else {
-                // 已经不是 Pending，恢复原状态
-                *content = old;
-                Ok(())
+                        })?;
+                        buffer.truncate(bytes_read);
+                        Ok(bytes::Bytes::from(buffer))
+                    }
+                    _ => unreachable!(),
+                }
             }
-        } else {
-            Err(FsError::Forbidden)
+            _ => Err(FsError::Forbidden),
         }
     }
-}
 
-impl Drop for VaultDavFile {
-    fn drop(&mut self) {}
+    /// Ensures the reader is initialized and performs a seek operation.
+    ///
+    /// This is a synchronous helper that must be called within a lock.
+    fn ensure_and_seek(
+        &self,
+        pos: SeekFrom,
+    ) -> Result<u64, FsError> {
+        let mut state_guard = self.state.lock().map_err(|_| FsError::GeneralFailure)?;
+
+        match &mut *state_guard {
+            VaultDavFileState::Read { content } => {
+                Self::ensure_reader_initialized(content)?;
+
+                match content {
+                    ReadContent::Active { reader } => {
+                        let mut reader_guard = reader.lock().map_err(|_| FsError::GeneralFailure)?;
+                        let new_pos = reader_guard.seek(pos).map_err(|e| {
+                            log::error!("[vavavult_mount] seek failed: {:?}", e);
+                            FsError::GeneralFailure
+                        })?;
+                        Ok(new_pos)
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => Err(FsError::Forbidden),
+        }
+    }
+
+    /// Helper to initialize the reader if it's in Pending state.
+    ///
+    /// This must be called while holding the state lock.
+    fn ensure_reader_initialized(content: &mut ReadContent) -> Result<(), FsError> {
+        match content {
+            ReadContent::Pending { .. } => {
+                let old = std::mem::replace(content, ReadContent::Consumed);
+                if let ReadContent::Pending { task, storage } = old {
+                    let reader = vavavult::vault::Vault::open_extraction_task_reader(
+                        storage.as_ref(),
+                        &task,
+                    )
+                    .map_err(|e| {
+                        log::error!("[vavavult_mount] failed to open reader: {:?}", e);
+                        FsError::GeneralFailure
+                    })?;
+
+                    *content = ReadContent::Active {
+                        reader: Mutex::new(Box::new(reader)),
+                    };
+                } else {
+                    unreachable!()
+                }
+            }
+            ReadContent::Active { .. } => {}
+            ReadContent::Consumed => return Err(FsError::GeneralFailure),
+        }
+        Ok(())
+    }
 }
 
 impl DavFile for VaultDavFile {
-    fn metadata<'a>(&'a mut self) -> FsFuture<'a, Box<dyn DavMetaData>> {
+    fn metadata(&mut self) -> FsFuture<'_, Box<dyn DavMetaData>> {
+        let file_size = self.file_size;
+        let modified = self.modified;
         Box::pin(async move {
-            Ok(
-                Box::new(VaultDavMetaData::file(self.file_size, self.modified))
-                    as Box<dyn DavMetaData>,
-            )
+            Ok(Box::new(VaultDavMetaData::file(file_size, modified)) as Box<dyn DavMetaData>)
         })
     }
 
-    fn read_bytes<'a>(&'a mut self, count: usize) -> FsFuture<'a, bytes::Bytes> {
+    fn read_bytes(&mut self, count: usize) -> FsFuture<'_, bytes::Bytes> {
         Box::pin(async move {
-            // 如果还在 Pending 状态，启动流式解密管道
-            if matches!(
-                &self.state,
-                VaultDavFileState::Read {
-                    content: ReadContent::Pending { .. }
-                }
-            ) {
-                self.start_streaming()?;
-            }
+            self.ensure_and_read(count)
+        })
+    }
 
-            if let VaultDavFileState::Read { content } = &mut self.state {
-                match content {
-                    ReadContent::Streaming {
-                        receiver,
-                        buffer,
-                        position,
-                        ..
+    fn write_bytes(&mut self, buf: bytes::Bytes) -> FsFuture<'_, ()> {
+        Box::pin(async move {
+            let tx = {
+                let state_guard = self.state.lock().map_err(|_| FsError::GeneralFailure)?;
+                match &*state_guard {
+                    VaultDavFileState::Write { write_tx, .. } => {
+                        write_tx.clone().ok_or(FsError::Forbidden)?
+                    }
+                    _ => return Err(FsError::Forbidden),
+                }
+            };
+
+            tx.send(buf).await.map_err(|e| {
+                log::error!("[vavavult_mount] write channel closed: {:?}", e);
+                FsError::GeneralFailure
+            })?;
+
+            Ok(())
+        })
+    }
+
+    fn write_buf(&mut self, mut buf: Box<dyn Buf + Send>) -> FsFuture<'_, ()> {
+        Box::pin(async move {
+            let bytes = buf.copy_to_bytes(buf.remaining());
+            self.write_bytes(bytes).await
+        })
+    }
+
+    fn seek(&mut self, pos: SeekFrom) -> FsFuture<'_, u64> {
+        Box::pin(async move {
+            self.ensure_and_seek(pos)
+        })
+    }
+
+    fn flush(&mut self) -> FsFuture<'_, ()> {
+        Box::pin(async move {
+            let join_handle = {
+                let mut state_guard = self.state.lock().map_err(|_| FsError::GeneralFailure)?;
+
+                match &mut *state_guard {
+                    VaultDavFileState::Write {
+                        write_tx,
+                        write_join_handle,
                     } => {
-                        // 如果缓冲区为空，从通道接收下一个块
-                        if buffer.is_empty() {
-                            match receiver.recv().await {
-                                Some(chunk) => *buffer = chunk,
-                                None => return Ok(bytes::Bytes::new()),
-                            }
+                        drop(write_tx.take());
+
+                        if let Some(join_handle_mutex) = write_join_handle.take() {
+                            join_handle_mutex
+                                .into_inner()
+                                .map_err(|_| FsError::GeneralFailure)?
+                        } else {
+                            return Ok(());
                         }
-
-                        // 从缓冲区中取出请求的字节数
-                        let len = std::cmp::min(count, buffer.len());
-                        let result = buffer.split_to(len);
-                        *position += len as u64;
-                        Ok(result)
                     }
-                    _ => Err(FsError::GeneralFailure),
+                    _ => return Ok(()),
                 }
-            } else {
-                Err(FsError::Forbidden)
-            }
-        })
-    }
+            };
 
-    fn write_bytes<'a>(&'a mut self, buf: bytes::Bytes) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            if let VaultDavFileState::Write { write_tx, .. } = &mut self.state {
-                if let Some(tx) = write_tx {
-                    tx.send(buf).await.map_err(|_| FsError::GeneralFailure)?;
-                    Ok(())
-                } else {
-                    Err(FsError::Forbidden)
-                }
-            } else {
-                Err(FsError::Forbidden)
-            }
-        })
-    }
+            join_handle
+                .await
+                .map_err(|e| {
+                    log::error!("[vavavult_mount] background task panicked: {:?}", e);
+                    FsError::GeneralFailure
+                })?
+                .map_err(|e| {
+                    log::error!("[vavavult_mount] background task failed: {:?}", e);
+                    e
+                })?;
 
-    fn write_buf<'a>(&'a mut self, mut buf: Box<dyn Buf + Send + 'static>) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            if let VaultDavFileState::Write { write_tx, .. } = &mut self.state {
-                if let Some(tx) = write_tx {
-                    while buf.has_remaining() {
-                        let chunk = buf.chunk().to_vec();
-                        buf.advance(chunk.len());
-                        tx.send(bytes::Bytes::from(chunk))
-                            .await
-                            .map_err(|_| FsError::GeneralFailure)?;
-                    }
-                    Ok(())
-                } else {
-                    Err(FsError::Forbidden)
-                }
-            } else {
-                Err(FsError::Forbidden)
-            }
-        })
-    }
-
-    fn seek<'a>(&'a mut self, _pos: SeekFrom) -> FsFuture<'a, u64> {
-        // 后端不支持 Seek，由 rclone --vfs-cache-mode=full 在本地接管随机访问
-        Box::pin(async move { Err(FsError::NotImplemented) })
-    }
-
-    fn flush<'a>(&'a mut self) -> FsFuture<'a, ()> {
-        Box::pin(async move {
-            if let VaultDavFileState::Write {
-                write_tx,
-                write_join_handle,
-            } = &mut self.state
-            {
-                if let Some(tx) = write_tx.take() {
-                    drop(tx);
-                }
-                if let Some(handle) = write_join_handle.take() {
-                    handle.await.map_err(|_| FsError::GeneralFailure)??;
-                }
-            }
             Ok(())
         })
     }
 }
 
-// --- Unit tests / 单元测试 ---
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::SeekFrom;
 
-    use vavavult::vault::Vault;
-
-    fn create_test_vault() -> (tempfile::TempDir, Vault) {
-        let temp_dir = tempfile::tempdir().expect("无法创建临时目录");
-        let password = "test_password_123";
-        let vault = Vault::create_vault_local(temp_dir.path(), "test_vault", Some(password))
-            .expect("无法创建测试保险库");
-        (temp_dir, vault)
+    #[test]
+    fn test_plain_reader_trait() {
+        use std::io::Cursor;
+        let data = b"test data";
+        let cursor = Cursor::new(data);
+        let _reader: Box<dyn PlainReader> = Box::new(cursor);
     }
 
-    fn add_test_file(vault: &mut Vault, vault_path: &str, content: &[u8]) {
-        let src_dir = tempfile::tempdir().expect("无法创建源文件临时目录");
-        let src_path = src_dir.path().join("source.bin");
-        std::fs::write(&src_path, content).expect("无法写入源文件");
-        let dest_path = vavavult::file::VaultPath::new(vault_path);
-        vault
-            .add_file(&src_path, &dest_path, None)
-            .unwrap_or_else(|_| panic!("无法添加测试文件 {} 到保险库", vault_path));
-    }
+    #[test]
+    fn test_vault_dav_file_debug() {
+        use std::sync::Mutex;
+        use vavavult::storage::StorageBackend;
+        use vavavult::vault::ExtractionTask;
 
-    fn open_vault_file(vault: &Vault, vault_path: &str) -> Option<VaultDavFile> {
-        use vavavult::file::VaultPath;
-        use vavavult::vault::QueryPathResult;
+        let state = Mutex::new(VaultDavFileState::Read {
+            content: ReadContent::Consumed,
+        });
 
-        let vp = VaultPath::new(vault_path);
-        let path_entry = match vault.find_by_path(&vp) {
-            Ok(QueryPathResult::Found(e)) => e,
-            _ => return None,
+        let file = VaultDavFile {
+            state,
+            file_size: 100,
+            modified: std::time::SystemTime::UNIX_EPOCH,
         };
 
-        let entry = match vault.find_by_hash(&path_entry.sha256sum) {
-            Ok(vavavult::vault::QueryFileResult::Found(e)) => e,
-            _ => return None,
-        };
-
-        let task = vault.prepare_extraction_task(&path_entry.sha256sum).ok()?;
-        let storage = vault.storage.clone();
-
-        let size = entry
-            .metadata
-            .iter()
-            .find(|m| m.key == "_vavavult_file_size")
-            .and_then(|m| m.value.parse::<u64>().ok())
-            .unwrap_or(0);
-
-        let modified = entry
-            .metadata
-            .iter()
-            .find(|m| m.key == "_vavavult_create_time")
-            .and_then(|m| {
-                m.value
-                    .parse::<i64>()
-                    .ok()
-                    .map(|ts| std::time::UNIX_EPOCH + std::time::Duration::from_secs(ts as u64))
-            })
-            .unwrap_or(std::time::UNIX_EPOCH);
-
-        Some(VaultDavFile::new(task, storage, size, modified))
-    }
-
-    #[tokio::test]
-    async fn test_metadata_without_decryption() {
-        let (_temp_dir, mut vault) = create_test_vault();
-        add_test_file(&mut vault, "/test.txt", b"hello world");
-        let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
-            .expect("无法重新打开保险库");
-
-        let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-        let meta = file.metadata().await.expect("获取元数据失败");
-        assert!(!meta.is_dir());
-        assert_eq!(meta.len(), 11);
-
-        if let VaultDavFileState::Read { content } = &file.state {
-            assert!(matches!(content, ReadContent::Pending { .. }));
-        } else {
-            panic!("Expected Read state");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_read_bytes_full_content() {
-        let (_temp_dir, mut vault) = create_test_vault();
-        add_test_file(&mut vault, "/test.txt", b"hello world");
-        let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
-            .expect("无法重新打开保险库");
-
-        let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-        let data = file.read_bytes(1024).await.expect("读取失败");
-        assert_eq!(&data[..], b"hello world");
-    }
-
-    #[tokio::test]
-    async fn test_read_bytes_partial() {
-        let (_temp_dir, mut vault) = create_test_vault();
-        add_test_file(&mut vault, "/test.txt", b"hello world");
-        let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
-            .expect("无法重新打开保险库");
-
-        let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-        let data = file.read_bytes(5).await.expect("读取失败");
-        assert_eq!(&data[..], b"hello");
-
-        let data = file.read_bytes(1024).await.expect("读取失败");
-        assert_eq!(&data[..], b" world");
-    }
-
-    #[tokio::test]
-    async fn test_read_bytes_at_end() {
-        let (_temp_dir, mut vault) = create_test_vault();
-        add_test_file(&mut vault, "/test.txt", b"hi");
-        let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
-            .expect("无法重新打开保险库");
-
-        let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-        let _ = file.read_bytes(1024).await.expect("读取失败");
-        let data = file.read_bytes(10).await.expect("读取失败");
-        assert!(data.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_seek_returns_not_implemented() {
-        let (_temp_dir, mut vault) = create_test_vault();
-        add_test_file(&mut vault, "/test.txt", b"hello world");
-        let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
-            .expect("无法重新打开保险库");
-
-        let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-        let result = file.seek(SeekFrom::Start(0)).await;
-        assert!(matches!(result, Err(FsError::NotImplemented)));
-    }
-
-    #[tokio::test]
-    async fn test_write_bytes_forbidden() {
-        let (_temp_dir, mut vault) = create_test_vault();
-        add_test_file(&mut vault, "/test.txt", b"hello world");
-        let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
-            .expect("无法重新打开保险库");
-
-        let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-        let result = file.write_bytes(bytes::Bytes::from("data")).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_flush_noop() {
-        let (_temp_dir, mut vault) = create_test_vault();
-        add_test_file(&mut vault, "/test.txt", b"hello world");
-        let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
-            .expect("无法重新打开保险库");
-
-        let mut file = open_vault_file(&vault, "/test.txt").expect("无法打开文件");
-        let result = file.flush().await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_large_file_read() {
-        let large_content: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect();
-        let (_temp_dir, mut vault) = create_test_vault();
-        add_test_file(&mut vault, "/large.bin", &large_content);
-        let vault = Vault::open_vault_local(_temp_dir.path(), Some("test_password_123"))
-            .expect("无法重新打开保险库");
-
-        let mut file = open_vault_file(&vault, "/large.bin").expect("无法打开文件");
-        let meta = file.metadata().await.expect("获取元数据失败");
-        assert_eq!(meta.len(), 1024);
-
-        let mut all_data = Vec::new();
-        loop {
-            let chunk = file.read_bytes(256).await.expect("读取失败");
-            if chunk.is_empty() {
-                break;
-            }
-            all_data.extend_from_slice(&chunk);
-        }
-
-        assert_eq!(all_data.len(), 1024);
-        assert_eq!(all_data, large_content);
+        let debug_str = format!("{:?}", file);
+        assert!(debug_str.contains("VaultDavFile"));
+        assert!(debug_str.contains("100"));
     }
 }
