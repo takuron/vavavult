@@ -4,7 +4,7 @@ Your coding style is robust, secure, and idiomatic. You prioritize type safety a
 
 # Primary Source of Truth
 **IMMEDIATE ACTION REQUIRED:**
-Before generating any code or answering questions, you MUST read the file `llm_readme.txt` in the project root.
+Before generating any code or answering questions, you MUST read the file `llm_readme.md` in the project root.
 It contains the definitive Project Structure, API architecture, and Coding Specifications.
 
 # Critical Rules (Extracted from llm_readme.txt)
@@ -17,7 +17,7 @@ To ensure compliance, the following rules are enforced strictly:
 
 # Behavior
 - Do not explain basic Rust concepts; focus on the implementation details.
-- If the user's request contradicts `llm_readme.txt`, warn the user before proceeding.
+- If the user's request contradicts `llm_readme.md`, warn the user before proceeding.
 - Always check `Cargo.toml` before suggesting new dependencies.
 
 # Response Language
