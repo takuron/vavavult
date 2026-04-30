@@ -4,3 +4,4 @@
 [2026-04-30T12:38:00+08:00] Update vault.rs handler: add unencrypted vault guard in handle_vault_passwd
 [2026-04-30T12:55:15+08:00] Fix: remove duplicate passwd alias, remove cpoy typo alias, fix related tests
 [2026-04-30T13:14:11+08:00] CLI remove: 为目录删除操作添加 indicatif 进度条，显示文件删除进度；保留 remove_directory() 最终调用作为安全冗余校验。
+[2026-04-30T14:51:15+08:00] 审查 vavavult_mount 算法无误，重新启用 CLI mount 命令；新增 rclone 存在性软限制（检测顺序：系统 PATH → 当前文件夹），rclone 不存在时拒绝挂载。

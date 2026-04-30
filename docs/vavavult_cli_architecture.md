@@ -15,7 +15,7 @@ A user-facing CLI application for interacting with `vavavult` vaults.
     *   **Description:** Implements the interactive shell.
     *   `mod.rs`: Contains the main `run_repl` loop which uses `rustyline` to read user input.
     *   `dispatcher.rs`: Takes the parsed command and delegates it to the appropriate handler in the `handlers` module.
-    *   `state.rs`: Defines `AppState`, which holds the active `Vault` instance wrapped in an `Arc<Mutex>`.
+    *   `state.rs`: Defines `AppState`, which holds the active `Vault` instance wrapped in an `Arc<Mutex>`, an optional `ServerHandle` and `MountHandle` for active mount sessions, and a tokio `Runtime` for async operations.
 
 *   **`vavavult_cli::handlers`**
     *   **Path:** `vavavult_cli/src/handlers/`
@@ -26,6 +26,8 @@ A user-facing CLI application for interacting with `vavavult` vaults.
     *   `rename.rs`: 以相同的仅源路径规则实现 `rename`/`ren`，并委托给 `Vault::rename_path_inplace`。
     *   `copy.rs`: Implements `copy`/`cp`/`cpoy` for file path copies by delegating to `Vault::copy_file_path`; hash sources are rejected at the CLI layer. When copying a file to a directory destination, the original filename is appended automatically.
     *   `copy.rs`: 通过委托给 `Vault::copy_file_path` 实现文件路径复制命令 `copy`/`cp`/`cpoy`；哈希源会在 CLI 层被拒绝。将文件复制到目录目标时，会自动追加原文件名。
+    *   `mount.rs`: Implements `mount` and `unmount` commands. `handle_mount` starts a WebDAV server via `vavavult_mount` and optionally mounts it to the OS via rclone. A soft-check for rclone existence is enforced at the start (detection order: system PATH → current directory); if rclone is not found, the command prints an error and exits without starting the server. `handle_unmount` tears down the system mount and stops the WebDAV server.
+    *   `mount.rs`: 实现 `mount` 和 `unmount` 命令。`handle_mount` 通过 `vavavult_mount` 启动 WebDAV 服务器并可选择通过 rclone 挂载到操作系统。入口处强制执行 rclone 存在性软检查（检测顺序：系统 PATH → 当前文件夹）；如果未找到 rclone，则打印错误并退出，不启动服务器。`handle_unmount` 卸载系统挂载并停止 WebDAV 服务器。
 
 *   **`vavavult_cli::ui`**
     *   **Path:** `vavavult_cli/src/ui/`

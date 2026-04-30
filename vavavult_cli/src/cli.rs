@@ -220,7 +220,6 @@ pub enum ReplCommand {
     //  管理保险库本身
     #[command(subcommand)]
     Vault(VaultCommand),
-    /*
     /// Mount the vault as a WebDAV network drive
     //  将保险库挂载为 WebDAV 网络驱动器
     Mount {
@@ -252,7 +251,6 @@ pub enum ReplCommand {
     /// Unmount the previously mounted WebDAV network drive
     //  卸载之前挂载的 WebDAV 网络驱动器
     Unmount,
-    */
     /// Verify the integrity of files in the vault
     //  校验保险库中文件的完整性
     Verify {
