@@ -284,7 +284,7 @@ pub enum VaultCommand {
     },
     /// Change the vault password (shallow: only re-encrypts the database key)
     //  修改保险库密码（浅层：仅重新加密数据库密钥）
-    #[command(visible_alias = "passwd")]
+    #[command(visible_alias = "password")]
     Passwd {
         /// Also rotate all file encryption keys for full re-encryption
         //  同时轮换所有文件加密密钥以进行完全重加密
