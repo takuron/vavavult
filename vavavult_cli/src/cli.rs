@@ -185,7 +185,7 @@ pub enum ReplCommand {
 
     /// Copy a file within the vault by vault path
     //  通过保险库路径在保险库内复制文件
-    #[command(visible_aliases = ["cp", "cpoy"])]
+    #[command(visible_aliases = ["cp"])]
     Copy {
         /// The source vault file path to copy. Hash targets are not accepted.
         //  要复制的源保险库文件路径。不再接受哈希目标。
