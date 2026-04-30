@@ -6,6 +6,40 @@ use std::sync::{Arc, Mutex};
 use vavavult::vault::Vault;
 use vavavult_mount::{MountConfig, SystemMounter, start_webdav_server};
 
+/// 检测 rclone 是否存在于系统中。
+///
+/// 检测顺序：系统 PATH → 当前文件夹。
+//
+// // 检测 rclone 是否存在于系统中。
+// //
+// // 检测顺序：系统 PATH → 当前文件夹。
+fn check_rclone_exists() -> bool {
+    // 1. 检查系统 PATH 中的 rclone
+    if std::process::Command::new("rclone")
+        .arg("version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    // 2. 检查当前文件夹中的 rclone（Windows 上为 rclone.exe）
+    let current_dir = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    let rclone_name = if cfg!(target_os = "windows") {
+        "rclone.exe"
+    } else {
+        "rclone"
+    };
+    let local_path = current_dir.join(rclone_name);
+    local_path.exists()
+}
+
 pub fn handle_mount(
     app_state: &mut AppState,
     vault: Arc<Mutex<Vault>>,
@@ -15,6 +49,15 @@ pub fn handle_mount(
     read_only: bool,
     mount_point_opt: Option<String>,
 ) -> Result<(), CliError> {
+    // 0. 软限制：仅在 rclone 存在时启用挂载功能（即使 WebDAV 服务器本身无需 rclone）
+    if !check_rclone_exists() {
+        println!("Error: rclone is not installed or not found in PATH.");
+        println!("The mount feature requires rclone to function properly.");
+        println!("Please install rclone from https://rclone.org/downloads/");
+        println!("Or place the rclone binary in the current directory.");
+        return Ok(());
+    }
+
     if app_state.server_handle.is_some() || app_state.mount_handle.is_some() {
         println!("A WebDAV server or mount is already running.");
         println!("Please use 'unmount' first.");
@@ -137,4 +180,3 @@ pub fn handle_unmount(app_state: &mut AppState) -> Result<(), CliError> {
 
     Ok(())
 }
-

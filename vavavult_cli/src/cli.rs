@@ -185,7 +185,7 @@ pub enum ReplCommand {
 
     /// Copy a file within the vault by vault path
     //  通过保险库路径在保险库内复制文件
-    #[command(visible_aliases = ["cp", "cpoy"])]
+    #[command(visible_aliases = ["cp"])]
     Copy {
         /// The source vault file path to copy. Hash targets are not accepted.
         //  要复制的源保险库文件路径。不再接受哈希目标。
@@ -220,7 +220,6 @@ pub enum ReplCommand {
     //  管理保险库本身
     #[command(subcommand)]
     Vault(VaultCommand),
-    /*
     /// Mount the vault as a WebDAV network drive
     //  将保险库挂载为 WebDAV 网络驱动器
     Mount {
@@ -252,7 +251,6 @@ pub enum ReplCommand {
     /// Unmount the previously mounted WebDAV network drive
     //  卸载之前挂载的 WebDAV 网络驱动器
     Unmount,
-    */
     /// Verify the integrity of files in the vault
     //  校验保险库中文件的完整性
     Verify {
@@ -281,6 +279,15 @@ pub enum VaultCommand {
         //  保险库的新名称
         #[arg(required = true)]
         new_name: String,
+    },
+    /// Change the vault password (shallow: only re-encrypts the database key)
+    //  修改保险库密码（浅层：仅重新加密数据库密钥）
+    #[command(visible_alias = "password")]
+    Passwd {
+        /// Also rotate all file encryption keys for full re-encryption
+        //  同时轮换所有文件加密密钥以进行完全重加密
+        #[arg(long = "rekey")]
+        rekey: bool,
     },
     Status,
 }

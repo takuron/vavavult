@@ -246,13 +246,12 @@ fn test_copy_accepts_only_vault_path_source() -> anyhow::Result<()> {
             "The copy command only accepts source paths starting with '/'",
         ));
 
-    // 2. 主命令、cp 别名和兼容拼写 cpoy 都能通过路径复制。
+    // 2. 主命令和 cp 别名都能通过路径复制。
     let mut cmd_path = Command::new(env!("CARGO_BIN_EXE_vavavult"));
     cmd_path.arg("open").arg(&context.vault_path);
     let repl_input_path = concat!(
         "copy /test_file.txt /copy_a.txt\n",
         "cp /test_file.txt /copy_b.txt\n",
-        "cpoy /test_file.txt /copy_c.txt\n",
         "ls /\n",
         "exit\n"
     )
@@ -264,8 +263,7 @@ fn test_copy_accepts_only_vault_path_source() -> anyhow::Result<()> {
         .success()
         .stdout(predicate::str::contains("File successfully copied."))
         .stdout(predicate::str::contains("/copy_a.txt"))
-        .stdout(predicate::str::contains("/copy_b.txt"))
-        .stdout(predicate::str::contains("/copy_c.txt"));
+        .stdout(predicate::str::contains("/copy_b.txt"));
 
     Ok(())
 }

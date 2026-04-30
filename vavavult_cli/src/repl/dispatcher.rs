@@ -6,6 +6,12 @@ use std::sync::Arc;
 
 /// REPL 命令处理器
 pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Result<(), CliError> {
+    // 提前处理需要修改 app_state.active_vault 的命令（如 vault passwd），
+    // 因为它们需要关闭并重新打开保险库连接。
+    if let ReplCommand::Vault(VaultCommand::Passwd { rekey }) = &command {
+        return handlers::vault::handle_vault_passwd(app_state, *rekey);
+    }
+
     // 检查 vault 是否存在。如果命令是 Exit 或 Close，它们会使 active_vault 变为 None，
     // 从而自然地终止 run_repl 中的 while let 循环。
     let vault_arc = {
@@ -101,7 +107,6 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
         } => {
             handlers::verify::handle_verify(Arc::clone(&vault_arc), &targets, !single_thread)?;
         }
-        /*
         ReplCommand::Mount {
             port,
             bind,
@@ -122,7 +127,6 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
         ReplCommand::Unmount => {
             handlers::mount::handle_unmount(app_state)?;
         }
-        */
         ReplCommand::Vault(vault_command) => match vault_command {
             VaultCommand::Rename { new_name } => {
                 let mut vault = vault_arc.lock().unwrap();
@@ -133,6 +137,8 @@ pub fn handle_repl_command(command: ReplCommand, app_state: &mut AppState) -> Re
                 let vault = vault_arc.lock().unwrap();
                 handlers::vault::handle_status(&vault)?;
             }
+            // Passwd 已在函数开头提前处理，此处不应到达
+            VaultCommand::Passwd { .. } => unreachable!("Passwd handled earlier"),
         },
         ReplCommand::Tag(tag_command) => {
             let mut vault = vault_arc.lock().unwrap();
