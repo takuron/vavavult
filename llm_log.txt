@@ -41,3 +41,4 @@
 [2026-04-26T12:05:40+08:00] 为 rekey 添加多路径引用测试，覆盖目录引用和路径标签在重加密后的保留。
 [2026-04-26T20:10:12+08:00] 修改删除目录的逻辑：先遍历删除所有文件，然后按深度从大到小删除子目录，最后删除根目录。不再依赖 ON DELETE CASCADE 自动删除子目录。
 [2026-04-26T20:23:38+08:00] 修改CLI层删除目录的逻辑：在vavavult_cli/src/handlers/remove.rs中，删除目录时先调用vault.list_all_recursive()获取所有文件，然后逐一调用vault.remove_file_by_path()删除文件，最后调用vault.remove_directory()删除目录本身。回滚了之前对核心库vavavult的修改。
+[2026-04-30T12:35:02+08:00] Add vault password/passwd REPL command with optional --rekey flag for full file re-encryption
