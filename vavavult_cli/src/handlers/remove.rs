@@ -1,6 +1,7 @@
 use crate::core::helpers::{Target, display_path_for_entry, identify_target};
 use crate::errors::CliError;
 use crate::ui::prompt::confirm_action;
+use indicatif::{ProgressBar, ProgressStyle};
 use vavavult::common::hash::VaultHash;
 use vavavult::file::VaultPath;
 use vavavult::vault::{QueryFileResult, QueryPathResult, Vault};
@@ -118,26 +119,22 @@ pub fn handle_remove(
 
     for target in targets_to_delete {
         match &target.action {
-            DeleteAction::FileByHash(hash) => {
-                match vault.remove_file(hash) {
-                    Ok(_) => success_count += 1,
-                    Err(e) => {
-                        fail_count += 1;
-                        eprintln!("Failed to delete {}: {}", target.display, e);
-                    }
+            DeleteAction::FileByHash(hash) => match vault.remove_file(hash) {
+                Ok(_) => success_count += 1,
+                Err(e) => {
+                    fail_count += 1;
+                    eprintln!("Failed to delete {}: {}", target.display, e);
                 }
-            }
-            DeleteAction::FileByPath(path) => {
-                match vault.remove_file_by_path(path) {
-                    Ok(_) => success_count += 1,
-                    Err(e) => {
-                        fail_count += 1;
-                        eprintln!("Failed to delete {}: {}", target.display, e);
-                    }
+            },
+            DeleteAction::FileByPath(path) => match vault.remove_file_by_path(path) {
+                Ok(_) => success_count += 1,
+                Err(e) => {
+                    fail_count += 1;
+                    eprintln!("Failed to delete {}: {}", target.display, e);
                 }
-            }
+            },
             DeleteAction::Directory(path) => {
-                // 1. 先遍历目录获取所有文件
+                // 1. 先遍历目录获取所有待删除文件
                 let files_in_dir = match vault.list_all_recursive(path) {
                     Ok(files) => files,
                     Err(e) => {
@@ -147,7 +144,25 @@ pub fn handle_remove(
                     }
                 };
 
-                // 2. 逐一删除文件
+                let total_files = files_in_dir.len();
+
+                // 2. 创建进度条，显示文件删除进度
+                let pb = if total_files > 0 {
+                    let bar = ProgressBar::new(total_files as u64);
+                    bar.set_style(
+                        ProgressStyle::default_bar()
+                            .template(
+                                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+                            )
+                            .unwrap()
+                            .progress_chars("#>-"),
+                    );
+                    Some(bar)
+                } else {
+                    None
+                };
+
+                // 3. 逐一删除文件并更新进度条
                 let mut files_deleted = 0;
                 let mut dir_delete_failed = false;
 
@@ -155,25 +170,44 @@ pub fn handle_remove(
                     match vault.remove_file_by_path(&file_entry.path) {
                         Ok(_) => {
                             files_deleted += 1;
+                            if let Some(ref pb) = pb {
+                                pb.inc(1);
+                            }
                         }
                         Err(e) => {
                             dir_delete_failed = true;
-                            eprintln!("Failed to delete file '{}': {}", file_entry.path, e);
+                            if let Some(ref pb) = pb {
+                                pb.println(format!(
+                                    "Failed to delete file '{}': {}",
+                                    file_entry.path, e
+                                ));
+                            } else {
+                                eprintln!("Failed to delete file '{}': {}", file_entry.path, e);
+                            }
                         }
                     }
                 }
 
-                if files_deleted > 0 {
-                    println!("Deleted {} files from directory '{}'", files_deleted, path);
+                // 4. 进度条结束，输出汇总信息
+                if let Some(ref pb) = pb {
+                    pb.finish_with_message(format!(
+                        "Deleted {} files from '{}'",
+                        files_deleted, path
+                    ));
+                } else {
+                    println!("Directory '{}' is empty, no files to delete.", path);
                 }
 
                 if dir_delete_failed {
                     fail_count += 1;
-                    eprintln!("Failed to delete directory '{}': some files could not be deleted", path);
+                    eprintln!(
+                        "Failed to delete directory '{}': some files could not be deleted",
+                        path
+                    );
                     continue;
                 }
 
-                // 3. 最后删除目录本身
+                // 5. 目录已空，最后调用 remove_directory 完成安全校验并删除目录节点
                 match vault.remove_directory(path) {
                     Ok(_) => success_count += 1,
                     Err(e) => {

@@ -3,3 +3,4 @@
 [2026-04-30T12:35:02+08:00] Add vault password/passwd REPL command with optional --rekey flag for full file re-encryption
 [2026-04-30T12:38:00+08:00] Update vault.rs handler: add unencrypted vault guard in handle_vault_passwd
 [2026-04-30T12:55:15+08:00] Fix: remove duplicate passwd alias, remove cpoy typo alias, fix related tests
+[2026-04-30T13:14:11+08:00] CLI remove: 为目录删除操作添加 indicatif 进度条，显示文件删除进度；保留 remove_directory() 最终调用作为安全冗余校验。
